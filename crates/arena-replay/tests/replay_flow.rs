@@ -713,3 +713,67 @@ fn second_seed_replays_identically() {
         "different seeds really differ"
     );
 }
+
+// M7: `finish_abnormal` writes the D46 abnormal trailer for technically
+// ended matches (SPAWN_FORFEIT / CLIENT_FORFEIT) with the last COMPLETED
+// round and the hash of whatever authoritative state exists.
+#[test]
+fn recorder_finish_abnormal_writes_abnormal_trailer() {
+    use arena_core::resolve::{Resolver, SubmittedCommandStream};
+    use arena_replay::format::{EndOfMatch, OUTCOME_CLIENT_FORFEIT};
+
+    let cfg = replay_cfg();
+    let map = replay_map();
+    let enl_spawns = replay_spawns(&cfg, Faction::Enl);
+    let res_spawns = replay_spawns(&cfg, Faction::Res);
+    let mut state = GameState::new(cfg, &map, &enl_spawns, &res_spawns).expect("state builds");
+    let resolver = Resolver::with_seed(GAME_SEED);
+    let mut writer = ReplayWriter::new(GAME_SEED, state.config(), &map, &enl_spawns, &res_spawns);
+
+    // Two full rounds record normally.
+    for round in 1..=2u32 {
+        let submission = SubmittedCommandStream {
+            round,
+            faction: Faction::Enl,
+            agent_id: AgentId(0),
+            received_at_ms: 0,
+            receive_seq: round - 1,
+            commands: vec![],
+        };
+        let report = resolver.run_round(&mut state, &[submission]);
+        state.advance_round();
+        writer.record_round(&report, &state).expect("records");
+    }
+
+    // Round 3 settles but is interrupted BEFORE advance/record: it is not a
+    // completed round, and finish_abnormal must still produce a decodable
+    // file whose trailer names round 2.
+    let submission = SubmittedCommandStream {
+        round: 3,
+        faction: Faction::Enl,
+        agent_id: AgentId(0),
+        received_at_ms: 0,
+        receive_seq: 2,
+        commands: vec![],
+    };
+    let _ = resolver.run_round(&mut state, &[submission]);
+    let bytes = writer
+        .finish_abnormal(&state, OUTCOME_CLIENT_FORFEIT)
+        .expect("abnormal finish encodes and self-decodes");
+    let file = arena_replay::format::decode(&bytes).expect("decodes");
+    match file.trailer() {
+        Some(EndOfMatch::Abnormal {
+            last_completed_round,
+            last_valid_hash,
+            outcome_tag,
+        }) => {
+            assert_eq!(*last_completed_round, 2, "round 3 never completed");
+            assert_eq!(*outcome_tag, OUTCOME_CLIENT_FORFEIT);
+            // The last valid hash equals round 2's recorded hash.
+            let round2 = file.round_records().last().expect("two records");
+            assert_eq!(round2.state_hash, *last_valid_hash);
+        }
+        other => panic!("expected abnormal trailer, got {other:?}"),
+    }
+    assert_eq!(file.round_records().count(), 2);
+}

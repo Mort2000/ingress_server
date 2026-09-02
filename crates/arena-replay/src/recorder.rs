@@ -166,6 +166,35 @@ impl ReplayWriter {
         crate::format::decode(&bytes)?;
         Ok(bytes)
     }
+
+    /// Writes an ABNORMAL EndOfMatch trailer (D46): the match ended
+    /// technically (M7 SPAWN_FORFEIT / CLIENT_FORFEIT) instead of running
+    /// to `total_rounds`. `state` is whatever authoritative state exists at
+    /// the abort — its hash is the "last valid hash" — and
+    /// `last_completed_round` is the number of fully recorded rounds (a
+    /// round interrupted before settlement is NOT completed). Added in M7:
+    /// in-process M5 always ended normally, so this path was exercised only
+    /// by hand-crafted bytes; the external server now ends real matches
+    /// this way.
+    pub fn finish_abnormal(
+        self,
+        state: &GameState,
+        outcome_tag: u8,
+    ) -> Result<Vec<u8>, ReplayError> {
+        let mut blocks = self.blocks;
+        blocks.push(Block::End(EndOfMatch::Abnormal {
+            last_completed_round: self.rounds_recorded,
+            last_valid_hash: canon::state_hash(state),
+            outcome_tag,
+        }));
+        let file = ReplayFile {
+            header: self.header,
+            blocks,
+        };
+        let bytes = file.encode();
+        crate::format::decode(&bytes)?;
+        Ok(bytes)
+    }
 }
 
 /// Reads a `(enl, res)` score pair out of a settled delta map (kept for

@@ -67,6 +67,14 @@ pub const CHECKPOINT_INTERVAL: u32 = 50;
 /// normal).
 pub const FIRST_ABNORMAL_OUTCOME_TAG: u8 = 3;
 
+/// Abnormal outcome tag: a faction's Initial Spawn Set was internally
+/// invalid or missed the pre-match deadline (M7, R-SPAWN-01).
+pub const OUTCOME_SPAWN_FORFEIT: u8 = 3;
+
+/// Abnormal outcome tag: a client process exited, EOF'd, or hit an
+/// unrecoverable connection error after the match started (M7, P3-TIMEOUT).
+pub const OUTCOME_CLIENT_FORFEIT: u8 = 4;
+
 // ---------------------------------------------------------------------------
 // Tags (D51)
 // ---------------------------------------------------------------------------

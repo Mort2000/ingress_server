@@ -1,0 +1,35 @@
+// Private SHM snapshot (M7, P3-SHM; ADR-0009). One root: PrivateSnapshot.
+//
+// Each faction's own region carries ONLY that faction's agents. Generation
+// 0 (snapshot_version = 0) is the pre-match roster: ids from
+// initial_agents_per_faction (ENL 0..n-1, RES n..2n-1, D17), supply at
+// INITIAL_SUPPLY, no keys; positions are not yet chosen, so x = y = 0 is a
+// documented pre-spawn sentinel (in-bounds corner, never authoritative).
+//
+// Committed contract; generated Rust committed alongside
+// (src/generated/snapshot_private.rs), rebuilt only by
+// scripts/regen-protocol.sh.
+
+namespace ingress.snapshot.private;
+
+table KeyCount {
+  portal: uint;
+  count: uint;
+}
+
+table AgentEntry {
+  id: uint;
+  x: int;
+  y: int;
+  supply: uint;
+  keys: [KeyCount];
+}
+
+table PrivateSnapshot {
+  schema_version: uint = 1;
+  current_round: uint;
+  snapshot_version: ulong;
+  agents: [AgentEntry];
+}
+
+root_type PrivateSnapshot;

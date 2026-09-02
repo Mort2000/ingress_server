@@ -1,0 +1,201 @@
+// Ingress Arena client<->server wire protocol (M7, P3-RPC; ADR-0008 single
+// ordered UDS stream, ADR-0009 FlatBuffers wire format).
+//
+// Every frame is a u32 big-endian payload-length prefix followed by exactly
+// one ProtocolEnvelope buffer (see arena_protocol::frame). Scalar fields
+// carry no FlatBuffers `(required)` markers: planus forbids them on scalars,
+// so versions default to 0 and are checked for exact equality in code.
+//
+// This file is the committed contract; the generated Rust
+// (src/generated/protocol.rs) is committed alongside and is rebuilt only by
+// scripts/regen-protocol.sh.
+
+namespace ingress.protocol;
+
+/// Faction identity (D51: 0 = ENL, 1 = RES).
+enum Faction : ubyte { Enl = 0, Res = 1 }
+
+/// The eleven P3-RPC messages.
+union Message {
+  ClientHello,
+  ServerHello,
+  InitialSpawnStart,
+  SubmitInitialSpawns,
+  InitialSpawnResult,
+  RoundStartSignal,
+  SubmitCommandStream,
+  SubmissionResult,
+  CommitRound,
+  RoundClosed,
+  GameEnd
+}
+
+/// Frame root. `protocol_version` must equal the server's
+/// PROTOCOL_VERSION at handshake; later messages carry no version fields
+/// (a running client declaring wrong versions is an envelope reject).
+table ProtocolEnvelope {
+  protocol_version: uint = 1;
+  message: Message;
+}
+
+/// Client -> Server, first frame on the connection. All three version
+/// fields must EXACTLY match the server constants (no negotiation).
+table ClientHello {
+  client_name: string;
+  client_version: string;
+  protocol_version: uint;
+  public_snapshot_version: uint;
+  private_snapshot_version: uint;
+}
+
+/// Server -> Client. status: 0 = ok (faction assigned, match starting),
+/// 1 = version mismatch (startup aborts, unscored), 2 = duplicate /
+/// surplus connection (closed immediately).
+table ServerHello {
+  status: ubyte;
+  assigned_faction: Faction;
+  match_id: string;
+}
+
+/// Full rule parameter echo (every GameConfig field, declaration order).
+/// Clients read constants from here, never from local defaults.
+table MatchInfo {
+  total_rounds: uint;
+  initial_spawn_window_ms: uint;
+  decision_window_ms: uint;
+  priority_bucket_ms: uint;
+  epoch_length: uint;
+  map_width_cm: int;
+  map_height_cm: int;
+  portal_count: uint;
+  portal_min_distance_cm: uint;
+  clustered_portal_ratio_permille: uint;
+  portal_cluster_count: uint;
+  initial_agents_per_faction: uint;
+  reinforcement_interval_rounds: uint;
+  reinforcement_agents_per_faction: uint;
+  move_budget_cm: uint;
+  portal_operation_range_cm: uint;
+  transfer_range_cm: uint;
+  initial_supply: uint;
+  max_supply: uint;
+  portal_max_hp: uint;
+  attack_damage: uint;
+  recharge_amount: uint;
+  recharge_cost_supply: uint;
+  hack_supply_yield: uint;
+  hack_key_yield_min: uint;
+  hack_key_yield_max: uint;
+  hack_cooldown_rounds: uint;
+  hack_limit_per_epoch: uint;
+  max_link_distance_cm: uint;
+  max_commands_per_agent_round: uint;
+  /// Largest legal frame payload the transport accepts (65,535). The
+  /// server's GameConfig stores the EXCLUSIVE ceiling (65,536, ADR-0008);
+  /// this field publishes the enforced LEGAL maximum — one below the
+  /// ceiling — so a client sizing its largest frame to exactly the
+  /// published value is legal (D62).
+  max_frame_payload_bytes: uint;
+}
+
+/// Server -> Client: the complete map has been atomically published to the
+/// public SHM region (generation 0) and the pre-match Map View may be read;
+/// the spawn window is running.
+table InitialSpawnStart {
+  spawn_deadline_remaining_ms: uint;
+  info: MatchInfo;
+}
+
+/// Client -> Server, once per faction inside the spawn window: the complete
+/// agent_id -> coordinate set, validated as a whole (R-SPAWN-01).
+table SubmitInitialSpawns {
+  positions: [SpawnEntry];
+}
+
+table SpawnEntry {
+  agent_id: uint;
+  x: int;
+  y: int;
+}
+
+/// Server -> Client. status: 0 = accepted, 1 = invalid set (SPAWN_FORFEIT),
+/// 2 = missed deadline (SPAWN_FORFEIT). Private reason; no replacement.
+table InitialSpawnResult {
+  status: ubyte;
+  detail: string;
+}
+
+/// Server -> Client: a new snapshot generation is published and SHM reads
+/// are licensed again. No authoritative round payload (P3-RPC).
+table RoundStartSignal {}
+
+/// One agent's ordered command stream for one round. Timing is server
+/// side: the frame's last byte arrival stamps `received_at`; clients send
+/// no stream ids or nonces.
+union CommandBody {
+  Move: CmdMove,
+  Attack: CmdEmpty,
+  Capture: CmdPortal,
+  Recharge: CmdPortal,
+  Hack: CmdPortal,
+  Link: CmdLink,
+  Transfer: CmdTransfer
+}
+
+table CmdMove { x: int; y: int; }
+table CmdPortal { portal: uint; }
+table CmdEmpty {}
+table CmdLink { a: uint; b: uint; }
+table KeyCount { portal: uint; count: uint; }
+table CmdTransfer {
+  target_agent: uint;
+  supply: uint;
+  keys: [KeyCount];
+}
+
+table Command { body: CommandBody; }
+
+table SubmitCommandStream {
+  round: uint;
+  agent_id: uint;
+  commands: [Command];
+}
+
+/// Server -> Client reply to SubmitCommandStream. status: 0 = accepted
+/// (first stream, slot frozen), 1 = rejected structural (slot still frozen,
+/// ADR-0004), 2 = ignored duplicate, 3 = envelope-unlocatable (wrong round /
+/// unknown agent / faction mismatch; nothing frozen), 4 = dropped late
+/// (completed at/after the deadline; nothing frozen).
+table SubmissionResult {
+  round: uint;
+  agent_id: uint;
+  status: ubyte;
+  detail: string;
+}
+
+/// Client -> Server: irreversibly freezes this faction's not-yet-submitted
+/// agents as explicit passes for `round`.
+table CommitRound {
+  round: uint;
+}
+
+/// Server -> Client: input for `round` is closed; Settlement Phase begins
+/// and SHM reads are forbidden until the next RoundStartSignal.
+table RoundClosed {
+  round: uint;
+}
+
+/// Server -> Client, final frame. outcome: 0 EnlWin, 1 ResWin, 2 Draw,
+/// 3 SpawnForfeit, 4 ClientForfeit, 5 SetupError. Technical outcomes are
+/// never dressed up as score results (CONTEXT Match Outcome).
+table GameEnd {
+  outcome: ubyte;
+  detail: string;
+  score_enl_hi: ulong;
+  score_enl_lo: ulong;
+  score_res_hi: ulong;
+  score_res_lo: ulong;
+  rounds_completed: uint;
+}
+
+root_type ProtocolEnvelope;

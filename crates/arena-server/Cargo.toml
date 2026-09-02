@@ -1,0 +1,10 @@
+[package]
+name = "arena-server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+arena-core = { path = "../arena-core" }
+arena-protocol = { path = "../arena-protocol" }
+arena-replay = { path = "../arena-replay" }

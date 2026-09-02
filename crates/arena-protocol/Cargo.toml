@@ -1,0 +1,9 @@
+[package]
+name = "arena-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+arena-core = { path = "../arena-core" }
+planus = "1.3"

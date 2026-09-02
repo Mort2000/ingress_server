@@ -111,6 +111,26 @@ pub enum StreamRejection {
     MultipleMajorActions { count: u32 },
 }
 
+/// Structural stream check (D27, extracted as `pub` in M7 / D68 so the
+/// external server can answer SUBMISSION_RESULT immediately with the SAME
+/// rule text the Resolver applies): count-only and world-blind — the
+/// command cap first, then the Major Action allowance. Pure refactor: the
+/// [`Resolver::run_round`] intake calls this and produces identical
+/// verdicts.
+pub fn structural_check(commands: &[Command], max_commands: u32) -> Result<(), StreamRejection> {
+    if commands.len() > max_commands as usize {
+        return Err(StreamRejection::TooManyCommands {
+            count: commands.len() as u32,
+            max: max_commands,
+        });
+    }
+    let majors = commands.iter().filter(|c| c.is_major()).count() as u32;
+    if majors > 1 {
+        return Err(StreamRejection::MultipleMajorActions { count: majors });
+    }
+    Ok(())
+}
+
 /// Envelope-locatability failures (D21): the submission cannot be pinned to
 /// an agent slot, so it freezes nothing. All other transport concerns are M7.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -436,24 +456,11 @@ impl Resolver {
             }
             frozen.insert(submission.agent_id);
 
-            // Structural check (D27): count-only, world-blind. Command count
-            // first, then the Major Action allowance.
-            if submission.commands.len() > max_commands as usize {
-                report.slots.insert(
-                    submission.agent_id,
-                    SlotStatus::Rejected(StreamRejection::TooManyCommands {
-                        count: submission.commands.len() as u32,
-                        max: max_commands,
-                    }),
-                );
-                continue;
-            }
-            let majors = submission.commands.iter().filter(|c| c.is_major()).count() as u32;
-            if majors > 1 {
-                report.slots.insert(
-                    submission.agent_id,
-                    SlotStatus::Rejected(StreamRejection::MultipleMajorActions { count: majors }),
-                );
+            // Structural check (D27/D68): the shared, world-blind rule.
+            if let Err(rejection) = structural_check(&submission.commands, max_commands) {
+                report
+                    .slots
+                    .insert(submission.agent_id, SlotStatus::Rejected(rejection));
                 continue;
             }
             if submission.commands.is_empty() {
@@ -4910,5 +4917,75 @@ mod tests {
         all.sort_unstable();
         assert_eq!(all, (0..14).collect::<Vec<_>>());
         assert_eq!(state.next_agent_id(), AgentId(14));
+    }
+
+    // ------------------------------------------------------------------
+    // M7 (D68): the extracted `structural_check` pins the exact intake
+    // verdicts of `run_round` — the pure-refactor guarantee.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn structural_check_matches_run_round_verdicts_at_the_boundaries() {
+        let stay = || Command::Move {
+            destination: Coord::new(10_000, 5_000),
+        };
+        let moves = |count: usize| (0..count).map(|_| stay()).collect::<Vec<_>>();
+        // Command-count boundary: 10 ok, 11 rejected (default cap 10).
+        assert_eq!(structural_check(&moves(10), 10), Ok(()));
+        assert_eq!(
+            structural_check(&moves(11), 10),
+            Err(StreamRejection::TooManyCommands { count: 11, max: 10 })
+        );
+        // Major-count boundary: two majors rejected.
+        let capture = Command::Capture {
+            portal: PortalId(0),
+        };
+        assert_eq!(
+            structural_check(&[capture.clone(), Command::Attack], 10),
+            Err(StreamRejection::MultipleMajorActions { count: 2 })
+        );
+        // Both defects coexist: the count check reports FIRST (D27 order).
+        let mut both = vec![capture.clone(), Command::Attack];
+        both.extend(moves(10));
+        assert_eq!(
+            structural_check(&both, 10),
+            Err(StreamRejection::TooManyCommands { count: 12, max: 10 }),
+            "count check precedes the major allowance"
+        );
+        // Empty is structurally fine (an explicit PASS) — run_round freezes
+        // it as Pass.
+        assert_eq!(structural_check(&[], 10), Ok(()));
+
+        // End-to-end: the resolver's slot statuses equal the helper verdicts.
+        let res_moves: Vec<Command> = (0..11)
+            .map(|_| Command::Move {
+                destination: Coord::new(6_000, 10_000),
+            })
+            .collect();
+        let mut state = standard_state();
+        let report = run(
+            &mut state,
+            &[
+                stream(
+                    1,
+                    Faction::Enl,
+                    AgentId(0),
+                    0,
+                    0,
+                    vec![capture.clone(), Command::Attack],
+                ),
+                stream(1, Faction::Res, AgentId(1), 0, 1, res_moves.clone()),
+            ],
+        );
+        let enl_verdict = structural_check(&[capture, Command::Attack], 10).unwrap_err();
+        let res_verdict = structural_check(&res_moves, 10).unwrap_err();
+        assert_eq!(
+            report.slots.get(&AgentId(0)),
+            Some(&SlotStatus::Rejected(enl_verdict))
+        );
+        assert_eq!(
+            report.slots.get(&AgentId(1)),
+            Some(&SlotStatus::Rejected(res_verdict))
+        );
     }
 }

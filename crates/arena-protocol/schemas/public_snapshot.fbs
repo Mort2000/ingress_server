@@ -1,0 +1,109 @@
+// Public SHM snapshot (M7, P3-SHM; ADR-0009). One root: PublicSnapshot.
+//
+// Generation 0 (snapshot_version = 0, current_round = 0) is the pre-match
+// frozen map: portals from the MapDefinition, no links/fields/events, zero
+// scores. Later generations carry the full public state at round start,
+// including the complete public event history. Faction/owner bytes follow
+// the D51 tags (faction 0 = ENL, 1 = RES; owner 0 = Neutral, 1 = ENL,
+// 2 = RES); u128 scores are split into hi/lo ulong halves (little-endian
+// u64 pair, reassembled as hi<<64 | lo).
+//
+// Committed contract; generated Rust committed alongside
+// (src/generated/snapshot_public.rs), rebuilt only by
+// scripts/regen-protocol.sh.
+
+namespace ingress.snapshot.public;
+
+union EventBody {
+  PortalCaptured: EvPortal,
+  PortalAttacked: EvAttacked,
+  PortalNeutralized: EvPortal,
+  LinkCreated: EvLink,
+  LinkDestroyed: EvLink,
+  FieldCreated: EvField,
+  FieldDestroyed: EvField,
+  Reinforcement: EvReinforce
+}
+
+table EvPortal {
+  faction: ubyte;
+  agent_id: uint;
+  portal: uint;
+}
+
+table EvAttacked {
+  faction: ubyte;
+  agent_id: uint;
+  portal: uint;
+  damage: uint;
+  hp_after: uint;
+}
+
+table EvLink {
+  faction: ubyte;
+  agent_id: uint;
+  a: uint;
+  b: uint;
+}
+
+table EvField {
+  faction: ubyte;
+  agent_id: uint;
+  a: uint;
+  b: uint;
+  c: uint;
+}
+
+table EvReinforce {
+  index: uint;
+  x: int;
+  y: int;
+  count: uint;
+  first_agent_id: uint;
+}
+
+table EventEntry {
+  seq: ulong;
+  round: uint;
+  body: EventBody;
+}
+
+table PortalEntry {
+  id: uint;
+  x: int;
+  y: int;
+  owner: ubyte;
+  hp: uint;
+}
+
+table LinkEntry {
+  a: uint;
+  b: uint;
+  faction: ubyte;
+}
+
+table FieldEntry {
+  a: uint;
+  b: uint;
+  c: uint;
+  faction: ubyte;
+  area2: ulong;
+}
+
+table PublicSnapshot {
+  schema_version: uint = 1;
+  current_round: uint;
+  snapshot_version: ulong;
+  round_start_ms: ulong;
+  deadline_ms: ulong;
+  score_enl_hi: ulong;
+  score_enl_lo: ulong;
+  score_res_hi: ulong;
+  score_res_lo: ulong;
+  portals: [PortalEntry];
+  links: [LinkEntry];
+  fields: [FieldEntry];
+  events: [EventEntry];
+}
+
+root_type PublicSnapshot;
