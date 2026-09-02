@@ -22,6 +22,22 @@ pub struct RoundTracker {
     pub move_spent: u64,
 }
 
+/// Per-`(agent, portal)` HACK bookkeeping (R-HACK-02, D31/D32).
+/// `hack_ordinal` is the LIFETIME count of successful hacks — the RNG stable
+/// index of the next draw — and is never reset, not even by epoch
+/// boundaries; `last_hack_round` and `hack_count_epoch` reset eagerly when a
+/// new epoch starts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct HackTracker {
+    /// Round of the pair's last successful hack; anchors the cooldown
+    /// `current_round - last_hack_round >= HACK_COOLDOWN`.
+    pub last_hack_round: Option<u32>,
+    /// Successful hacks by this pair within the current epoch.
+    pub hack_count_epoch: u32,
+    /// Lifetime count of successful hacks; the next draw's stable index.
+    pub hack_ordinal: u32,
+}
+
 /// Construction failures for [`GameState::new`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum StateError {
@@ -45,13 +61,16 @@ pub(crate) fn faction_as_owner(faction: Faction) -> Owner {
 /// Complete authoritative match state: portals, agents, per-round trackers,
 /// the public event log, and faction scores. Scores stay zero until fields
 /// exist (M4); the map definition is copied as the authoritative input.
-#[derive(Debug)]
+/// `PartialEq` is whole-state equality — the M3 determinism gate runs the
+/// same scenario twice and demands identical states.
+#[derive(Debug, PartialEq, Eq)]
 pub struct GameState {
     config: GameConfig,
     round: u32,
     portals: Vec<Portal>,
     agents: BTreeMap<AgentId, Agent>,
     trackers: BTreeMap<AgentId, RoundTracker>,
+    hack_trackers: BTreeMap<(AgentId, PortalId), HackTracker>,
     events: Vec<Event>,
     event_seq: u64,
     scores: BTreeMap<Faction, Score2>,
@@ -119,6 +138,7 @@ impl GameState {
             portals: map.portals().to_vec(),
             agents,
             trackers,
+            hack_trackers: BTreeMap::new(),
             events: Vec::new(),
             event_seq: 0,
             scores,
@@ -165,6 +185,32 @@ impl GameState {
 
     pub fn tracker(&self, id: AgentId) -> Option<&RoundTracker> {
         self.trackers.get(&id)
+    }
+
+    /// Per-`(agent, portal)` HACK tracker (R-HACK-02); `None` until the
+    /// pair's first successful hack.
+    pub fn hack_tracker(&self, agent: AgentId, portal: PortalId) -> Option<&HackTracker> {
+        self.hack_trackers.get(&(agent, portal))
+    }
+
+    /// 0-based epoch of a 1-based round (R-HACK-02, D32): rounds
+    /// `1..=epoch_length` are epoch 0, `epoch_length+1..=2*epoch_length`
+    /// epoch 1, and so on.
+    ///
+    /// Precondition: `round >= 1` (rounds are 1-based; a 0 round underflows
+    /// and panics by design) and `epoch_length >= 1` (guaranteed by
+    /// `GameConfig::validate`).
+    pub fn epoch_index(round: u32, epoch_length: u32) -> u32 {
+        round
+            .checked_sub(1)
+            .expect("rounds are 1-based")
+            .checked_div(epoch_length)
+            .expect("epoch_length >= 1 (GameConfig::validate)")
+    }
+
+    /// The epoch containing the current round.
+    pub fn current_epoch(&self) -> u32 {
+        Self::epoch_index(self.round, self.config.epoch_length)
     }
 
     pub fn events(&self) -> &[Event] {
@@ -295,22 +341,123 @@ impl GameState {
         event
     }
 
-    /// Advances to the next round and resets every tracker (D22 close, then
-    /// next round). Called by the harness after the resolver finishes.
+    /// Applies a successful HACK (R-HACK-01, D34): grants `keys_gained`
+    /// keys in full (keys are never clamped), adds `supply_yield` supply
+    /// CLAMPED at `MAX_SUPPLY` — the clamp is a game rule, not a failure,
+    /// and the tracker advances either way — and updates all three tracker
+    /// fields (cooldown anchor = current round, epoch count +1, lifetime
+    /// ordinal +1). Returns `(supply_granted, supply_after)`.
+    pub(crate) fn apply_hack(
+        &mut self,
+        agent: AgentId,
+        portal: PortalId,
+        keys_gained: u32,
+        supply_yield: u32,
+    ) -> (u32, u32) {
+        self.grant_keys(agent, portal, keys_gained);
+        let cap = self.config.max_supply as u64;
+        let owner = self.agents.get_mut(&agent).expect("agent exists");
+        let supply_before = owner.supply as u64;
+        let sum = supply_before
+            .checked_add(supply_yield as u64)
+            .expect("u64 sum of two u32 values");
+        let supply_after = sum.min(cap) as u32;
+        owner.supply = supply_after;
+        let supply_granted = (supply_after as u64)
+            .checked_sub(supply_before)
+            .expect("the clamp never removes supply") as u32;
+
+        let round = self.round;
+        let tracker = self.hack_trackers.entry((agent, portal)).or_default();
+        tracker.last_hack_round = Some(round);
+        tracker.hack_count_epoch = tracker
+            .hack_count_epoch
+            .checked_add(1)
+            .expect("hack count bounded by rounds x commands");
+        tracker.hack_ordinal = tracker
+            .hack_ordinal
+            .checked_add(1)
+            .expect("hack ordinal bounded by rounds x commands");
+        (supply_granted, supply_after)
+    }
+
+    /// Applies a resolver-validated TRANSFER (R-TRANSFER-01, D35): subtracts
+    /// the supply and keys from the sender — entries depleted to 0 are
+    /// REMOVED so the inventory stays canonical (M5 hashes the map) — and
+    /// adds them to the receiver, merging per portal. Zero-count entries are
+    /// inert. A self-transfer nets out to no change. The resolver has
+    /// already validated every balance and the receiver capacity.
+    pub(crate) fn apply_transfer(
+        &mut self,
+        sender: AgentId,
+        target: AgentId,
+        supply: u32,
+        keys: &BTreeMap<PortalId, u32>,
+    ) {
+        {
+            let from = self.agents.get_mut(&sender).expect("agent exists");
+            from.supply = from
+                .supply
+                .checked_sub(supply)
+                .expect("resolver validated sender supply");
+            for (&portal, &count) in keys {
+                if count == 0 {
+                    continue;
+                }
+                let entry = from
+                    .keys
+                    .get_mut(&portal)
+                    .expect("resolver validated sender key balances");
+                *entry = entry
+                    .checked_sub(count)
+                    .expect("resolver validated sender key balances");
+                if *entry == 0 {
+                    from.keys.remove(&portal);
+                }
+            }
+        }
+        let to = self.agents.get_mut(&target).expect("agent exists");
+        to.supply = to
+            .supply
+            .checked_add(supply)
+            .expect("resolver validated receiver capacity");
+        for (&portal, &count) in keys {
+            if count == 0 {
+                continue;
+            }
+            let entry = to.keys.entry(portal).or_insert(0);
+            *entry = entry
+                .checked_add(count)
+                .expect("key count bounded by portal population");
+        }
+    }
+
+    /// Advances to the next round and resets every round tracker (D22
+    /// close, then next round). When the step crosses an epoch boundary the
+    /// hack trackers reset EAGERLY: `last_hack_round` and
+    /// `hack_count_epoch` restart while `hack_ordinal` survives (R-HACK-02,
+    /// D32) — a Round-100 hack must not block a Round-101 hack.
     pub(crate) fn advance_round(&mut self) {
+        let old_epoch = self.current_epoch();
         self.round = self
             .round
             .checked_add(1)
             .expect("round bounded by total_rounds");
+        if self.current_epoch() != old_epoch {
+            for tracker in self.hack_trackers.values_mut() {
+                tracker.last_hack_round = None;
+                tracker.hack_count_epoch = 0;
+            }
+        }
         for tracker in self.trackers.values_mut() {
             *tracker = RoundTracker::default();
         }
     }
 
-    /// Test/M3 bridge: hands `count` keys for `portal` to `agent`. HACK (M3)
-    /// is the only rules-legal key source; the resolver never calls this.
-    /// The `cfg(test)` gate comes off in M3 when HACK lands.
-    #[cfg(test)]
+    /// Hands `count` keys for `portal` to `agent` (key inventory primitive).
+    /// HACK is the only rules-legal key source and routes through
+    /// [`GameState::apply_hack`]; this stays `pub(crate)` as the shared
+    /// mutation used by apply_hack and tests.
     pub(crate) fn grant_keys(&mut self, agent: AgentId, portal: PortalId, count: u32) {
         let inventory = &mut self.agents.get_mut(&agent).expect("agent exists").keys;
         let entry = inventory.entry(portal).or_insert(0);
@@ -586,5 +733,187 @@ mod tests {
         state.apply_attack_damage(PortalId(0), 75); // hp 25
         assert_eq!(state.apply_recharge(AgentId(0), PortalId(0), 15), (25, 40));
         assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(18));
+    }
+
+    // ------------------------------------------------------------------
+    // M3: epoch model and hack trackers (checklist 1-2)
+    // ------------------------------------------------------------------
+
+    // Checklist 1: epoch derivation boundaries (D32, R-HACK-02).
+    #[test]
+    fn epoch_index_boundaries() {
+        // Default EPOCH_LENGTH 100: rounds 1-100 -> epoch 0, 101-200 -> 1,
+        // 201 -> 2 (0-based epochs).
+        for (round, epoch) in [
+            (1u32, 0u32),
+            (99, 0),
+            (100, 0),
+            (101, 1),
+            (200, 1),
+            (201, 2),
+            (500, 4),
+        ] {
+            assert_eq!(GameState::epoch_index(round, 100), epoch, "round {round}");
+        }
+        // A non-default length shifts the boundaries the same way.
+        for (round, epoch) in [(1u32, 0u32), (3, 0), (4, 1), (6, 1), (7, 2)] {
+            assert_eq!(GameState::epoch_index(round, 3), epoch, "round {round}");
+        }
+        // Epoch length 1: every round is its own epoch.
+        for round in 1..=3u32 {
+            assert_eq!(GameState::epoch_index(round, 1), round - 1);
+        }
+    }
+
+    // Checklist 1: current_epoch() derives from the live round.
+    #[test]
+    fn current_epoch_tracks_the_round() {
+        let cfg = scenario_config(1);
+        let map = two_portal_map();
+        let enl = spawns_for(&cfg, Faction::Enl, &[Coord::new(10_000, 5_000)]);
+        let res = spawns_for(&cfg, Faction::Res, &[Coord::new(6_000, 10_000)]);
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state builds");
+        assert_eq!(state.current_epoch(), 0);
+        for _ in 1..100 {
+            state.advance_round();
+        }
+        assert_eq!(state.round(), 100);
+        assert_eq!(state.current_epoch(), 0);
+        state.advance_round();
+        assert_eq!(state.round(), 101);
+        assert_eq!(state.current_epoch(), 1);
+    }
+
+    // Checklist 2: the eager epoch sweep in advance_round (D32) resets the
+    // cooldown anchor and the per-epoch count but PRESERVES hack_ordinal.
+    #[test]
+    fn advance_round_epoch_sweep_resets_cooldown_and_count_preserves_ordinal() {
+        let mut cfg = scenario_config(1);
+        cfg.epoch_length = 4;
+        let map = two_portal_map();
+        let enl = spawns_for(&cfg, Faction::Enl, &[Coord::new(10_000, 5_000)]);
+        let res = spawns_for(&cfg, Faction::Res, &[Coord::new(6_000, 10_000)]);
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state builds");
+
+        // Advance to round 4, the last round of epoch 0.
+        for _ in 1..4 {
+            state.advance_round();
+        }
+        assert_eq!(state.round(), 4);
+        assert_eq!(state.current_epoch(), 0);
+        state.apply_hack(AgentId(0), PortalId(0), 2, 1);
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(0)),
+            Some(&HackTracker {
+                last_hack_round: Some(4),
+                hack_count_epoch: 1,
+                hack_ordinal: 1,
+            })
+        );
+
+        // Crossing into epoch 1 eagerly resets cooldown and count.
+        state.advance_round();
+        assert_eq!(state.current_epoch(), 1);
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(0)),
+            Some(&HackTracker {
+                last_hack_round: None,
+                hack_count_epoch: 0,
+                hack_ordinal: 1,
+            })
+        );
+
+        // A same-epoch advance (5 -> 6) resets nothing.
+        state.apply_hack(AgentId(0), PortalId(0), 1, 1);
+        state.advance_round();
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(0)),
+            Some(&HackTracker {
+                last_hack_round: Some(5),
+                hack_count_epoch: 1,
+                hack_ordinal: 2,
+            })
+        );
+    }
+
+    // State-level HACK contract (D34): keys in full, supply clamped in u64,
+    // tracker fully advanced even when the clamp bites.
+    #[test]
+    fn apply_hack_grants_keys_clamps_supply_and_updates_tracker() {
+        let mut cfg = scenario_config(1);
+        cfg.initial_supply = 100; // at MAX_SUPPLY
+        let map = two_portal_map();
+        let enl = spawns_for(&cfg, Faction::Enl, &[Coord::new(10_000, 5_000)]);
+        let res = spawns_for(&cfg, Faction::Res, &[Coord::new(6_000, 10_000)]);
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state builds");
+
+        let (granted, after) = state.apply_hack(AgentId(0), PortalId(1), 2, 1);
+        assert_eq!((granted, after), (0, 100), "clamped at MAX_SUPPLY");
+        assert_eq!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.get(&PortalId(1)).copied()),
+            Some(Some(2)),
+            "keys are never clamped"
+        );
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(1)),
+            Some(&HackTracker {
+                last_hack_round: Some(1),
+                hack_count_epoch: 1,
+                hack_ordinal: 1,
+            })
+        );
+    }
+
+    // State-level TRANSFER contract (D35): resources move, sender entries
+    // depleted to 0 vanish, receiver entries merge per portal.
+    #[test]
+    fn apply_transfer_moves_resources_and_keeps_inventory_canonical() {
+        let cfg = scenario_config(2);
+        let map = two_portal_map();
+        let enl = spawns_for(
+            &cfg,
+            Faction::Enl,
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 6_000)],
+        );
+        let res = spawns_for(
+            &cfg,
+            Faction::Res,
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state builds");
+
+        state.grant_keys(AgentId(0), PortalId(0), 3);
+        state.grant_keys(AgentId(0), PortalId(1), 2);
+        state.grant_keys(AgentId(1), PortalId(0), 1); // existing entry to merge into
+        let mut keys = BTreeMap::new();
+        keys.insert(PortalId(0), 3u32);
+        keys.insert(PortalId(1), 2u32);
+        state.apply_transfer(AgentId(0), AgentId(1), 5, &keys);
+
+        // Sender: supply 20-5, both key entries depleted to 0 are GONE.
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(15));
+        assert!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.is_empty())
+                .unwrap_or(false),
+            "depleted key entries are removed from the inventory"
+        );
+        // Receiver: supply 20+5, P0 merged 1+3, P1 fresh 2.
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(25));
+        assert_eq!(
+            state
+                .agent(AgentId(1))
+                .map(|a| a.keys.get(&PortalId(0)).copied()),
+            Some(Some(4))
+        );
+        assert_eq!(
+            state
+                .agent(AgentId(1))
+                .map(|a| a.keys.get(&PortalId(1)).copied()),
+            Some(Some(2))
+        );
     }
 }

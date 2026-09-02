@@ -34,7 +34,8 @@ after each milestone; every agent should read it before starting work.
 |---|---|---|---|
 | M0 skeleton | done | c0a1495 | workspace, ADR-0012; corrected by ADR-0013 (cargo mirror, official blake3) |
 | M1 core geometry/RNG | done | 6f9966b | 97 tests green; types/config/geometry/rng/map/spawn; decisions D1–D15 |
-| M2 basic combat | done | (this commit) | 155 tests green; state/event/resolve/observe/harness; decisions D16–D29; reviewer major (unchecked u64 in virtual receive) fixed |
+| M2 basic combat | done | e530047 | 156 tests green; state/event/resolve/observe/harness; decisions D16–D29; reviewer major (unchecked u64 in virtual receive) fixed |
+| M3 economy | done | (this commit) | 180 tests green; HACK/TRANSFER in types/state/resolve/harness; decisions D30–D35; golden vectors pinned to the M1 RNG address; economy + determinism acceptance gates |
 
 ## Frozen design decisions (must not silently change)
 
@@ -71,6 +72,15 @@ M2 (Basic Combat) additions:
 - D28: major-on-drop — `major_used` is set even when the major DROPs; intake caps majors at 1 per stream so double-spend is unreachable — the tracker fact is for spec compliance, later milestones, and tests.
 - D29: placeholders — scores stay `Score2(0)`; no links/fields until M4; `Observation` still exposes scores (R-VIS-01).
 
+M3 (Economy) additions:
+
+- D30: `Command` grows `Hack { portal }` and `Transfer { target_agent, supply, keys: BTreeMap<PortalId, u32> }` (BTreeMap = canonical ascending order + free dedup); both auxiliary. The payload names no sender — the stream owner is the sender by construction (R-TRANSFER-01). `Command` drops `Copy` (keeps `Clone`).
+- D31: hack RNG stable index = per-`(agent, portal)` LIFETIME count of successful hacks (0-based, never reset by epochs); address = frozen `RandomOracle::hack_address(round, agent, portal, ordinal)`, `RNG_VERSION` stays 1 — epoch-local ordinals would shift every draw after an `EPOCH_LENGTH` retune.
+- D32: `GameState::epoch_index(round, epoch_length) = (round - 1) / epoch_length` (0-based; rounds are 1-based, floor div). Epoch reset is EAGER inside `advance_round`: on a boundary, every hack tracker resets `last_hack_round`/`hack_count_epoch` while `hack_ordinal` survives — "Round 100 hack must not block Round 101" is a plain state fact.
+- D33: `Resolver` owns a by-value `RandomOracle` — `Resolver::with_seed(game_seed)` is the authoritative constructor; `Resolver::new()`/`Default` stay seed-0 for M2 fixtures. `MatchHarness::new(game_seed, cfg, map, spawns, enl, res)` takes the seed first; `GameState` never holds seed or oracle (D15).
+- D34: HACK validation order is contractual: portal exists → closed `PORTAL_OPERATION_RANGE` from the current position (NO owner check) → cooldown → epoch limit. A passing hack always succeeds and draws exactly one sample (`min + uniform(addr, max-min+1)`); supply grants CLAMP at `MAX_SUPPLY` in u64 (a clamp is not a failure; keys never clamp; tracker still advances). Dropped hacks mutate nothing and draw nothing. Range failures reuse `OutOfOperationRange`; when cooldown AND epoch limit both fail, cooldown reports.
+- D35: TRANSFER validation order is contractual: target exists → same faction → closed `TRANSFER_RANGE` from CURRENT positions → sender supply → sender key balance per portal ascending `PortalId` (zero-count entries inert, first shortfall reported) → receiver `supply + transfer <= MAX_SUPPLY` (u64 sum; `capacity` in the DROP reason is the receiver's REMAINING headroom). Any failure ⇒ DROP with zero mutation; sender key entries depleted to 0 are removed (canonical inventory for M5 hashing); self-transfer and zero-quantity transfers are legal no-ops that still pass target/faction/range checks.
+
 ## Known minor debt (from M1 review — fix when touched, or in final review)
 
 - `geometry.rs` public fns (`dist2`, `within_closed_range`, `cross`) rely on the documented GameConfig bounds precondition; callers MUST validate `in_bounds` (etc.) before calling so illegal inputs become DROPs, not panics.
@@ -85,3 +95,11 @@ From M2 review (minor):
 - `merge_order` panics on `bucket_ms == 0` without a documented contract like `receive_bucket` has.
 - Two event tests are struct-shape tautologies (construct a value, assert its fields).
 - No resolver-level test that a MOVE to negative coordinates DROPs (behavior correct per reviewer probes).
+
+From M3 review (minor):
+
+- Self-transfer exceeding own headroom DROPs (`TransferExceedsReceiverSupply`) though its net effect is identity; uniform rule, documented in D35 note.
+- Comment/test mismatch in the golden-vector test (says agent spawns at boundary, spawns elsewhere).
+- No test pins that `HACK_LIMIT_PER_EPOCH` is per (agent, portal) across DIFFERENT pairs (same-pair saturation is tested).
+- Public `epoch_index` panics on round == 0 (documented 1-based precondition, but public surface).
+- `command_hack_and_transfer_payload_shapes` is a compile-time tautology test.

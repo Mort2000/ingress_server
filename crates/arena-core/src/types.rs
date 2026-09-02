@@ -61,7 +61,7 @@ pub struct Portal {
 ///
 /// Agents have no collision volume: same or overlapping coordinates are always
 /// legal (R-AGENT-01). Starts with `INITIAL_SUPPLY` and an empty key inventory.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Agent {
     pub id: AgentId,
     pub faction: Faction,
@@ -113,9 +113,10 @@ impl Coord {
 
 /// Command payload submitted inside an Agent Command Stream (R-ACTION-01).
 ///
-/// M2 carries MOVE, ATTACK, CAPTURE, and RECHARGE; HACK/LINK/TRANSFER land
-/// in later milestones.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// M2 carries MOVE, ATTACK, CAPTURE, and RECHARGE; M3 adds HACK and TRANSFER
+/// (both auxiliary). `Clone` but not `Copy` since D30 — TRANSFER owns a key
+/// map, and every construction site moves or borrows commands anyway.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
     /// Absolute destination coordinate; cost is billed per segment from the
     /// agent's latest position (R-MOVE-01). Auxiliary action.
@@ -126,12 +127,27 @@ pub enum Command {
     Capture { portal: PortalId },
     /// Pushes supply into an owned portal (R-RECHARGE-01). Major action.
     Recharge { portal: PortalId },
+    /// Farms `HACK_KEY_YIELD` keys and `HACK_SUPPLY_YIELD` supply from a
+    /// portal in operation range (R-HACK-01); the portal may be neutral,
+    /// own, or enemy. Auxiliary action.
+    Hack { portal: PortalId },
+    /// One-way transfer of supply and keys to a same-faction agent within
+    /// `TRANSFER_RANGE` (R-TRANSFER-01). The payload names only the
+    /// receiver: the sender is always the Command Stream's own agent, so a
+    /// command can never spend another agent's resources. `keys` is a
+    /// `BTreeMap` for canonical ascending order with free dedup; zero-count
+    /// entries are inert. Auxiliary action.
+    Transfer {
+        target_agent: AgentId,
+        supply: u32,
+        keys: BTreeMap<PortalId, u32>,
+    },
 }
 
 impl Command {
     /// Whether this command belongs to the Major Action category
     /// (R-ACTION-01): ATTACK, RECHARGE, and CAPTURE — at most one per agent
-    /// per round. MOVE (and later HACK/LINK/TRANSFER) are auxiliary.
+    /// per round. MOVE, HACK, and TRANSFER (LINK lands later) are auxiliary.
     pub fn is_major(&self) -> bool {
         matches!(
             self,
@@ -203,8 +219,8 @@ mod tests {
 
     #[test]
     fn command_major_classification() {
-        // R-ACTION-01: ATTACK, RECHARGE, CAPTURE are Major Actions; MOVE is
-        // auxiliary.
+        // R-ACTION-01: ATTACK, RECHARGE, CAPTURE are Major Actions; MOVE,
+        // HACK, and TRANSFER are auxiliary.
         assert!(
             !Command::Move {
                 destination: Coord::new(0, 0)
@@ -224,6 +240,60 @@ mod tests {
             }
             .is_major()
         );
+        assert!(
+            !Command::Hack {
+                portal: PortalId(0)
+            }
+            .is_major()
+        );
+        assert!(
+            !Command::Transfer {
+                target_agent: AgentId(1),
+                supply: 0,
+                keys: BTreeMap::new(),
+            }
+            .is_major()
+        );
+    }
+
+    // Checklist 3 (M3): HACK and TRANSFER payload shapes. HACK mirrors the
+    // CAPTURE naming (a single `portal` field); TRANSFER names only the
+    // receiver — the sender is the stream owner by construction
+    // (R-TRANSFER-01) and cannot be set by the payload.
+    #[test]
+    fn command_hack_and_transfer_payload_shapes() {
+        match (Command::Hack {
+            portal: PortalId(4),
+        }) {
+            Command::Hack { portal } => assert_eq!(portal, PortalId(4)),
+            _ => panic!("unexpected command variant"),
+        }
+        let mut keys = BTreeMap::new();
+        keys.insert(PortalId(2), 3u32);
+        keys.insert(PortalId(7), 1u32);
+        let transfer = Command::Transfer {
+            target_agent: AgentId(5),
+            supply: 12,
+            keys,
+        };
+        match &transfer {
+            Command::Transfer {
+                target_agent,
+                supply,
+                keys,
+            } => {
+                assert_eq!(*target_agent, AgentId(5));
+                assert_eq!(*supply, 12);
+                // Canonical ascending PortalId order with free dedup.
+                let ids: Vec<PortalId> = keys.keys().copied().collect();
+                assert_eq!(ids, vec![PortalId(2), PortalId(7)]);
+                assert_eq!(keys[&PortalId(2)], 3);
+            }
+            _ => panic!("unexpected command variant"),
+        }
+        // A command clones deeply (Clone replaces the removed Copy, D30).
+        let cloned = transfer.clone();
+        assert_eq!(cloned, transfer);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::EventKind;
 use crate::geometry::{in_bounds, move_cost, within_closed_range};
+use crate::rng::RandomOracle;
 use crate::state::{GameState, faction_as_owner};
 use crate::types::{AgentId, Command, Coord, Faction, Owner, PortalId};
 
@@ -121,15 +122,81 @@ pub enum Unlocatable {
 /// rule failure (D24). A DROP never rolls back earlier successes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DropReason {
-    MoveOutOfBounds { destination: Coord },
-    MoveBudgetExceeded { requested: u64, remaining: u64 },
-    PortalNotFound { portal: PortalId },
-    OutOfOperationRange { portal: PortalId },
-    CaptureTargetNotNeutral { portal: PortalId, owner: Owner },
+    MoveOutOfBounds {
+        destination: Coord,
+    },
+    MoveBudgetExceeded {
+        requested: u64,
+        remaining: u64,
+    },
+    PortalNotFound {
+        portal: PortalId,
+    },
+    OutOfOperationRange {
+        portal: PortalId,
+    },
+    CaptureTargetNotNeutral {
+        portal: PortalId,
+        owner: Owner,
+    },
     AttackNoEnemyPortalsInRange,
-    RechargePortalNotOwned { portal: PortalId, owner: Owner },
-    RechargePositionNotSatisfied { portal: PortalId },
-    RechargeInsufficientSupply { required: u32, available: u32 },
+    RechargePortalNotOwned {
+        portal: PortalId,
+        owner: Owner,
+    },
+    RechargePositionNotSatisfied {
+        portal: PortalId,
+    },
+    RechargeInsufficientSupply {
+        required: u32,
+        available: u32,
+    },
+    /// HACK cooldown (R-HACK-02): `rounds_remaining` more rounds until the
+    /// pair may hack again.
+    HackCooldownActive {
+        portal: PortalId,
+        last_hack_round: u32,
+        rounds_remaining: u32,
+    },
+    /// HACK per-epoch limit reached for this (agent, portal) pair
+    /// (R-HACK-02).
+    HackEpochLimitReached {
+        portal: PortalId,
+        limit: u32,
+    },
+    /// TRANSFER target does not exist (R-TRANSFER-01).
+    TransferTargetNotFound {
+        target: AgentId,
+    },
+    /// TRANSFER target belongs to the other faction (R-TRANSFER-01).
+    TransferTargetWrongFaction {
+        target: AgentId,
+    },
+    /// TRANSFER target beyond the closed `TRANSFER_RANGE` from the sender's
+    /// current position (R-TRANSFER-01).
+    TransferOutOfRange {
+        target: AgentId,
+    },
+    /// Sender supply below the transferred amount (R-TRANSFER-01).
+    TransferInsufficientSupply {
+        requested: u32,
+        available: u32,
+    },
+    /// Sender key balance for `portal` below the transferred count; portals
+    /// are checked in ascending `PortalId` and the first shortfall reports
+    /// (D35).
+    TransferInsufficientKeys {
+        portal: PortalId,
+        requested: u32,
+        available: u32,
+    },
+    /// `receiver_supply + transfer_supply` would exceed `MAX_SUPPLY` (u64
+    /// sum, R-TRANSFER-01); `capacity` is the receiver's remaining headroom.
+    TransferExceedsReceiverSupply {
+        target: AgentId,
+        requested: u32,
+        capacity: u32,
+    },
 }
 
 /// One enemy portal hit by an ATTACK, in ascending `PortalId` order (D25).
@@ -158,6 +225,25 @@ pub enum CommandEffect {
         portal: PortalId,
         hp_before: u32,
         hp_after: u32,
+    },
+    /// A successful HACK (R-HACK-01): `keys_gained` keys in full (never
+    /// clamped), `supply_granted` supply after the `MAX_SUPPLY` clamp
+    /// (`0` when the agent already sat at the cap — a clamp is not a
+    /// failure), and `supply_after` the post-grant balance. Never
+    /// broadcasts (R-EVENT-01).
+    Hacked {
+        portal: PortalId,
+        keys_gained: u32,
+        supply_granted: u32,
+        supply_after: u32,
+    },
+    /// A successful TRANSFER (R-TRANSFER-01): the moved `supply` and the
+    /// moved non-zero key entries (echoing exactly what changed hands).
+    /// Never broadcasts (R-EVENT-01).
+    Transferred {
+        target: AgentId,
+        supply: u32,
+        keys: BTreeMap<PortalId, u32>,
     },
 }
 
@@ -205,13 +291,28 @@ pub struct RoundReport {
     pub unlocatable: Vec<Unlocatable>,
 }
 
-/// Stateless round resolver.
-#[derive(Default)]
-pub struct Resolver;
+/// Round resolver, bound to the match's random oracle (D33): HACK draws its
+/// key yield from a `RandomOracle` constructed with the match `game_seed`.
+/// The oracle has no cursor, so the resolver stays stateless between rounds;
+/// `GameState` never holds the seed or the oracle (D15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Resolver {
+    oracle: RandomOracle,
+}
 
 impl Resolver {
+    /// Authoritative constructor: binds the resolver to the match seed.
+    pub fn with_seed(game_seed: u64) -> Self {
+        Resolver {
+            oracle: RandomOracle::new(game_seed),
+        }
+    }
+
+    /// Seed-0 compatibility constructor retained for the M2 fixtures; real
+    /// matches construct via [`Resolver::with_seed`] from the Replay Header
+    /// seed (D15).
     pub fn new() -> Self {
-        Resolver
+        Resolver::with_seed(0)
     }
 
     /// Settles one round (P1-RESOLVE steps 1-5 minus the M3+ items):
@@ -308,7 +409,7 @@ impl Resolver {
             // merge_order addresses the `entries` slice; translate back to
             // the submission index through the queue built during intake.
             let submission = &submissions[queued[entry_index]];
-            let outcomes = execute_stream(state, submission);
+            let outcomes = execute_stream(state, &self.oracle, submission);
             let bucket = receive_bucket(submission.received_at_ms, bucket_ms);
             report.slots.insert(
                 submission.agent_id,
@@ -338,21 +439,38 @@ impl Resolver {
     }
 }
 
+impl Default for Resolver {
+    /// Documented compatibility default: seed 0 (same as [`Resolver::new`]).
+    fn default() -> Self {
+        Resolver::new()
+    }
+}
+
 /// Executes a stream's commands sequentially, each validated against the
 /// latest authoritative state (R-ACTION-01: no interleaving, no rollback).
 fn execute_stream(
     state: &mut GameState,
+    oracle: &RandomOracle,
     submission: &SubmittedCommandStream,
 ) -> Vec<CommandOutcome> {
     submission
         .commands
         .iter()
-        .map(|command| execute_command(state, submission.agent_id, submission.faction, command))
+        .map(|command| {
+            execute_command(
+                state,
+                oracle,
+                submission.agent_id,
+                submission.faction,
+                command,
+            )
+        })
         .collect()
 }
 
 fn execute_command(
     state: &mut GameState,
+    oracle: &RandomOracle,
     agent_id: AgentId,
     faction: Faction,
     command: &Command,
@@ -362,6 +480,12 @@ fn execute_command(
         Command::Attack => execute_attack(state, agent_id, faction),
         Command::Capture { portal } => execute_capture(state, agent_id, *portal),
         Command::Recharge { portal } => execute_recharge(state, agent_id, faction, *portal),
+        Command::Hack { portal } => execute_hack(state, oracle, agent_id, *portal),
+        Command::Transfer {
+            target_agent,
+            supply,
+            keys,
+        } => execute_transfer(state, agent_id, faction, *target_agent, *supply, keys),
     }
 }
 
@@ -521,6 +645,156 @@ fn execute_recharge(
         portal,
         hp_before,
         hp_after,
+    })
+}
+
+/// HACK (R-HACK-01/02, D34). Check order is contractual: portal exists ->
+/// closed operation range from the CURRENT position (no owner check —
+/// neutral, own, and enemy portals are all legal targets) -> cooldown ->
+/// epoch limit. Only a hack passing every check draws its single sample; a
+/// DROPped hack mutates nothing, draws nothing, and advances no ordinal
+/// (R-RNG-01). The supply grant clamps at `MAX_SUPPLY` (a clamp is not a
+/// failure); keys never clamp; portal hp/owner never change; no event
+/// broadcasts (R-EVENT-01).
+fn execute_hack(
+    state: &mut GameState,
+    oracle: &RandomOracle,
+    agent_id: AgentId,
+    portal: PortalId,
+) -> CommandOutcome {
+    let Some(found) = state.portal(portal) else {
+        return CommandOutcome::Drop(DropReason::PortalNotFound { portal });
+    };
+    let portal_position = found.position;
+    let agent_position = state
+        .agent(agent_id)
+        .expect("intake verified the agent exists")
+        .position;
+    let operation_range = state.config().portal_operation_range_cm;
+    if !within_closed_range(agent_position, portal_position, operation_range) {
+        return CommandOutcome::Drop(DropReason::OutOfOperationRange { portal });
+    }
+    let tracker = state
+        .hack_tracker(agent_id, portal)
+        .copied()
+        .unwrap_or_default();
+    let round = state.round();
+    let cooldown = state.config().hack_cooldown_rounds;
+    if let Some(last) = tracker.last_hack_round {
+        let elapsed = round
+            .checked_sub(last)
+            .expect("last_hack_round is never in the future");
+        if elapsed < cooldown {
+            return CommandOutcome::Drop(DropReason::HackCooldownActive {
+                portal,
+                last_hack_round: last,
+                rounds_remaining: cooldown - elapsed,
+            });
+        }
+    }
+    let limit = state.config().hack_limit_per_epoch;
+    if tracker.hack_count_epoch >= limit {
+        return CommandOutcome::Drop(DropReason::HackEpochLimitReached { portal, limit });
+    }
+
+    // The single random draw (D3/D31): the ordinal is the pair's LIFETIME
+    // count of successful hacks, so dropped attempts and epoch resets never
+    // shift a later address.
+    let min = state.config().hack_key_yield_min;
+    let max = state.config().hack_key_yield_max;
+    let span = max
+        .checked_sub(min)
+        .and_then(|diff| diff.checked_add(1))
+        .expect("min >= 1 keeps the yield span within u32 (GameConfig::validate)");
+    let address = oracle.hack_address(round, agent_id, portal, tracker.hack_ordinal);
+    let keys_gained = min
+        .checked_add(oracle.uniform(&address, span))
+        .expect("draw < span keeps the yield within u32");
+    let supply_yield = state.config().hack_supply_yield;
+    let (supply_granted, supply_after) =
+        state.apply_hack(agent_id, portal, keys_gained, supply_yield);
+    CommandOutcome::Ok(CommandEffect::Hacked {
+        portal,
+        keys_gained,
+        supply_granted,
+        supply_after,
+    })
+}
+
+/// TRANSFER (R-TRANSFER-01, D35). Check order is contractual: target exists
+/// -> same faction -> closed `TRANSFER_RANGE` from CURRENT positions (either
+/// side may already have moved this round) -> sender supply -> sender key
+/// balance per portal in ascending `PortalId` (zero-count entries are
+/// inert; the first shortfall reports) -> receiver capacity in u64. Any
+/// failure DROPs with zero mutation; the sender is the stream owner, so no
+/// payload field can redirect it. Self-transfers and zero-quantity
+/// transfers are legal no-ops (still range/faction checked). Never
+/// broadcasts (R-EVENT-01).
+fn execute_transfer(
+    state: &mut GameState,
+    sender: AgentId,
+    faction: Faction,
+    target: AgentId,
+    supply: u32,
+    keys: &BTreeMap<PortalId, u32>,
+) -> CommandOutcome {
+    let Some(target_agent) = state.agent(target) else {
+        return CommandOutcome::Drop(DropReason::TransferTargetNotFound { target });
+    };
+    if target_agent.faction != faction {
+        return CommandOutcome::Drop(DropReason::TransferTargetWrongFaction { target });
+    }
+    let (target_position, target_supply) = (target_agent.position, target_agent.supply);
+    let sender_agent = state
+        .agent(sender)
+        .expect("intake verified the agent exists");
+    let transfer_range = state.config().transfer_range_cm;
+    if !within_closed_range(sender_agent.position, target_position, transfer_range) {
+        return CommandOutcome::Drop(DropReason::TransferOutOfRange { target });
+    }
+    if sender_agent.supply < supply {
+        return CommandOutcome::Drop(DropReason::TransferInsufficientSupply {
+            requested: supply,
+            available: sender_agent.supply,
+        });
+    }
+    for (&portal, &count) in keys {
+        if count == 0 {
+            continue;
+        }
+        let available = sender_agent.keys.get(&portal).copied().unwrap_or(0);
+        if available < count {
+            return CommandOutcome::Drop(DropReason::TransferInsufficientKeys {
+                portal,
+                requested: count,
+                available,
+            });
+        }
+    }
+    let max_supply = state.config().max_supply;
+    let sum = (target_supply as u64)
+        .checked_add(supply as u64)
+        .expect("u64 sum of two u32 values");
+    if sum > max_supply as u64 {
+        let capacity = (max_supply as u64)
+            .checked_sub(target_supply as u64)
+            .expect("supply never exceeds MAX_SUPPLY") as u32;
+        return CommandOutcome::Drop(DropReason::TransferExceedsReceiverSupply {
+            target,
+            requested: supply,
+            capacity,
+        });
+    }
+    state.apply_transfer(sender, target, supply, keys);
+    let moved: BTreeMap<PortalId, u32> = keys
+        .iter()
+        .filter(|&(_, &count)| count > 0)
+        .map(|(&portal, &count)| (portal, count))
+        .collect();
+    CommandOutcome::Ok(CommandEffect::Transferred {
+        target,
+        supply,
+        keys: moved,
     })
 }
 
@@ -2127,6 +2401,950 @@ mod tests {
         assert!(tracker.major_used);
         state.advance_round();
         assert_eq!(state.tracker(AgentId(0)), Some(&Default::default()));
+    }
+
+    // ------------------------------------------------------------------
+    // M3: HACK (checklist 4-11)
+    // ------------------------------------------------------------------
+
+    use crate::rng::RandomOracle;
+    use crate::state::HackTracker;
+
+    /// Golden-vector seed shared with the frozen RNG tests (rng.rs): the
+    /// hack address (round 10, agent 7, portal 17, seq 1) has a pinned XOF.
+    const GOLDEN_SEED: u64 = 0x0123_4567_89AB_CDEF;
+
+    fn hack_cmd(portal: u32) -> Command {
+        Command::Hack {
+            portal: PortalId(portal),
+        }
+    }
+
+    fn transfer_cmd(target: u32, supply: u32, keys: &[(u32, u32)]) -> Command {
+        Command::Transfer {
+            target_agent: AgentId(target),
+            supply,
+            keys: keys.iter().map(|&(p, c)| (PortalId(p), c)).collect(),
+        }
+    }
+
+    fn run_with(
+        game_seed: u64,
+        state: &mut GameState,
+        submissions: &[SubmittedCommandStream],
+    ) -> RoundReport {
+        Resolver::with_seed(game_seed).run_round(state, submissions)
+    }
+
+    /// Independent oracle derivation of the D3 key yield for the default
+    /// config (`1 + uniform(addr, 3)`) at a fully named address.
+    fn oracle_keys(game_seed: u64, round: u32, agent: u32, portal: u32, ordinal: u32) -> u32 {
+        let oracle = RandomOracle::new(game_seed);
+        let address = oracle.hack_address(round, AgentId(agent), PortalId(portal), ordinal);
+        1 + oracle.uniform(&address, 3)
+    }
+
+    fn agent_snapshot(state: &GameState, id: AgentId) -> (Coord, u32, BTreeMap<PortalId, u32>) {
+        let agent = state.agent(id).expect("agent exists");
+        (agent.position, agent.supply, agent.keys.clone())
+    }
+
+    fn hacked(outcome: &CommandOutcome) -> (u32, u32, u32, u32) {
+        match outcome {
+            CommandOutcome::Ok(CommandEffect::Hacked {
+                portal,
+                keys_gained,
+                supply_granted,
+                supply_after,
+            }) => (portal.0, *keys_gained, *supply_granted, *supply_after),
+            other => panic!("expected Hacked, got {other:?}"),
+        }
+    }
+
+    fn hack_stream(round: u32, agent: AgentId, portal: u32) -> SubmittedCommandStream {
+        stream(
+            round,
+            Faction::Enl,
+            agent,
+            0,
+            0,
+            vec![Command::Hack {
+                portal: PortalId(portal),
+            }],
+        )
+    }
+
+    fn advance_to(state: &mut GameState, round: u32) {
+        while state.round() < round {
+            state.advance_round();
+        }
+    }
+
+    /// Three portals around the ENL spawn (10_000, 5_000): P0 neutral at
+    /// (10_000, 10_000) (closed boundary), P1 ENL at (6_000, 6_000), P2 RES
+    /// at (14_000, 6_000) — all within PORTAL_OPERATION_RANGE.
+    fn hackable_state() -> GameState {
+        fixture_state(
+            &base_config(),
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 6_000, 6_000, Owner::Enl, 100),
+                portal_fixture(2, 14_000, 6_000, Owner::Res, 100),
+            ],
+            &[Coord::new(10_000, 5_000)],
+            &[Coord::new(24_000, 24_000)],
+        )
+    }
+
+    // Checklist 4: HACK succeeds on neutral, own, AND enemy portals; keys
+    // follow the oracle draw; supply grows by HACK_SUPPLY_YIELD; portals and
+    // the event log stay untouched.
+    #[test]
+    fn hack_succeeds_for_neutral_own_and_enemy_portals() {
+        let mut state = hackable_state();
+        let report = run(
+            &mut state,
+            &[stream(
+                1,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![hack_cmd(0), hack_cmd(1), hack_cmd(2)],
+            )],
+        );
+        let outcomes = &report.execution_order[0].outcomes;
+        assert_eq!(outcomes.len(), 3);
+        // Supply 20 -> 21 -> 22 -> 23, one yield per success, keys per draw.
+        assert_eq!(hacked(&outcomes[0]), (0, oracle_keys(0, 1, 0, 0, 0), 1, 21));
+        assert_eq!(hacked(&outcomes[1]), (1, oracle_keys(0, 1, 0, 1, 0), 1, 22));
+        assert_eq!(hacked(&outcomes[2]), (2, oracle_keys(0, 1, 0, 2, 0), 1, 23));
+        // Portal hp/owner NEVER change on a hack (R-HACK-01).
+        for (owner, hp) in [(Owner::Neutral, 0), (Owner::Enl, 100), (Owner::Res, 100)] {
+            let portal = state
+                .portals()
+                .iter()
+                .find(|p| p.owner == owner)
+                .expect("portal exists");
+            assert_eq!((portal.owner, portal.hp), (owner, hp));
+        }
+        assert_eq!(
+            state.agent(AgentId(0)).map(|a| a.supply),
+            Some(23),
+            "HACK yields supply"
+        );
+        // Every pair's tracker advanced exactly once.
+        for portal in 0..=2u32 {
+            assert_eq!(
+                state.hack_tracker(AgentId(0), PortalId(portal)),
+                Some(&HackTracker {
+                    last_hack_round: Some(1),
+                    hack_count_epoch: 1,
+                    hack_ordinal: 1,
+                })
+            );
+        }
+        assert!(
+            state.events().is_empty(),
+            "HACK never broadcasts (R-EVENT-01)"
+        );
+    }
+
+    // Checklist 5: golden vectors through the resolver — a fully hardcoded
+    // literal plus independent in-test oracle derivations (ADR-0011).
+    #[test]
+    fn hack_golden_vectors_through_the_resolver() {
+        let mut cfg = base_config();
+        cfg.initial_agents_per_faction = 8; // AgentId(7) is ENL
+        let portals = golden_grid_portals();
+        assert_eq!(portals.len(), 18, "PortalId(17) must exist");
+        // Agents 0-6 sit far away; agent 7 spawns at the closed operation
+        // range boundary of P17 (21_000, 25_000).
+        let enl_spawns = golden_enl_spawns();
+        let res_spawns = vec![Coord::new(2_000, 2_000); 8];
+        let mut state = fixture_state(&cfg, portals, &enl_spawns, &res_spawns);
+
+        // Round 7: ordinal 0.
+        advance_to(&mut state, 7);
+        let report = run_with(GOLDEN_SEED, &mut state, &[hack_stream(7, AgentId(7), 17)]);
+        assert_eq!(
+            hacked(&report.execution_order[0].outcomes[0]),
+            (17, oracle_keys(GOLDEN_SEED, 7, 7, 17, 0), 1, 21)
+        );
+
+        // Round 10 (cooldown clean: 10 - 7 == 3): ordinal 1 — the frozen
+        // golden address of rng.rs (uniform == 2, so keys == 3).
+        advance_to(&mut state, 10);
+        let report = run_with(GOLDEN_SEED, &mut state, &[hack_stream(10, AgentId(7), 17)]);
+        let (_, keys_gained, _, supply_after) = hacked(&report.execution_order[0].outcomes[0]);
+        assert_eq!(keys_gained, 3, "hardcoded golden literal (ADR-0011)");
+        assert_eq!(keys_gained, oracle_keys(GOLDEN_SEED, 10, 7, 17, 1));
+        assert_eq!(supply_after, 22);
+
+        // The lifetime ordinal advanced to 2 and the draws replay byte-stable.
+        assert_eq!(
+            state.hack_tracker(AgentId(7), PortalId(17)),
+            Some(&HackTracker {
+                last_hack_round: Some(10),
+                hack_count_epoch: 2,
+                hack_ordinal: 2,
+            })
+        );
+
+        // D33 wiring: the seed-0 compatibility resolver draws from its own
+        // stream, never from the match seed's (same two-hack scenario).
+        let mut state2 = fixture_state(
+            &{
+                let mut cfg = base_config();
+                cfg.initial_agents_per_faction = 8;
+                cfg
+            },
+            golden_grid_portals(),
+            &golden_enl_spawns(),
+            &vec![Coord::new(2_000, 2_000); 8],
+        );
+        advance_to(&mut state2, 7);
+        let _ = run(&mut state2, &[hack_stream(7, AgentId(7), 17)]); // ordinal 0
+        advance_to(&mut state2, 10);
+        let report = run(&mut state2, &[hack_stream(10, AgentId(7), 17)]);
+        let (_, keys_gained, _, _) = hacked(&report.execution_order[0].outcomes[0]);
+        assert_eq!(
+            keys_gained,
+            oracle_keys(0, 10, 7, 17, 1),
+            "the seed-0 resolver draws exactly the seed-0 oracle stream"
+        );
+    }
+
+    /// The 6x3 grid of the golden test, factored for reuse: 18 portals,
+    /// pairwise distance >= 4_000 cm, so dense `PortalId(17)` exists at
+    /// (29_000, 25_000).
+    fn golden_grid_portals() -> Vec<Portal> {
+        let mut portals = Vec::new();
+        let mut id = 0u32;
+        for &y in &[5_000i32, 15_000, 25_000] {
+            for &x in &[1_000i32, 7_000, 13_000, 19_000, 25_000, 29_000] {
+                portals.push(portal_fixture(id, x, y, Owner::Neutral, 0));
+                id += 1;
+            }
+        }
+        portals
+    }
+
+    fn golden_enl_spawns() -> Vec<Coord> {
+        let mut spawns = vec![Coord::new(1_000, 1_000); 7];
+        spawns.push(Coord::new(29_000, 20_000));
+        spawns
+    }
+
+    // Checklist 6: out-of-operation-range HACK DROPs, reusing the CAPTURE
+    // range reason, drawing nothing; the exact boundary succeeds (closed).
+    #[test]
+    fn hack_range_drop_and_closed_boundary() {
+        // standard_state puts the ENL agent exactly 5_000 cm from P0: the
+        // closed boundary of PORTAL_OPERATION_RANGE.
+        let mut state = standard_state();
+        let report = run(&mut state, &[enl(vec![hack_cmd(0)])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Hacked { .. })
+        ));
+
+        // One centimetre further: DROP, no sample, no tracker, no keys.
+        let mut far = fixture_state(
+            &base_config(),
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            &[Coord::new(10_000, 4_999)], // 5_001 cm from P0
+            &[Coord::new(6_000, 10_000)],
+        );
+        let report = run(&mut far, &[enl(vec![hack_cmd(0)])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::OutOfOperationRange {
+                portal: PortalId(0)
+            })
+        );
+        assert!(
+            far.agent(AgentId(0))
+                .map(|a| a.keys.is_empty() && a.supply == far.config().initial_supply)
+                .unwrap_or(false),
+            "a dropped hack grants nothing"
+        );
+        assert_eq!(
+            far.hack_tracker(AgentId(0), PortalId(0)),
+            None,
+            "a dropped hack advances no tracker (no sample drawn)"
+        );
+    }
+
+    // Checklist 7: the R-HACK-02 spec example — hack Round 10, Rounds 11/12
+    // DROP with shrinking rounds_remaining, Round 13 succeeds again.
+    #[test]
+    fn hack_cooldown_spec_example_round_ten_to_thirteen() {
+        let mut state = standard_state();
+        advance_to(&mut state, 10);
+        let report = run(&mut state, &[hack_stream(10, AgentId(0), 0)]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Hacked { .. })
+        ));
+
+        for (round, remaining) in [(11u32, 2u32), (12, 1)] {
+            advance_to(&mut state, round);
+            let report = run(&mut state, &[hack_stream(round, AgentId(0), 0)]);
+            assert_eq!(
+                report.execution_order[0].outcomes[0],
+                CommandOutcome::Drop(DropReason::HackCooldownActive {
+                    portal: PortalId(0),
+                    last_hack_round: 10,
+                    rounds_remaining: remaining,
+                }),
+                "round {round}"
+            );
+        }
+
+        advance_to(&mut state, 13);
+        let report = run(&mut state, &[hack_stream(13, AgentId(0), 0)]);
+        assert_eq!(
+            hacked(&report.execution_order[0].outcomes[0]),
+            (0, oracle_keys(0, 13, 0, 0, 1), 1, 22),
+            "Round 13 is the first legal re-hack, drawing ordinal 1"
+        );
+    }
+
+    // Checklist 8: the per-epoch limit (HACK_LIMIT_PER_EPOCH = 5) reached on
+    // the cooldown-forced cadence 1, 4, 7, 10, 13; a round failing BOTH
+    // cooldown and limit reports cooldown (D34 order).
+    #[test]
+    fn hack_epoch_limit_and_cooldown_priority() {
+        let mut state = standard_state();
+        for round in [1u32, 4, 7, 10, 13] {
+            advance_to(&mut state, round);
+            let report = run(&mut state, &[hack_stream(round, AgentId(0), 0)]);
+            assert!(
+                matches!(
+                    report.execution_order[0].outcomes[0],
+                    CommandOutcome::Ok(CommandEffect::Hacked { .. })
+                ),
+                "round {round} is legal"
+            );
+        }
+        assert_eq!(
+            state
+                .hack_tracker(AgentId(0), PortalId(0))
+                .map(|t| t.hack_count_epoch),
+            Some(5)
+        );
+
+        // Round 14 fails cooldown (14 - 13 == 1) AND the limit; cooldown
+        // reports first.
+        advance_to(&mut state, 14);
+        let report = run(&mut state, &[hack_stream(14, AgentId(0), 0)]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::HackCooldownActive {
+                portal: PortalId(0),
+                last_hack_round: 13,
+                rounds_remaining: 2,
+            })
+        );
+
+        // Round 16 is cooldown-clean (16 - 13 == 3) but over the limit.
+        advance_to(&mut state, 16);
+        let report = run(&mut state, &[hack_stream(16, AgentId(0), 0)]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::HackEpochLimitReached {
+                portal: PortalId(0),
+                limit: 5,
+            })
+        );
+        assert_eq!(
+            state
+                .hack_tracker(AgentId(0), PortalId(0))
+                .map(|t| t.hack_ordinal),
+            Some(5),
+            "five successful hacks drew ordinals 0..=4"
+        );
+    }
+
+    // Checklist 9: epoch reset immediacy — a hack on the last round of an
+    // epoch does not block the first round of the next one, and the ordinal
+    // keeps counting across the boundary (R-HACK-02, D31/D32).
+    #[test]
+    fn hack_epoch_reset_last_round_to_first_round() {
+        let mut cfg = base_config();
+        cfg.epoch_length = 4; // rounds 1-4 = epoch 0, 5-8 = epoch 1
+        let mut state = fixture_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            &[Coord::new(10_000, 5_000)],
+            &[Coord::new(6_000, 10_000)],
+        );
+        advance_to(&mut state, 4);
+        let report = run(&mut state, &[hack_stream(4, AgentId(0), 0)]);
+        assert_eq!(
+            hacked(&report.execution_order[0].outcomes[0]),
+            (0, oracle_keys(0, 4, 0, 0, 0), 1, 21)
+        );
+
+        // Round 5 opens epoch 1: the eager sweep wiped the cooldown anchor
+        // (5 - 4 == 1 would have blocked) and the epoch count, but the draw
+        // uses ordinal 1 — the lifetime counter survived.
+        advance_to(&mut state, 5);
+        let report = run(&mut state, &[hack_stream(5, AgentId(0), 0)]);
+        assert_eq!(
+            hacked(&report.execution_order[0].outcomes[0]),
+            (0, oracle_keys(0, 5, 0, 0, 1), 1, 22),
+            "Round 5 draws with ordinal 1, not a reset ordinal 0"
+        );
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(0)),
+            Some(&HackTracker {
+                last_hack_round: Some(5),
+                hack_count_epoch: 1,
+                hack_ordinal: 2,
+            })
+        );
+    }
+
+    // Checklist 10: a dropped hack consumes no sample and shifts no later
+    // address (R-RNG-01) — identical ordinals, keys, and supplies with or
+    // without the dropped attempt in between.
+    #[test]
+    fn dropped_hacks_consume_no_sample() {
+        fn scenario(with_dropped_attempt: bool) -> GameState {
+            let mut state = standard_state();
+            advance_to(&mut state, 5);
+            let report = run(&mut state, &[hack_stream(5, AgentId(0), 0)]);
+            assert!(matches!(
+                report.execution_order[0].outcomes[0],
+                CommandOutcome::Ok(CommandEffect::Hacked { .. })
+            ));
+            if with_dropped_attempt {
+                advance_to(&mut state, 6);
+                let report = run(&mut state, &[hack_stream(6, AgentId(0), 0)]);
+                assert_eq!(
+                    report.execution_order[0].outcomes[0],
+                    CommandOutcome::Drop(DropReason::HackCooldownActive {
+                        portal: PortalId(0),
+                        last_hack_round: 5,
+                        rounds_remaining: 2,
+                    })
+                );
+            }
+            advance_to(&mut state, 8);
+            let report = run(&mut state, &[hack_stream(8, AgentId(0), 0)]);
+            let (_, keys_gained, _, _) = hacked(&report.execution_order[0].outcomes[0]);
+            assert_eq!(
+                keys_gained,
+                oracle_keys(0, 8, 0, 0, 1),
+                "Round 8 draws ordinal 1 in both runs"
+            );
+            state
+        }
+
+        let clean = scenario(false);
+        let dropped = scenario(true);
+        assert_eq!(
+            clean.hack_tracker(AgentId(0), PortalId(0)),
+            dropped.hack_tracker(AgentId(0), PortalId(0)),
+            "same ordinals with and without the dropped attempt"
+        );
+        assert_eq!(
+            agent_snapshot(&clean, AgentId(0)),
+            agent_snapshot(&dropped, AgentId(0))
+        );
+    }
+
+    // Checklist 11: a hack at MAX_SUPPLY succeeds with full keys, zero
+    // granted supply, and a fully advanced tracker (the clamp is not a
+    // failure, D34).
+    #[test]
+    fn hack_supply_clamp_at_max() {
+        let mut cfg = base_config();
+        cfg.initial_supply = 100; // == MAX_SUPPLY
+        let mut state = fixture_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            &[Coord::new(10_000, 5_000)],
+            &[Coord::new(6_000, 10_000)],
+        );
+        let report = run(&mut state, &[enl(vec![hack_cmd(0)])]);
+        let expected_keys = oracle_keys(0, 1, 0, 0, 0);
+        assert_eq!(
+            hacked(&report.execution_order[0].outcomes[0]),
+            (0, expected_keys, 0, 100)
+        );
+        assert_eq!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.get(&PortalId(0)).copied()),
+            Some(Some(expected_keys)),
+            "keys are never clamped"
+        );
+        assert_eq!(
+            state.hack_tracker(AgentId(0), PortalId(0)),
+            Some(&HackTracker {
+                last_hack_round: Some(1),
+                hack_count_epoch: 1,
+                hack_ordinal: 1,
+            }),
+            "a clamped hack still updates cooldown/count/ordinal"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // M3: TRANSFER (checklist 12-16)
+    // ------------------------------------------------------------------
+
+    /// ENL A0 at (10_000, 5_000); P0 (10_000, 10_000) and P1 (25_000, 25_000).
+    /// Both spawn slices must have equal length (one roster size per config).
+    fn transfer_state(enl_spawns: &[Coord], res_spawns: &[Coord]) -> GameState {
+        let mut cfg = base_config();
+        cfg.initial_agents_per_faction = enl_spawns.len() as u32;
+        fixture_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            enl_spawns,
+            res_spawns,
+        )
+    }
+
+    // Checklist 12: the happy path moves supply and every key denomination
+    // atomically, keeps the sender inventory canonical, merges on the
+    // receiver, and broadcasts nothing.
+    #[test]
+    fn transfer_moves_supply_and_keys_atomically() {
+        let mut state = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 8_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        state.grant_keys(AgentId(0), PortalId(0), 3);
+        state.grant_keys(AgentId(0), PortalId(1), 2);
+        state.grant_keys(AgentId(1), PortalId(0), 1);
+        let report = run(
+            &mut state,
+            &[enl(vec![transfer_cmd(1, 5, &[(0, 2), (1, 2)])])],
+        );
+        let mut expected_keys = BTreeMap::new();
+        expected_keys.insert(PortalId(0), 2u32);
+        expected_keys.insert(PortalId(1), 2u32);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Transferred {
+                target: AgentId(1),
+                supply: 5,
+                keys: expected_keys,
+            }),
+            "the effect echoes the moved non-zero entries"
+        );
+        // Sender: supply 15, only the non-depleted key entry remains.
+        let sender = agent_snapshot(&state, AgentId(0));
+        assert_eq!(sender.1, 15);
+        assert_eq!(
+            sender.2,
+            BTreeMap::from([(PortalId(0), 1u32)]),
+            "entries depleted to 0 are removed (canonical inventory)"
+        );
+        // Receiver: supply 25, P0 merged 1+2, P1 fresh 2.
+        let receiver = agent_snapshot(&state, AgentId(1));
+        assert_eq!(receiver.1, 25);
+        assert_eq!(
+            receiver.2,
+            BTreeMap::from([(PortalId(0), 3u32), (PortalId(1), 2u32)])
+        );
+        assert!(state.events().is_empty(), "TRANSFER never broadcasts");
+        assert!(
+            !state
+                .tracker(AgentId(0))
+                .map(|t| t.major_used)
+                .unwrap_or(false),
+            "TRANSFER is auxiliary: no major consumed"
+        );
+    }
+
+    // Checklist 13: the DROP catalog — each failure leaves both agents
+    // byte-identical.
+    #[test]
+    fn transfer_drop_catalog_zero_state_change() {
+        // A0 sender (10_000, 5_000); A1 same faction in range (10_000, 8_000);
+        // A2 same faction FAR (29_000, 29_000); A3/A4/A5 RES.
+        let mut state = transfer_state(
+            &[
+                Coord::new(10_000, 5_000),
+                Coord::new(10_000, 8_000),
+                Coord::new(29_000, 29_000),
+            ],
+            &[
+                Coord::new(6_000, 10_000),
+                Coord::new(6_000, 11_000),
+                Coord::new(6_000, 12_000),
+            ],
+        );
+        state.grant_keys(AgentId(0), PortalId(0), 3);
+        let before: Vec<_> = [0u32, 1, 2, 3, 4, 5]
+            .iter()
+            .map(|&id| agent_snapshot(&state, AgentId(id)))
+            .collect();
+
+        let cases: Vec<(Command, DropReason)> = vec![
+            (
+                transfer_cmd(99, 0, &[]),
+                DropReason::TransferTargetNotFound {
+                    target: AgentId(99),
+                },
+            ),
+            (
+                transfer_cmd(3, 1, &[]),
+                DropReason::TransferTargetWrongFaction { target: AgentId(3) },
+            ),
+            (
+                transfer_cmd(2, 1, &[]),
+                DropReason::TransferOutOfRange { target: AgentId(2) },
+            ),
+            (
+                transfer_cmd(1, 21, &[]),
+                DropReason::TransferInsufficientSupply {
+                    requested: 21,
+                    available: 20,
+                },
+            ),
+            (
+                transfer_cmd(1, 1, &[(0, 5)]),
+                DropReason::TransferInsufficientKeys {
+                    portal: PortalId(0),
+                    requested: 5,
+                    available: 3,
+                },
+            ),
+            (
+                // Both denominations are short; the FIRST in ascending
+                // PortalId order reports (D35).
+                transfer_cmd(1, 0, &[(1, 5), (0, 5)]),
+                DropReason::TransferInsufficientKeys {
+                    portal: PortalId(0),
+                    requested: 5,
+                    available: 3,
+                },
+            ),
+        ];
+        for (command, reason) in cases {
+            let report = run(&mut state, &[enl(vec![command])]);
+            assert_eq!(
+                report.execution_order[0].outcomes[0],
+                CommandOutcome::Drop(reason),
+            );
+            let after: Vec<_> = [0u32, 1, 2, 3, 4, 5]
+                .iter()
+                .map(|&id| agent_snapshot(&state, AgentId(id)))
+                .collect();
+            assert_eq!(before, after, "a dropped transfer mutates nothing");
+            assert!(state.events().is_empty());
+        }
+    }
+
+    // Checklist 13 (boundary): TRANSFER_RANGE is closed — exact 5_000 cm
+    // succeeds, 5_001 cm DROPs.
+    #[test]
+    fn transfer_range_is_closed() {
+        let mut boundary = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(15_000, 5_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        let report = run(&mut boundary, &[enl(vec![transfer_cmd(1, 0, &[])])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Transferred { .. })
+        ));
+
+        let mut beyond = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(15_001, 5_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        let report = run(&mut beyond, &[enl(vec![transfer_cmd(1, 0, &[])])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::TransferOutOfRange { target: AgentId(1) })
+        );
+    }
+
+    // Checklist 13 (capacity): receiver supply + transfer must stay within
+    // MAX_SUPPLY (u64 sum); exactly filling the capacity succeeds.
+    #[test]
+    fn transfer_receiver_capacity_boundary() {
+        let mut cfg = base_config();
+        cfg.initial_agents_per_faction = 2;
+        cfg.initial_supply = 99; // both agents one below MAX_SUPPLY
+        let mut state = fixture_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 8_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        // 99 + 2 > 100: DROP with the receiver's remaining headroom.
+        let report = run(&mut state, &[enl(vec![transfer_cmd(1, 2, &[])])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::TransferExceedsReceiverSupply {
+                target: AgentId(1),
+                requested: 2,
+                capacity: 1,
+            })
+        );
+        // 99 + 1 == 100: exactly full is legal.
+        let report = run(&mut state, &[enl(vec![transfer_cmd(1, 1, &[])])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Transferred { .. })
+        ));
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(100));
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(98));
+    }
+
+    // Checklist 14: transfers measure CURRENT positions — the sender may
+    // MOVE closer earlier in the same stream, and a target that already
+    // moved this round is measured from its latest position.
+    #[test]
+    fn transfer_measures_the_senders_latest_position_after_a_move() {
+        let mut state = transfer_state(
+            &[Coord::new(10_000, 0), Coord::new(10_000, 6_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        // From the spawn the gap is 6_000 cm (out of range); after the move
+        // to (10_000, 1_000) it is exactly 5_000 cm (closed range).
+        let report = run(
+            &mut state,
+            &[enl(vec![
+                Command::Move {
+                    destination: Coord::new(10_000, 1_000),
+                },
+                transfer_cmd(1, 3, &[]),
+            ])],
+        );
+        let outcomes = &report.execution_order[0].outcomes;
+        assert!(matches!(outcomes[0], CommandOutcome::Ok(_)));
+        assert!(matches!(
+            outcomes[1],
+            CommandOutcome::Ok(CommandEffect::Transferred { .. })
+        ));
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(17));
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(23));
+    }
+
+    #[test]
+    fn transfer_measures_a_target_that_moved_earlier_this_round() {
+        let mut state = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 8_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        // Same faction, same bucket: A1 (seq 0) settles before A0 (seq 1)
+        // and walks out of TRANSFER_RANGE.
+        let report = run(
+            &mut state,
+            &[
+                stream(
+                    1,
+                    Faction::Enl,
+                    AgentId(1),
+                    0,
+                    0,
+                    vec![Command::Move {
+                        destination: Coord::new(20_000, 20_000),
+                    }],
+                ),
+                stream(
+                    1,
+                    Faction::Enl,
+                    AgentId(0),
+                    0,
+                    1,
+                    vec![transfer_cmd(1, 1, &[])],
+                ),
+            ],
+        );
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(_)
+        ));
+        assert_eq!(
+            report.execution_order[1].outcomes[0],
+            CommandOutcome::Drop(DropReason::TransferOutOfRange { target: AgentId(1) }),
+            "the range check sees A1's post-move position"
+        );
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(20));
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(20));
+    }
+
+    // Checklist 15: self-transfers and zero-quantity transfers are legal
+    // no-ops — but target/faction/range still validate, and zero-count key
+    // entries never create phantom inventory.
+    #[test]
+    fn transfer_no_ops_self_and_zero_quantity() {
+        let mut state = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 8_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        state.grant_keys(AgentId(0), PortalId(0), 2);
+        let before = (
+            agent_snapshot(&state, AgentId(0)),
+            agent_snapshot(&state, AgentId(1)),
+        );
+
+        // Self-transfer: range trivially satisfied, balances checked against
+        // oneself, nets out to no change.
+        let report = run(&mut state, &[enl(vec![transfer_cmd(0, 2, &[(0, 2)])])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Transferred {
+                target: AgentId(0),
+                supply: 2,
+                keys: BTreeMap::from([(PortalId(0), 2u32)]),
+            })
+        );
+
+        // Zero-supply transfer with a zero-count key entry: succeeds and
+        // creates no 0-entry in the receiver inventory.
+        let report = run(&mut state, &[enl(vec![transfer_cmd(1, 0, &[(0, 0)])])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Transferred {
+                target: AgentId(1),
+                supply: 0,
+                keys: BTreeMap::new(),
+            })
+        );
+
+        // Validations still run: a zero-quantity transfer to a far same-
+        // faction agent still DROPs on range.
+        let mut far_state = transfer_state(
+            &[Coord::new(10_000, 5_000), Coord::new(29_000, 29_000)],
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        let report = run(&mut far_state, &[enl(vec![transfer_cmd(1, 0, &[])])]);
+        assert_eq!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Drop(DropReason::TransferOutOfRange { target: AgentId(1) })
+        );
+
+        assert_eq!(
+            (
+                agent_snapshot(&state, AgentId(0)),
+                agent_snapshot(&state, AgentId(1))
+            ),
+            before,
+            "no-ops change no inventory"
+        );
+        assert!(
+            state
+                .agent(AgentId(1))
+                .map(|a| a.keys.is_empty())
+                .unwrap_or(false),
+            "no phantom zero-count entries"
+        );
+    }
+
+    // Checklist 16: auxiliary stacking — several HACKs and TRANSFERs plus one
+    // major in a single stream; the second hack of the same round DROPs on
+    // cooldown (current_round - last == 0).
+    #[test]
+    fn auxiliary_stacking_hacks_transfers_and_one_major() {
+        let mut cfg = base_config();
+        cfg.initial_agents_per_faction = 2;
+        let mut state = fixture_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+                portal_fixture(2, 6_000, 6_000, Owner::Neutral, 0),
+            ],
+            &[Coord::new(10_000, 5_000), Coord::new(10_000, 8_000)],
+            &[Coord::new(24_000, 24_000), Coord::new(24_000, 25_000)],
+        );
+        let report = run(
+            &mut state,
+            &[stream(
+                1,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![
+                    hack_cmd(0),
+                    hack_cmd(0), // same-round re-hack: cooldown 1 - 1 == 0
+                    hack_cmd(2),
+                    transfer_cmd(1, 1, &[]),
+                    Command::Capture {
+                        portal: PortalId(0),
+                    },
+                ],
+            )],
+        );
+        let outcomes = &report.execution_order[0].outcomes;
+        assert_eq!(outcomes.len(), 5);
+        let (p0_keys, _, _, _) = match &outcomes[0] {
+            CommandOutcome::Ok(CommandEffect::Hacked { keys_gained, .. }) => {
+                (*keys_gained, 0, 0, 0)
+            }
+            other => panic!("expected first hack to succeed, got {other:?}"),
+        };
+        assert_eq!(
+            outcomes[1],
+            CommandOutcome::Drop(DropReason::HackCooldownActive {
+                portal: PortalId(0),
+                last_hack_round: 1,
+                rounds_remaining: 3,
+            })
+        );
+        let p2_keys = match &outcomes[2] {
+            CommandOutcome::Ok(CommandEffect::Hacked { keys_gained, .. }) => *keys_gained,
+            other => panic!("expected third hack to succeed, got {other:?}"),
+        };
+        assert!(matches!(
+            outcomes[3],
+            CommandOutcome::Ok(CommandEffect::Transferred { .. })
+        ));
+        assert!(matches!(
+            outcomes[4],
+            CommandOutcome::Ok(CommandEffect::Captured { .. })
+        ));
+        // The one major landed despite four auxiliary commands around it.
+        assert!(
+            state
+                .tracker(AgentId(0))
+                .map(|t| t.major_used)
+                .unwrap_or(false)
+        );
+        assert_eq!(state.portal(PortalId(0)).map(|p| p.owner), Some(Owner::Enl));
+        // Two successful hacks + one transferred supply.
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(21));
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(21));
+        assert_eq!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.get(&PortalId(0)).copied()),
+            Some(Some(p0_keys))
+        );
+        assert_eq!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.get(&PortalId(2)).copied()),
+            Some(Some(p2_keys))
+        );
     }
 
     #[test]

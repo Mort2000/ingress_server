@@ -88,7 +88,12 @@ pub struct MatchHarness {
 }
 
 impl MatchHarness {
+    /// Builds a match from its deterministic setup inputs: the `game_seed`
+    /// feeds the resolver's random oracle (D33, D15 — the seed is Replay
+    /// Header material and never lives in the state), then config, frozen
+    /// map, both spawn sets, and both strategies.
     pub fn new(
+        game_seed: u64,
         cfg: crate::config::GameConfig,
         map: &MapDefinition,
         enl_spawns: &InitialSpawns,
@@ -98,7 +103,7 @@ impl MatchHarness {
     ) -> Result<Self, StateError> {
         Ok(MatchHarness {
             state: GameState::new(cfg, map, enl_spawns, res_spawns)?,
-            resolver: Resolver::new(),
+            resolver: Resolver::with_seed(game_seed),
             enl,
             res,
         })
@@ -259,6 +264,7 @@ mod tests {
         ]);
         let res = ScriptedStrategy::new(vec![vec![], vec![]]);
         let mut harness = MatchHarness::new(
+            0,
             cfg,
             &map,
             &enl_spawns,
@@ -334,6 +340,7 @@ mod tests {
             captured: Arc::clone(&res_captured),
         };
         let mut harness = MatchHarness::new(
+            0,
             cfg,
             &map,
             &enl_spawns,
@@ -400,6 +407,7 @@ mod tests {
             vec![],
         ]);
         let mut harness = MatchHarness::new(
+            0,
             cfg,
             &map,
             &enl_spawns,
@@ -618,6 +626,7 @@ mod tests {
         }]]);
         let res = ScriptedStrategy::new(vec![vec![], vec![]]);
         let mut harness = MatchHarness::new(
+            0,
             cfg,
             &map,
             &enl_spawns,
@@ -627,5 +636,268 @@ mod tests {
         )
         .expect("harness builds");
         let _ = harness.run_round();
+    }
+
+    // ------------------------------------------------------------------
+    // M3 acceptance gates (checklist 17-18)
+    // ------------------------------------------------------------------
+
+    /// The full M3 economy scenario (checklist 17). World: P0 is ENL-owned
+    /// hp 40 at (10_000, 10_000); A0 spawns at (10_000, 6_000) — inside
+    /// P0's operation range — and A1 at (10_000, 4_900): within
+    /// TRANSFER_RANGE of A0 (1_100 cm) but BEYOND P0's operation range
+    /// (5_100 cm), so A1's Round-102 recharge must use the key path.
+    /// Rounds 97-102 under the default EPOCH_LENGTH 100.
+    fn economy_config() -> crate::config::GameConfig {
+        gate_config(2)
+    }
+
+    fn economy_map() -> MapDefinition {
+        MapDefinition::new(vec![
+            Portal {
+                id: crate::types::PortalId(0),
+                position: Coord::new(10_000, 10_000),
+                owner: Owner::Enl,
+                hp: 40,
+            },
+            Portal {
+                id: crate::types::PortalId(1),
+                position: Coord::new(25_000, 25_000),
+                owner: Owner::Neutral,
+                hp: 0,
+            },
+        ])
+    }
+
+    fn economy_spawns(cfg: &crate::config::GameConfig) -> (InitialSpawns, InitialSpawns) {
+        let enl = spawns(
+            cfg,
+            Faction::Enl,
+            &[Coord::new(10_000, 6_000), Coord::new(10_000, 4_900)],
+        );
+        let res = spawns(
+            cfg,
+            Faction::Res,
+            &[Coord::new(6_000, 10_000), Coord::new(6_000, 11_000)],
+        );
+        (enl, res)
+    }
+
+    fn economy_enl_script() -> ScriptedStrategy {
+        let p0 = crate::types::PortalId(0);
+        let mut per_round = vec![Vec::<AgentSubmission>::new(); 96]; // rounds 1-96
+        // Round 97: first successful hack (ordinal 0).
+        per_round.push(vec![AgentSubmission::new(
+            AgentId(0),
+            vec![Command::Hack { portal: p0 }],
+        )]);
+        per_round.push(Vec::new()); // 98
+        per_round.push(Vec::new()); // 99
+        // Round 100: last round of epoch 0; cooldown clean (100 - 97 == 3).
+        per_round.push(vec![AgentSubmission::new(
+            AgentId(0),
+            vec![Command::Hack { portal: p0 }],
+        )]);
+        // Round 101: first round of epoch 1 — the sweep wiped the cooldown,
+        // so this hack is legal — then transfer 2 supply + 1 key to A1.
+        let mut keys = std::collections::BTreeMap::new();
+        keys.insert(p0, 1u32);
+        per_round.push(vec![AgentSubmission::new(
+            AgentId(0),
+            vec![
+                Command::Hack { portal: p0 },
+                Command::Transfer {
+                    target_agent: AgentId(1),
+                    supply: 2,
+                    keys,
+                },
+            ],
+        )]);
+        // Round 102: A0 still on cooldown (101 -> 102); A1 remote-recharges
+        // P0 through the transferred key.
+        per_round.push(vec![
+            AgentSubmission::new(AgentId(0), vec![Command::Hack { portal: p0 }]),
+            AgentSubmission::new(AgentId(1), vec![Command::Recharge { portal: p0 }]),
+        ]);
+        assert_eq!(per_round.len(), 102);
+        ScriptedStrategy::new(per_round)
+    }
+
+    fn run_economy_scenario(game_seed: u64) -> (Vec<RoundReport>, GameState) {
+        let cfg = economy_config();
+        let map = economy_map();
+        let (enl_spawns, res_spawns) = economy_spawns(&cfg);
+        let mut harness = MatchHarness::new(
+            game_seed,
+            cfg,
+            &map,
+            &enl_spawns,
+            &res_spawns,
+            Box::new(economy_enl_script()),
+            Box::new(ScriptedStrategy::new(vec![Vec::new(); 102])),
+        )
+        .expect("harness builds");
+        let reports = harness.run_rounds(102);
+        let state = harness.into_state();
+        (reports, state)
+    }
+
+    /// D3 key yield derived independently from the oracle at a named address.
+    fn m3_keys(game_seed: u64, round: u32, ordinal: u32) -> u32 {
+        let oracle = crate::rng::RandomOracle::new(game_seed);
+        let address = oracle.hack_address(round, AgentId(0), crate::types::PortalId(0), ordinal);
+        1 + oracle.uniform(&address, 3)
+    }
+
+    // Checklist 17 — the M3 acceptance economy loop.
+    #[test]
+    fn gate_m3_economy_loop_rounds_ninety_nine_to_one_hundred_two() {
+        let game_seed = 0xC0FF_EE;
+        let (reports, state) = run_economy_scenario(game_seed);
+        assert_eq!(reports.len(), 102);
+        assert_eq!(state.round(), 103);
+
+        let p0 = crate::types::PortalId(0);
+        let k97 = m3_keys(game_seed, 97, 0);
+        let k100 = m3_keys(game_seed, 100, 1);
+        let k101 = m3_keys(game_seed, 101, 2);
+
+        // Round 97: hack, ordinal 0.
+        let r97 = &reports[96];
+        assert_eq!(r97.execution_order.len(), 1);
+        assert_eq!(
+            r97.execution_order[0].outcomes[0],
+            crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Hacked {
+                portal: p0,
+                keys_gained: k97,
+                supply_granted: 1,
+                supply_after: 21,
+            })
+        );
+
+        // Round 100: still epoch 0, cooldown clean — success.
+        let r100 = &reports[99];
+        assert_eq!(
+            r100.execution_order[0].outcomes[0],
+            crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Hacked {
+                portal: p0,
+                keys_gained: k100,
+                supply_granted: 1,
+                supply_after: 22,
+            })
+        );
+
+        // Round 101: new epoch — the Round-100 hack does NOT block it — then
+        // the atomic transfer of 2 supply + 1 key to A1.
+        let r101 = &reports[100];
+        assert_eq!(r101.execution_order.len(), 1);
+        assert_eq!(
+            r101.execution_order[0].outcomes[0],
+            crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Hacked {
+                portal: p0,
+                keys_gained: k101,
+                supply_granted: 1,
+                supply_after: 23,
+            })
+        );
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert(p0, 1u32);
+        assert_eq!(
+            r101.execution_order[0].outcomes[1],
+            crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Transferred {
+                target: AgentId(1),
+                supply: 2,
+                keys: moved,
+            })
+        );
+
+        // Round 102: A0 on cooldown (101 -> 102 leaves 2 rounds); A1 remote-
+        // recharges P0 via the key path: hp 40 -> 55, key NOT consumed.
+        let r102 = &reports[101];
+        assert_eq!(r102.execution_order.len(), 2);
+        assert_eq!(
+            r102.execution_order[0].outcomes[0],
+            crate::resolve::CommandOutcome::Drop(crate::resolve::DropReason::HackCooldownActive {
+                portal: p0,
+                last_hack_round: 101,
+                rounds_remaining: 2,
+            })
+        );
+        assert_eq!(
+            r102.execution_order[1].outcomes[0],
+            crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Recharged {
+                portal: p0,
+                hp_before: 40,
+                hp_after: 55,
+            })
+        );
+
+        // Exact final world.
+        assert_eq!(
+            state.portal(p0).map(|p| (p.owner, p.hp)),
+            Some((Owner::Enl, 55))
+        );
+        assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(21));
+        assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(21));
+        assert_eq!(state.agent(AgentId(2)).map(|a| a.supply), Some(20));
+        assert_eq!(
+            state.agent(AgentId(0)).map(|a| a.keys.get(&p0).copied()),
+            Some(Some(k97 + k100 + k101 - 1)),
+            "three draws minus the transferred key"
+        );
+        assert_eq!(
+            state.agent(AgentId(1)).map(|a| a.keys.get(&p0).copied()),
+            Some(Some(1)),
+            "R-RECHARGE-01: remote recharge holds the key, never consumes it"
+        );
+        assert_eq!(
+            state.hack_tracker(AgentId(0), p0),
+            Some(&crate::state::HackTracker {
+                last_hack_round: Some(101),
+                hack_count_epoch: 1,
+                hack_ordinal: 3,
+            })
+        );
+        assert!(
+            state.events().is_empty(),
+            "HACK/TRANSFER/RECHARGE never broadcast; nothing else happened"
+        );
+        // Empty rounds 98/99 are recorded as auto-PASS slots.
+        assert_eq!(
+            reports[97].slots.get(&AgentId(0)),
+            Some(&crate::resolve::SlotStatus::NotSubmitted)
+        );
+    }
+
+    // Checklist 18 — the M3 acceptance determinism gate: the same game_seed
+    // and fresh scripts reproduce identical reports and identical state.
+    #[test]
+    fn gate_m3_economy_determinism_same_seed_same_everything() {
+        let game_seed = 0xC0FF_EE;
+        let (reports_a, state_a) = run_economy_scenario(game_seed);
+        let (reports_b, state_b) = run_economy_scenario(game_seed);
+
+        assert_eq!(reports_a, reports_b, "Vec<RoundReport> equal");
+        assert_eq!(state_a, state_b, "GameState equal (PartialEq)");
+        assert_eq!(
+            format!("{:?}", reports_a),
+            format!("{:?}", reports_b),
+            "report debug encodings equal"
+        );
+        assert_eq!(
+            format!("{:?}", state_a),
+            format!("{:?}", state_b),
+            "state debug encodings equal"
+        );
+        // And the gate is not vacuous: 102 rounds ran, five streams executed
+        // (r97, r100, r101, and two on r102).
+        assert_eq!(reports_a.len(), 102);
+        assert_eq!(
+            reports_a
+                .iter()
+                .map(|r| r.execution_order.len())
+                .sum::<usize>(),
+            5
+        );
     }
 }
