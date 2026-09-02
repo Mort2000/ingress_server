@@ -12,7 +12,6 @@ build non-crossing Link graphs, and score Fields by area × time.
 
 | Crate | Responsibility |
 |---|---|
-| `crates/arena-blake3` | In-house BLAKE3 (hash / keyed / derive_key / XOF), no dependencies |
 | `crates/arena-core` | Authoritative game model, Resolver, deterministic settlement |
 | `crates/arena-bots` | Local baseline bots |
 | `crates/arena-protocol` | FlatBuffers schema subset, framing, versioned messages |
@@ -27,11 +26,13 @@ build non-crossing Link graphs, and score Fields by area × time.
 ## Build & test
 
 ```sh
-cargo build --offline
-cargo test --offline
+cargo build
+cargo test
 ```
 
-The repository is **dependency-free** (std only) by decision
-[ADR-0012](./docs/adr/0012-offline-stdlib-only-dependency-closure.md): the build
-environment has no network access, and every algorithm the rules require
-(BLAKE3, the FlatBuffers wire subset) is implemented and tested in-tree.
+Dependencies follow [ADR-0013](./docs/adr/0013-official-crates-via-cargo-mirror.md):
+the official `blake3` crate (pinned through the committed `Cargo.lock`), and from
+M7 the official `flatbuffers` runtime with the pure-Rust `planus` compiler for
+schema codegen. Everything else is std-only; replay and canonical-state encodings
+are custom deterministic formats. The environment reaches crates.io through a
+configured cargo mirror.

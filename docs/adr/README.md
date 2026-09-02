@@ -13,4 +13,5 @@
 | [0009](./0009-flatbuffers-for-protocol-and-shm.md) | accepted | 协议 Payload 与 SHM Snapshot 统一使用 FlatBuffers |
 | [0010](./0010-canonical-blake3-state-hash.md) | accepted | 使用 Canonical Encoding 与 BLAKE3-256 校验逐轮状态 |
 | [0011](./0011-domain-separated-blake3-random-oracle.md) | accepted | 用带域隔离的 BLAKE3 Random Oracle 派生比赛内随机结果 |
-| [0012](./0012-offline-stdlib-only-dependency-closure.md) | accepted | 离线环境使用零第三方依赖的 std-only 闭包 |
+| [0012](./0012-offline-stdlib-only-dependency-closure.md) | superseded | 离线环境使用零第三方依赖的 std-only 闭包（被 0013 撤销） |
+| [0013](./0013-official-crates-via-cargo-mirror.md) | accepted | 经 cargo 镜像使用官方 blake3 与 flatbuffers/planus，其余保持 std-only |

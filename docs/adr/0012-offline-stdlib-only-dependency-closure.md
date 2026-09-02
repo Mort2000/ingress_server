@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded (by 0013)
 ---
 
 # 离线环境下的零第三方依赖闭包

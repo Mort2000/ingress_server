@@ -5,4 +5,4 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-arena-blake3 = { path = "../arena-blake3" }
+blake3 = "1.8.7"
