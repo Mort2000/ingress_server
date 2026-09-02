@@ -81,6 +81,11 @@ pub struct GameState {
     events: Vec<Event>,
     event_seq: u64,
     scores: BTreeMap<Faction, Score2>,
+    /// D47 same-round double-settle guard: `Some(r)` once
+    /// [`crate::resolve::Resolver::run_round`] settled round `r` and the
+    /// round has not advanced yet. Diagnostic bookkeeping — excluded from
+    /// the M5 canonical state hash and cleared by `advance_round`.
+    settled_round: Option<u32>,
 }
 
 impl GameState {
@@ -159,6 +164,7 @@ impl GameState {
             events: Vec::new(),
             event_seq: 0,
             scores,
+            settled_round: None,
         })
     }
 
@@ -208,6 +214,12 @@ impl GameState {
     /// pair's first successful hack.
     pub fn hack_tracker(&self, agent: AgentId, portal: PortalId) -> Option<&HackTracker> {
         self.hack_trackers.get(&(agent, portal))
+    }
+
+    /// The full HACK tracker table in ascending `(AgentId, PortalId)` order
+    /// (D44 section 5): the canonical state hash iterates this map.
+    pub fn hack_trackers(&self) -> &BTreeMap<(AgentId, PortalId), HackTracker> {
+        &self.hack_trackers
     }
 
     /// 0-based epoch of a 1-based round (R-HACK-02, D32): rounds
@@ -599,8 +611,13 @@ impl GameState {
     /// close, then next round). When the step crosses an epoch boundary the
     /// hack trackers reset EAGERLY: `last_hack_round` and
     /// `hack_count_epoch` restart while `hack_ordinal` survives (R-HACK-02,
-    /// D32) — a Round-100 hack must not block a Round-101 hack.
-    pub(crate) fn advance_round(&mut self) {
+    /// D32) — a Round-100 hack must not block a Round-101 hack. Also clears
+    /// the D47 double-settle guard, so the next round may settle.
+    ///
+    /// Public since M5: the replay engine re-executes recorded rounds and
+    /// owns the same run_round → advance_round sequence as the harness.
+    pub fn advance_round(&mut self) {
+        self.settled_round = None;
         let old_epoch = self.current_epoch();
         self.round = self
             .round
@@ -615,6 +632,21 @@ impl GameState {
         for tracker in self.trackers.values_mut() {
             *tracker = RoundTracker::default();
         }
+    }
+
+    /// D47 guard hook: marks round `self.round()` as settled. Panics when
+    /// the same round would settle twice without an intervening
+    /// [`GameState::advance_round`] — since M4 a double settle observably
+    /// corrupts scores (`settle_scores` runs again), so it is a programmer
+    /// error, not a game result.
+    pub(crate) fn begin_settle_round(&mut self) {
+        if self.settled_round == Some(self.round) {
+            panic!(
+                "run_round already settled round {}; call advance_round first",
+                self.round
+            );
+        }
+        self.settled_round = Some(self.round);
     }
 
     /// Hands `count` keys for `portal` to `agent` (key inventory primitive).
@@ -1381,5 +1413,111 @@ mod tests {
         let quiet = field_state();
         reinforced.add_reinforcement_agents(Coord::new(1_000, 1_000), 1);
         assert_ne!(reinforced, quiet, "next_agent_id participates in equality");
+    }
+
+    // ------------------------------------------------------------------
+    // M5: replay support — hack tracker enumeration (D44 section 5) and the
+    // run_round same-round double-call guard (D47, M4 review debt).
+    // ------------------------------------------------------------------
+
+    // The full tracker table enumerates every pair ascending, matching the
+    // per-pair getter (the canonical hash iterates this map).
+    #[test]
+    fn hack_trackers_enumerates_every_pair_ascending() {
+        let mut state = field_state();
+        assert!(state.hack_trackers().is_empty(), "lazy until first hack");
+        state.apply_hack(AgentId(0), PortalId(3), 1, 1);
+        state.apply_hack(AgentId(1), PortalId(1), 2, 1);
+        state.apply_hack(AgentId(0), PortalId(1), 1, 1);
+        let keys: Vec<(AgentId, PortalId)> = state.hack_trackers().keys().copied().collect();
+        assert_eq!(
+            keys,
+            vec![
+                (AgentId(0), PortalId(1)),
+                (AgentId(0), PortalId(3)),
+                (AgentId(1), PortalId(1))
+            ],
+            "BTreeMap iteration is ascending"
+        );
+        for (key, tracker) in state.hack_trackers() {
+            assert_eq!(state.hack_tracker(key.0, key.1), Some(tracker));
+        }
+    }
+
+    // D47: a second run_round on the same round panics naming the round;
+    // advance_round clears the guard so the next round settles fine.
+    #[test]
+    fn run_round_double_call_panics_and_advance_clears_guard() {
+        use crate::resolve::{Resolver, SubmittedCommandStream};
+        use crate::types::Command;
+
+        let cfg = scenario_config(1);
+        let map = two_portal_map();
+        let enl = spawns_for(&cfg, Faction::Enl, &[Coord::new(10_000, 5_000)]);
+        let res = spawns_for(&cfg, Faction::Res, &[Coord::new(6_000, 10_000)]);
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state builds");
+        let resolver = Resolver::new();
+
+        // Round 1 settles once...
+        let _ = resolver.run_round(
+            &mut state,
+            &[SubmittedCommandStream {
+                round: 1,
+                faction: Faction::Enl,
+                agent_id: AgentId(0),
+                received_at_ms: 0,
+                receive_seq: 0,
+                commands: vec![Command::Capture {
+                    portal: PortalId(0),
+                }],
+            }],
+        );
+        // ...and a same-round double call is a programmer error (M4 review:
+        // a second settle_scores observably corrupts scores).
+        let double = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = resolver.run_round(&mut state, &[]);
+        }))
+        .expect_err("the second same-round run_round must panic");
+        let message = double
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| double.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("round 1"),
+            "panic names the settled round: {message}"
+        );
+
+        // advance_round clears the guard: round 2 settles normally, and a
+        // fresh double call names round 2.
+        state.advance_round();
+        let _ = resolver.run_round(&mut state, &[]);
+        let double = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = resolver.run_round(&mut state, &[]);
+        }))
+        .expect_err("the second same-round run_round must panic");
+        let message = double
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| double.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("round 2"),
+            "panic names the settled round: {message}"
+        );
+    }
+
+    // settle_scores stays a directly callable primitive (state tests call it
+    // twice legitimately): the guard covers the run_round path only.
+    #[test]
+    fn guard_does_not_reach_direct_settle_scores() {
+        let mut state = field_state();
+        for &(a, b) in &[(0u32, 1u32), (0, 2), (1, 2)] {
+            state.grant_keys(AgentId(0), PortalId(b), 1);
+            state.apply_link(AgentId(0), PortalId(a), PortalId(b));
+        }
+        let _ = state.settle_scores();
+        let _ = state.settle_scores();
+        assert_eq!(state.score(Faction::Enl), 512_000_000u128);
     }
 }

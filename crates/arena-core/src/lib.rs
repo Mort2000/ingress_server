@@ -10,9 +10,12 @@
 //! views), harness (in-process scripted matches).
 //! Milestone M4 adds: linkgraph (link storage + derived field cache,
 //! R-LINK/R-FIELD) and the field scoring / reinforcement settlement.
+//! Milestone M5 adds: codec (canonical byte primitives shared between the
+//! state hash and the replay file, D44/D51).
 
 #![forbid(unsafe_code)]
 
+pub mod codec;
 pub mod config;
 pub mod event;
 pub mod geometry;

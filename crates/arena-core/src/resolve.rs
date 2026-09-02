@@ -328,12 +328,17 @@ pub enum SlotStatus {
     NotSubmitted,
 }
 
-/// Full settlement record for one round. `execution_order` is the fixed
+/// Full settlement record for one round. `submissions` echoes the EXACT
+/// input slice in submission order — including unlocatable and
+/// ignored-duplicate submissions, each with its authoritative receive
+/// metadata (D48, P1-REPLAY: the replay file stores this slice verbatim and
+/// the replay engine re-executes it). `execution_order` is the fixed
 /// stream order chosen before any command ran and is never reordered by
 /// results (R-RESOLVE-03). `score2_delta` is the round-end field scoring
 /// per faction (R-SCORE-01; P1-REPLAY per-round record).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct RoundReport {
+    pub submissions: Vec<SubmittedCommandStream>,
     pub slots: BTreeMap<AgentId, SlotStatus>,
     pub execution_order: Vec<ExecutedStream>,
     pub ignored_duplicates: Vec<AgentId>,
@@ -373,12 +378,21 @@ impl Resolver {
     /// as `score2_delta`) and the reinforcement boundary (R-SPAWN-02).
     /// Mutates `state`; never advances the round (the harness
     /// owns [`GameState::advance_round`]).
+    ///
+    /// # Panics
+    ///
+    /// A second call while round `state.round()` is already settled panics
+    /// (D47): settling twice observably corrupts scores (`settle_scores`
+    /// would run again). Advance the round between calls. Direct
+    /// `settle_scores` calls are not guarded — it stays a primitive.
     pub fn run_round(
         &self,
         state: &mut GameState,
         submissions: &[SubmittedCommandStream],
     ) -> RoundReport {
+        state.begin_settle_round();
         let mut report = RoundReport {
+            submissions: submissions.to_vec(),
             slots: BTreeMap::new(),
             execution_order: Vec::new(),
             ignored_duplicates: Vec::new(),
@@ -1277,6 +1291,44 @@ mod tests {
             }]
         );
         assert_eq!(report.execution_order.len(), 1);
+    }
+
+    // M5 (D48, P1-REPLAY): the report echoes the EXACT input slice in
+    // submission order — including unlocatable and ignored-duplicate
+    // submissions, each with its authoritative receive metadata. The replay
+    // file stores this slice verbatim and the replay engine re-executes it.
+    #[test]
+    fn round_report_submissions_echo_exact_input_slice() {
+        let mut state = standard_state();
+        let wrong_round = stream(5, Faction::Enl, AgentId(0), 0, 0, vec![Command::Attack]);
+        let first = enl(vec![Command::Capture {
+            portal: PortalId(0),
+        }]);
+        // A second locatable submission for the same agent: ignored, but
+        // still part of the echoed slice.
+        let duplicate = SubmittedCommandStream {
+            round: 1,
+            faction: Faction::Enl,
+            agent_id: AgentId(0),
+            received_at_ms: 7,
+            receive_seq: 9,
+            commands: vec![Command::Attack],
+        };
+        let report = run(&mut state, &[wrong_round.clone(), first, duplicate.clone()]);
+        assert_eq!(report.submissions.len(), 3, "every submission echoed");
+        assert_eq!(report.submissions[0], wrong_round, "unlocatable echoed");
+        assert_eq!(
+            report.submissions[2], duplicate,
+            "ignored duplicate echoed with its receive metadata"
+        );
+        assert_eq!(
+            report.submissions[2].received_at_ms, 7,
+            "receive metadata travels"
+        );
+        assert_eq!(report.submissions[2].receive_seq, 9);
+        // The echo is the input slice, in submission order, untouched.
+        let ids: Vec<AgentId> = report.submissions.iter().map(|s| s.agent_id).collect();
+        assert_eq!(ids, vec![AgentId(0), AgentId(0), AgentId(0)]);
     }
 
     #[test]
@@ -2539,11 +2591,21 @@ mod tests {
 
         // owner -> position -> supply: enemy-owned portal, far agent, and
         // insufficient supply all fail, but the owner check answers first.
+        // (D47: one settle per round — the round advances between the two
+        // DROP scenarios of this shared state.)
+        state.advance_round();
         let report = run(
             &mut state,
-            &[enl(vec![Command::Recharge {
-                portal: PortalId(0),
-            }])],
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![Command::Recharge {
+                    portal: PortalId(0),
+                }],
+            )],
         );
         assert_eq!(
             report.execution_order[0].outcomes[0],
@@ -3266,7 +3328,12 @@ mod tests {
             ),
         ];
         for (command, reason) in cases {
-            let report = run(&mut state, &[enl(vec![command])]);
+            // D47: one settle per round — each DROP case gets a fresh round.
+            let round = state.round();
+            let report = run(
+                &mut state,
+                &[stream(round, Faction::Enl, AgentId(0), 0, 0, vec![command])],
+            );
             assert_eq!(
                 report.execution_order[0].outcomes[0],
                 CommandOutcome::Drop(reason),
@@ -3277,6 +3344,7 @@ mod tests {
                 .collect();
             assert_eq!(before, after, "a dropped transfer mutates nothing");
             assert!(state.events().is_empty());
+            state.advance_round();
         }
     }
 
@@ -3331,8 +3399,20 @@ mod tests {
                 capacity: 1,
             })
         );
-        // 99 + 1 == 100: exactly full is legal.
-        let report = run(&mut state, &[enl(vec![transfer_cmd(1, 1, &[])])]);
+        // 99 + 1 == 100: exactly full is legal. (D47: fresh round for the
+        // second scenario of this shared state.)
+        state.advance_round();
+        let report = run(
+            &mut state,
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![transfer_cmd(1, 1, &[])],
+            )],
+        );
         assert!(matches!(
             report.execution_order[0].outcomes[0],
             CommandOutcome::Ok(CommandEffect::Transferred { .. })
@@ -3443,8 +3523,20 @@ mod tests {
         );
 
         // Zero-supply transfer with a zero-count key entry: succeeds and
-        // creates no 0-entry in the receiver inventory.
-        let report = run(&mut state, &[enl(vec![transfer_cmd(1, 0, &[(0, 0)])])]);
+        // creates no 0-entry in the receiver inventory. (D47: the round
+        // advances between the two no-op scenarios of this shared state.)
+        state.advance_round();
+        let report = run(
+            &mut state,
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![transfer_cmd(1, 0, &[(0, 0)])],
+            )],
+        );
         assert_eq!(
             report.execution_order[0].outcomes[0],
             CommandOutcome::Ok(CommandEffect::Transferred {
@@ -4011,8 +4103,20 @@ mod tests {
 
         // The short link between the two interior portals is legal: its own
         // endpoints are exempt and no other portal lies on [7_000, 12_000].
+        // (D47: fresh round for the second scenario of this shared state.)
         state.grant_keys(AgentId(0), PortalId(3), 1);
-        let report = run(&mut state, &[enl(vec![link_cmd(2, 3)])]);
+        state.advance_round();
+        let report = run(
+            &mut state,
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![link_cmd(2, 3)],
+            )],
+        );
         assert!(matches!(
             report.execution_order[0].outcomes[0],
             CommandOutcome::Ok(CommandEffect::Linked { .. })
@@ -4527,9 +4631,11 @@ mod tests {
         seed_link(&mut state, AgentId(0), 0, 1);
         seed_link(&mut state, AgentId(0), 0, 2);
         state.grant_keys(AgentId(0), PortalId(1), 1);
-        state.advance_round();
         let _ = run(&mut state, &[]); // round 1 settles nothing
         assert_eq!(state.score(Faction::Enl), 0);
+        // D47: the round advances between the two settles (previously this
+        // settled round 2 twice — benign only because nothing scored yet).
+        state.advance_round();
         let report = run(
             &mut state,
             &[stream(
