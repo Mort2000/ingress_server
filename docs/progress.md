@@ -33,9 +33,10 @@ after each milestone; every agent should read it before starting work.
 | Milestone | Status | Commit | Notes |
 |---|---|---|---|
 | M0 skeleton | done | c0a1495 | workspace, ADR-0012; corrected by ADR-0013 (cargo mirror, official blake3) |
-| M1 core geometry/RNG | done | (this commit) | 97 tests green; types/config/geometry/rng/map/spawn; decisions D1–D15 below |
+| M1 core geometry/RNG | done | 6f9966b | 97 tests green; types/config/geometry/rng/map/spawn; decisions D1–D15 |
+| M2 basic combat | done | (this commit) | 155 tests green; state/event/resolve/observe/harness; decisions D16–D29; reviewer major (unchecked u64 in virtual receive) fixed |
 
-## Frozen design decisions (M1, must not silently change)
+## Frozen design decisions (must not silently change)
 
 - D1: `blake3("")` hex starts `af1349b9f5f9a1a6` (verified against pinned blake3 1.8.7; the `…a1a7` form is wrong).
 - D2: canonical encodings use fixed-width unsigned little-endian integers, concatenated without padding.
@@ -50,8 +51,25 @@ after each milestone; every agent should read it before starting work.
 - D11: `uniform(_, 0)` panics (documented); `n == 1` naturally returns 0.
 - D12: map generation is pre-match tooling on its own `"AMAP"` blake3 stream — never `RandomOracle`, never replayed.
 - D13: spawn-set errors: per-entry submission order (unknown → duplicate → out-of-bounds), then missing ids sorted; no coordinate-coincidence checks.
-- D14: `Command` enum currently carries only `Move`; later milestones add the rest.
+- D14: `Command` enum currently carries only `Move`; later milestones add the rest. (Superseded in M2: Move/Attack/Capture/Recharge.)
 - D15: `game_seed: u64` is match-setup input (Replay Header material from M5); RandomOracle is the only runtime randomness source.
+
+M2 (Basic Combat) additions:
+
+- D16: modules — `state.rs` (GameState + round trackers + mutations), `event.rs` (broadcast events), `resolve.rs` (intake, ordering, execution, per-command results), `observe.rs` (faction views), `harness.rs` (in-process loop, scripted strategies). DROP/outcome types live in `resolve.rs`.
+- D17: roster — `GameState::new` derives agents ENL `AgentId(0..n-1)`, RES `AgentId(n..2n-1)`, `n = initial_agents_per_faction`; `initial_roster(cfg)` feeds `validate_initial_spawn_set`; the constructor rejects spawn sets not exactly covering each roster.
+- D18: virtual receive — strategies state a bucket directly; the harness sets `received_at_ms = bucket * priority_bucket_ms`, per-faction `receive_seq` = collection order. Public pure `receive_bucket(at_ms, bucket_ms) -> u64` (floor div), boundary-tested. Default bucket 0 (ADR-0002).
+- D19: merge — per bucket (ascending); each faction's queue sorted by `(received_at_ms, receive_seq)`; alternation starts at the round's start faction and restarts fresh in every bucket; one queue empty ⇒ drain the other in order.
+- D20: start faction from parity only — odd round ⇒ ENL (RES notified first), even ⇒ RES. No separate signal-order input in M2.
+- D21: locatability (core envelope analog) — wrong `round`, unknown agent, or faction ≠ agent's faction ⇒ recorded unlocatable, slot NOT frozen (R-RESOLVE-01 "envelope reject doesn't freeze"). All other transport concerns are M7.
+- D22: round close — agents with no submission when input closes are frozen PASS (deadline analog). No COMMIT_ROUND in-process in M2.
+- D23: zero-target ATTACK ⇒ DROP `AttackNoEnemyPortalsInRange` (state-identical to a no-op success; chosen for per-command observability). The major quota is consumed either way.
+- D24: DROP taxonomy — one variant per distinct rule failure, no catch-all (see `DropReason` in `resolve.rs`).
+- D25: attack ordering — enemy portals in closed range are damaged in ascending `PortalId`; per portal emit `PORTAL_ATTACKED` then `PORTAL_NEUTRALIZED` if hp reaches 0. `GameState::neutralize_portal` is the documented M4 link/field-cascade extension point (today: `owner=Neutral, hp=0` only).
+- D26: integer clamps — hp floor via `checked_sub(damage).unwrap_or(0)` (game clamp, not an overflow escape); recharge sum in u64 then `min(portal_max_hp)`; `event_seq` is global, 0-based u64.
+- D27: structural vs execution — structural = commands ≤ `max_commands_per_agent_round` AND majors ≤ 1 (count-only, world-blind). Unknown `PortalId` is execution-time `PortalNotFound`, never structural.
+- D28: major-on-drop — `major_used` is set even when the major DROPs; intake caps majors at 1 per stream so double-spend is unreachable — the tracker fact is for spec compliance, later milestones, and tests.
+- D29: placeholders — scores stay `Score2(0)`; no links/fields until M4; `Observation` still exposes scores (R-VIS-01).
 
 ## Known minor debt (from M1 review — fix when touched, or in final review)
 
@@ -60,3 +78,10 @@ after each milestone; every agent should read it before starting work.
 - One spawn test (`invalid_set_applies_nothing`) cannot fail as written.
 - `RandomOracle::uniform` panics on `n == 0` by contract (documented; acceptable).
 - Error enums lack `std::error::Error`/`Display`; `MapError::InvalidConfig` conflates config vs definition defects; comments reference decision IDs D1–D15 now recorded here.
+
+From M2 review (minor):
+
+- `MapDefinition::validate` does not check hp/owner consistency (e.g. Neutral with hp>0) though `MapDefinition::new` invites hand-built maps.
+- `merge_order` panics on `bucket_ms == 0` without a documented contract like `receive_bucket` has.
+- Two event tests are struct-shape tautologies (construct a value, assert its fields).
+- No resolver-level test that a MOVE to negative coordinates DROPs (behavior correct per reviewer probes).

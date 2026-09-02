@@ -44,6 +44,15 @@ pub struct MapDefinition {
 }
 
 impl MapDefinition {
+    /// Builds a definition directly from a portal list — hand-placed
+    /// scenario maps and tests. The caller must supply portals with dense
+    /// ids `0..n-1` in slice order, matching the generator's output
+    /// contract; [`MapDefinition::validate`] checks (but this constructor
+    /// does not enforce) that contract plus positions and spacing.
+    pub fn new(portals: Vec<Portal>) -> Self {
+        MapDefinition { portals }
+    }
+
     pub fn portals(&self) -> &[Portal] {
         &self.portals
     }
@@ -476,6 +485,27 @@ mod tests {
     fn definition_validate_accepts_generated_map() {
         let cfg = GameConfig::default();
         let map = generate_map(777, &cfg).expect("default config generates");
+        assert_eq!(map.validate(&cfg), Ok(()));
+    }
+
+    #[test]
+    fn hand_built_constructor_preserves_slice_order() {
+        // MapDefinition::new keeps the caller's portal list verbatim; dense
+        // ids in slice order are the documented contract.
+        let map = MapDefinition::new(vec![
+            fixture_portal(0, 10_000, 10_000),
+            fixture_portal(1, 25_000, 25_000),
+        ]);
+        let mut cfg = GameConfig::default();
+        cfg.map_width_cm = 30_000;
+        cfg.map_height_cm = 30_000;
+        cfg.portal_count = 2;
+        cfg.portal_cluster_count = 2;
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.portal(PortalId(1)).map(|p| p.position),
+            Some(fixture_portal(1, 25_000, 25_000).position)
+        );
         assert_eq!(map.validate(&cfg), Ok(()));
     }
 }

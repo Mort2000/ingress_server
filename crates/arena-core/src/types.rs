@@ -20,10 +20,21 @@ pub struct PortalId(pub u32);
 pub struct AgentId(pub u32);
 
 /// One of the two opposing factions; v0.1 is fixed to ENL and RES.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+/// `Ord` is declaration order (`Enl < Res`), used for score maps only.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Faction {
     Enl,
     Res,
+}
+
+impl Faction {
+    /// The opposing faction; v0.1 has exactly two.
+    pub fn opposite(self) -> Faction {
+        match self {
+            Faction::Enl => Faction::Res,
+            Faction::Res => Faction::Enl,
+        }
+    }
 }
 
 /// Portal ownership; neutral portals can be captured, owned portals attacked.
@@ -102,13 +113,31 @@ impl Coord {
 
 /// Command payload submitted inside an Agent Command Stream (R-ACTION-01).
 ///
-/// M1 carries the `MOVE` skeleton only; the remaining variants
-/// (Attack/Recharge/Capture/Hack/Link/Transfer) land in later milestones.
+/// M2 carries MOVE, ATTACK, CAPTURE, and RECHARGE; HACK/LINK/TRANSFER land
+/// in later milestones.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
     /// Absolute destination coordinate; cost is billed per segment from the
-    /// agent's latest position (R-MOVE-01).
+    /// agent's latest position (R-MOVE-01). Auxiliary action.
     Move { destination: Coord },
+    /// Damages every enemy portal in operation range (R-ATTACK-01). Major action.
+    Attack,
+    /// Takes ownership of a neutral portal (R-CAPTURE-01). Major action.
+    Capture { portal: PortalId },
+    /// Pushes supply into an owned portal (R-RECHARGE-01). Major action.
+    Recharge { portal: PortalId },
+}
+
+impl Command {
+    /// Whether this command belongs to the Major Action category
+    /// (R-ACTION-01): ATTACK, RECHARGE, and CAPTURE — at most one per agent
+    /// per round. MOVE (and later HACK/LINK/TRANSFER) are auxiliary.
+    pub fn is_major(&self) -> bool {
+        matches!(
+            self,
+            Command::Attack | Command::Capture { .. } | Command::Recharge { .. }
+        )
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +197,42 @@ mod tests {
             Command::Move { destination } => {
                 assert_eq!(destination, Coord::new(351_230, 178_452));
             }
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn command_major_classification() {
+        // R-ACTION-01: ATTACK, RECHARGE, CAPTURE are Major Actions; MOVE is
+        // auxiliary.
+        assert!(
+            !Command::Move {
+                destination: Coord::new(0, 0)
+            }
+            .is_major()
+        );
+        assert!(Command::Attack.is_major());
+        assert!(
+            Command::Capture {
+                portal: PortalId(0)
+            }
+            .is_major()
+        );
+        assert!(
+            Command::Recharge {
+                portal: PortalId(0)
+            }
+            .is_major()
+        );
+    }
+
+    #[test]
+    fn faction_opposite_swaps() {
+        assert_eq!(Faction::Enl.opposite(), Faction::Res);
+        assert_eq!(Faction::Res.opposite(), Faction::Enl);
+        // Round trip is the identity for both factions.
+        for faction in [Faction::Enl, Faction::Res] {
+            assert_eq!(faction.opposite().opposite(), faction);
         }
     }
 
