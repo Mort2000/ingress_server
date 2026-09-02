@@ -1,0 +1,7 @@
+# Rust build output
+/target
+
+# Experiment / batch-run artifacts (reports under docs/ are tracked)
+/runs/
+/artifacts/
+*.log

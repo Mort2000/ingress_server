@@ -1,0 +1,8 @@
+[package]
+name = "arena-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+arena-blake3 = { path = "../arena-blake3" }
