@@ -142,7 +142,11 @@ impl RandomOracle {
 /// each rejected word advances the stream by 4 bytes. `t` is the largest
 /// multiple of `n` not exceeding `2^32`, so `x % n` is unbiased for accepted
 /// words. Never plain `x % n` without rejection.
-pub(crate) fn uniform_from_words<R: WordSource>(words: &mut R, n_exclusive: u32) -> u32 {
+///
+/// Public since M6: local bots (arena-bots) draw their own stream randomness
+/// through this same frozen mapping (D53) — visibility only, the mapping is
+/// part of the rule version and never changes.
+pub fn uniform_from_words<R: WordSource>(words: &mut R, n_exclusive: u32) -> u32 {
     let n = n_exclusive as u64;
     let threshold = ((1u64 << 32) / n) * n;
     loop {
@@ -153,8 +157,9 @@ pub(crate) fn uniform_from_words<R: WordSource>(words: &mut R, n_exclusive: u32)
     }
 }
 
-/// Source of successive 4-byte LE words for [`uniform_from_words`].
-pub(crate) trait WordSource {
+/// Source of successive 4-byte LE words for [`uniform_from_words`]. Public
+/// since M6 (D53) so external frozen-mapping consumers can reuse the loop.
+pub trait WordSource {
     fn next_u32(&mut self) -> u32;
 }
 

@@ -1,0 +1,15 @@
+[package]
+name = "arena-runner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+arena-core = { path = "../arena-core" }
+arena-bots = { path = "../arena-bots" }
+arena-replay = { path = "../arena-replay" }
+blake3 = "1.8.7"
+
+[[bin]]
+name = "arena-runner"
+path = "src/main.rs"

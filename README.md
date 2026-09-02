@@ -32,7 +32,7 @@ cargo test
 
 Dependencies follow [ADR-0013](./docs/adr/0013-official-crates-via-cargo-mirror.md):
 the official `blake3` crate (pinned through the committed `Cargo.lock`), and from
-M7 the official `flatbuffers` runtime with the pure-Rust `planus` compiler for
-schema codegen. Everything else is std-only; replay and canonical-state encodings
+M7 `planus` (pure-Rust FlatBuffers-compatible compiler + runtime) for protocol
+schema codegen; generated code is committed. Everything else is std-only; replay and canonical-state encodings
 are custom deterministic formats. The environment reaches crates.io through a
 configured cargo mirror.

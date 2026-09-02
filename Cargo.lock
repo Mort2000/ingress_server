@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "arena-bots"
+version = "0.1.0"
+dependencies = [
+ "arena-core",
+ "blake3",
+]
+
+[[package]]
 name = "arena-core"
 version = "0.1.0"
 dependencies = [
@@ -14,6 +22,16 @@ name = "arena-replay"
 version = "0.1.0"
 dependencies = [
  "arena-core",
+ "blake3",
+]
+
+[[package]]
+name = "arena-runner"
+version = "0.1.0"
+dependencies = [
+ "arena-bots",
+ "arena-core",
+ "arena-replay",
  "blake3",
 ]
 
