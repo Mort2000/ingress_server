@@ -858,13 +858,42 @@ mod tests {
                 hack_ordinal: 3,
             })
         );
-        assert!(
-            state.events().is_empty(),
-            "HACK/TRANSFER/RECHARGE never broadcast; nothing else happened"
+        // M4 update: the round-100 boundary (interval 100 < total 500) now
+        // spawns one reinforcement agent per faction and broadcasts
+        // REINFORCEMENT — the ONLY event of this scenario
+        // (HACK/TRANSFER/RECHARGE still never broadcast).
+        assert_eq!(state.events().len(), 1, "exactly the boundary event");
+        assert_eq!(state.events()[0].round, 100);
+        assert_eq!(
+            state.events()[0].kind,
+            EventKind::Reinforcement {
+                index: 1,
+                position: crate::rng::RandomOracle::new(game_seed)
+                    .reinforcement_position(1, 30_001, 30_001),
+                count_per_faction: 1,
+                first_agent_id: AgentId(4),
+            }
+        );
+        // The roster grew 2 -> 3 per faction; the newcomers idle (no script).
+        assert_eq!(
+            state.agent(AgentId(4)).map(|a| a.faction),
+            Some(Faction::Enl)
+        );
+        assert_eq!(
+            state.agent(AgentId(5)).map(|a| a.faction),
+            Some(Faction::Res)
         );
         // Empty rounds 98/99 are recorded as auto-PASS slots.
         assert_eq!(
             reports[97].slots.get(&AgentId(0)),
+            Some(&crate::resolve::SlotStatus::NotSubmitted)
+        );
+        // The boundary round itself saw only the two initial agents.
+        assert_eq!(reports[99].slots.len(), 4);
+        assert!(!reports[99].slots.contains_key(&AgentId(4)));
+        // ...and round 101 records the reinforcement agent's idle slot.
+        assert_eq!(
+            reports[100].slots.get(&AgentId(4)),
             Some(&crate::resolve::SlotStatus::NotSubmitted)
         );
     }
@@ -898,6 +927,442 @@ mod tests {
                 .map(|r| r.execution_order.len())
                 .sum::<usize>(),
             5
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // M4 acceptance (checklist 42-47): the 500-round Field Game match.
+    // ------------------------------------------------------------------
+
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use crate::geometry::{area2, dist2, point_on_segment, segments_intersect};
+    use crate::map::generate_map;
+    use crate::rng::RandomOracle;
+    use crate::types::{LinkId, MatchResult, PortalId};
+
+    /// Pinned deterministic inputs: the map seed is the one whose generated
+    /// default-config map holds two disjoint, non-crossing portal triangles
+    /// (verified by the search below); the game seed feeds the oracle.
+    const M4_MAP_SEED: u64 = 0;
+    const M4_GAME_SEED: u64 = 0xBEEF_0004;
+
+    /// Deterministic search over the pinned map for two triangles the bots
+    /// can complete without geometric interference. A candidate triple has
+    /// pairwise distance <= `MOVE_BUDGET` (a single hop: ceil_sqrt(dist2)
+    /// <= 20_000 exactly when dist2 <= 20_000^2), non-zero area2, and no
+    /// other portal on any of its three closed segments; the returned pair
+    /// is additionally portal-disjoint with no edge crossings between the
+    /// two triangles.
+    fn find_triangle_pair(map: &MapDefinition) -> ([u32; 3], [u32; 3]) {
+        const HOP2: i64 = 20_000 * 20_000;
+        let portals: Vec<(PortalId, Coord)> =
+            map.portals().iter().map(|p| (p.id, p.position)).collect();
+        let n = portals.len();
+        assert!(n >= 6, "the pinned map must hold two disjoint triangles");
+        let segment_clear = |a: Coord, b: Coord, endpoints: &[u32]| {
+            portals
+                .iter()
+                .filter(|(id, _)| !endpoints.contains(&id.0))
+                .all(|&(_, p)| !point_on_segment(p, a, b))
+        };
+
+        let mut candidates: Vec<[u32; 3]> = Vec::new();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if dist2(portals[i].1, portals[j].1) > HOP2 {
+                    continue;
+                }
+                for k in (j + 1)..n {
+                    if dist2(portals[i].1, portals[k].1) > HOP2
+                        || dist2(portals[j].1, portals[k].1) > HOP2
+                    {
+                        continue;
+                    }
+                    if area2(portals[i].1, portals[j].1, portals[k].1) == 0 {
+                        continue;
+                    }
+                    let triple = [i as u32, j as u32, k as u32];
+                    if segment_clear(portals[i].1, portals[j].1, &triple)
+                        && segment_clear(portals[i].1, portals[k].1, &triple)
+                        && segment_clear(portals[j].1, portals[k].1, &triple)
+                    {
+                        candidates.push(triple);
+                    }
+                }
+            }
+        }
+        assert!(
+            !candidates.is_empty(),
+            "the pinned map has at least one clear triangle"
+        );
+
+        for x in 0..candidates.len() {
+            for y in (x + 1)..candidates.len() {
+                let (a, b) = (&candidates[x], &candidates[y]);
+                if a.iter().any(|p| b.contains(p)) {
+                    continue;
+                }
+                let pos = |id: u32| portals[id as usize].1;
+                let mut crossing = false;
+                for u in 0..3 {
+                    for v in (u + 1)..3 {
+                        for s in 0..3 {
+                            for t in (s + 1)..3 {
+                                if segments_intersect(pos(a[u]), pos(a[v]), pos(b[s]), pos(b[t])) {
+                                    crossing = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !crossing {
+                    return (*a, *b);
+                }
+            }
+        }
+        panic!("the pinned map has no two disjoint non-crossing triangles");
+    }
+
+    /// Test-local deterministic strategy (M6 builds the real baselines): a
+    /// pure function of the `Observation` plus a fixed per-agent triangle
+    /// plan, at most one command per agent per round. Tour: p0 (capture +
+    /// hack) -> p1 -> p2 -> LINK(p0,p1) -> LINK(p1,p2) -> LINK(p2,p0), so
+    /// each faction holds one persistent field by ~round 15. Reinforcement
+    /// agents are not planned and idle (no submission). Records the own
+    /// agent count per round for the reinforcement gate.
+    struct FieldBot {
+        owner: Owner,
+        plan: [PortalId; 3],
+        agents: [AgentId; 3],
+        counts: Arc<Mutex<Vec<(u32, usize)>>>,
+    }
+
+    impl FieldBot {
+        fn new(
+            faction: Faction,
+            plan: [u32; 3],
+            roster_offset: u32,
+            counts: Arc<Mutex<Vec<(u32, usize)>>>,
+        ) -> Self {
+            FieldBot {
+                owner: if faction == Faction::Enl {
+                    Owner::Enl
+                } else {
+                    Owner::Res
+                },
+                plan: [PortalId(plan[0]), PortalId(plan[1]), PortalId(plan[2])],
+                agents: [
+                    AgentId(roster_offset),
+                    AgentId(roster_offset + 1),
+                    AgentId(roster_offset + 2),
+                ],
+                counts,
+            }
+        }
+    }
+
+    impl RoundStrategy for FieldBot {
+        fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
+            self.counts
+                .lock()
+                .expect("uncontended")
+                .push((obs.round, obs.own_agents.len()));
+
+            let portal_pos = |id: PortalId| {
+                obs.portals
+                    .iter()
+                    .find(|p| p.id == id)
+                    .expect("plan portal exists")
+                    .position
+            };
+            let owner_of = |id: PortalId| {
+                obs.portals
+                    .iter()
+                    .find(|p| p.id == id)
+                    .expect("plan portal exists")
+                    .owner
+            };
+
+            let mut submissions = Vec::new();
+            for &agent in &self.agents {
+                let Some(me) = obs.own_agents.iter().find(|a| a.id == agent) else {
+                    continue;
+                };
+                // Six tour stations: three capture+hack stops, then the
+                // three triangle edges in tour order (source, target).
+                let stations: [(PortalId, Option<PortalId>); 6] = [
+                    (self.plan[0], None),
+                    (self.plan[1], None),
+                    (self.plan[2], None),
+                    (self.plan[0], Some(self.plan[1])),
+                    (self.plan[1], Some(self.plan[2])),
+                    (self.plan[2], Some(self.plan[0])),
+                ];
+                let complete = |(p, target): &(PortalId, Option<PortalId>)| match target {
+                    None => owner_of(*p) == self.owner && me.keys.get(p).copied().unwrap_or(0) >= 1,
+                    Some(t) => obs
+                        .links
+                        .iter()
+                        .any(|l| l.id == LinkId::new(*p, *t).expect("plan portals are distinct")),
+                };
+                let Some((stand, target)) = stations.iter().find(|s| !complete(s)) else {
+                    continue; // tour done: explicit PASS
+                };
+                let command = if me.position != portal_pos(*stand) {
+                    Command::Move {
+                        destination: portal_pos(*stand),
+                    }
+                } else {
+                    match target {
+                        None => {
+                            if owner_of(*stand) == Owner::Neutral {
+                                Command::Capture { portal: *stand }
+                            } else if me.keys.get(stand).copied().unwrap_or(0) == 0 {
+                                Command::Hack { portal: *stand }
+                            } else {
+                                continue; // captured and keyed: complete next round
+                            }
+                        }
+                        Some(t) => {
+                            if me.keys.get(t).copied().unwrap_or(0) >= 1 {
+                                Command::Link {
+                                    source_portal: *stand,
+                                    target_portal: *t,
+                                }
+                            } else {
+                                continue; // cannot link without the target key
+                            }
+                        }
+                    }
+                };
+                submissions.push(AgentSubmission::new(agent, vec![command]));
+            }
+            submissions
+        }
+    }
+
+    /// Match fixture: default config (500 rounds, 120 portals, 600_000 cm
+    /// map, 3 agents per faction, reinforcement every 100 rounds), the
+    /// pinned generated map, and both factions' three initial agents spawned
+    /// exactly ON their triangle portals (spawns are free coordinates).
+    fn field_match_fixture() -> (GameConfig, MapDefinition, InitialSpawns, InitialSpawns) {
+        let cfg = GameConfig::default();
+        let map = generate_map(M4_MAP_SEED, &cfg).expect("the pinned map generates");
+        let (enl_tri, res_tri) = find_triangle_pair(&map);
+        let tri_coords = |tri: &[u32; 3]| -> Vec<Coord> {
+            tri.iter()
+                .map(|&p| map.portal(PortalId(p)).expect("dense portal").position)
+                .collect()
+        };
+        let enl_spawns = spawns(&cfg, Faction::Enl, &tri_coords(&enl_tri));
+        let res_spawns = spawns(&cfg, Faction::Res, &tri_coords(&res_tri));
+        (cfg, map, enl_spawns, res_spawns)
+    }
+
+    fn run_field_match(
+        game_seed: u64,
+    ) -> (
+        Vec<RoundReport>,
+        GameState,
+        Arc<Mutex<Vec<(u32, usize)>>>,
+        Arc<Mutex<Vec<(u32, usize)>>>,
+    ) {
+        let (cfg, map, enl_spawns, res_spawns) = field_match_fixture();
+        let enl_counts = Arc::new(Mutex::new(Vec::new()));
+        let res_counts = Arc::new(Mutex::new(Vec::new()));
+        let enl = FieldBot::new(
+            Faction::Enl,
+            find_triangle_pair(&map).0,
+            0,
+            Arc::clone(&enl_counts),
+        );
+        let res = FieldBot::new(
+            Faction::Res,
+            find_triangle_pair(&map).1,
+            3,
+            Arc::clone(&res_counts),
+        );
+        let mut harness = MatchHarness::new(
+            game_seed,
+            cfg,
+            &map,
+            &enl_spawns,
+            &res_spawns,
+            Box::new(enl),
+            Box::new(res),
+        )
+        .expect("harness builds");
+        let reports = harness.run_rounds(500);
+        let state = harness.into_state();
+        (reports, state, enl_counts, res_counts)
+    }
+
+    // Checklist 42: the full default match runs to completion.
+    #[test]
+    fn gate_m4_500_round_match_completes() {
+        let (reports, state, _, _) = run_field_match(M4_GAME_SEED);
+        assert_eq!(reports.len(), 500);
+        assert_eq!(state.round(), 501, "500 rounds ran; the counter advanced");
+        // The bots really played the field game.
+        assert!(
+            state.link_graph().links().len() >= 6,
+            "both triangles built"
+        );
+        assert!(
+            state.link_graph().fields().len() >= 2,
+            "both factions hold a field"
+        );
+    }
+
+    // Checklist 43: both factions scored and the result is the plain score
+    // comparison (R-SCORE-01).
+    #[test]
+    fn gate_m4_field_scores_positive_and_result_consistent() {
+        let (reports, state, _, _) = run_field_match(M4_GAME_SEED);
+        let (enl, res) = (state.score(Faction::Enl), state.score(Faction::Res));
+        // The tour closes one persistent field per faction by ~round 15
+        // (observed: round 14 for both) — the first non-zero delta lands
+        // well before the match's midpoint.
+        for faction in [Faction::Enl, Faction::Res] {
+            let first = reports
+                .iter()
+                .position(|r| r.score2_delta[&faction] > 0)
+                .expect("a delta landed");
+            assert!(
+                first + 1 <= 20,
+                "{faction:?} first scored at round {}",
+                first + 1
+            );
+        }
+        assert!(enl > 0, "ENL scored a persistent field");
+        assert!(res > 0, "RES scored a persistent field");
+
+        let expected = if enl > res {
+            MatchResult::EnlWin
+        } else if res > enl {
+            MatchResult::ResWin
+        } else {
+            MatchResult::Draw
+        };
+        assert_eq!(state.final_result(), expected);
+        assert!(matches!(
+            state.final_result(),
+            MatchResult::EnlWin | MatchResult::ResWin | MatchResult::Draw
+        ));
+        // R-SCORE-01 telescoping: the per-round deltas sum to the totals.
+        let mut sum_enl = 0u128;
+        let mut sum_res = 0u128;
+        for report in &reports {
+            sum_enl += report.score2_delta[&Faction::Enl];
+            sum_res += report.score2_delta[&Faction::Res];
+        }
+        assert_eq!(sum_enl, enl);
+        assert_eq!(sum_res, res);
+    }
+
+    // Checklist 44: reinforcements land exactly on the default schedule
+    // (rounds 100/200/300/400, one per faction at one oracle position) and
+    // are first visible in the following rounds' observations.
+    #[test]
+    fn gate_m4_reinforcements_at_expected_boundaries() {
+        let (_reports, state, enl_counts, res_counts) = run_field_match(M4_GAME_SEED);
+        let reinforcements: Vec<&crate::event::Event> = state
+            .events()
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::Reinforcement { .. }))
+            .collect();
+        assert_eq!(
+            reinforcements.iter().map(|e| e.round).collect::<Vec<_>>(),
+            vec![100, 200, 300, 400],
+            "exactly the four default boundaries"
+        );
+
+        let oracle = RandomOracle::new(M4_GAME_SEED);
+        for (i, event) in reinforcements.iter().enumerate() {
+            match event.kind {
+                EventKind::Reinforcement {
+                    index,
+                    position,
+                    count_per_faction,
+                    first_agent_id,
+                } => {
+                    assert_eq!(index as usize, i + 1, "interval index 1..=4");
+                    assert_eq!(count_per_faction, 1);
+                    let expected = oracle.reinforcement_position(index, 600_001, 600_001);
+                    assert_eq!(position, expected, "oracle-derived shared position");
+                    assert_eq!(
+                        state.agent(first_agent_id).map(|a| (a.faction, a.position)),
+                        Some((Faction::Enl, expected)),
+                        "ENL block first"
+                    );
+                    assert_eq!(
+                        state
+                            .agent(AgentId(first_agent_id.0 + 1))
+                            .map(|a| (a.faction, a.position)),
+                        Some((Faction::Res, expected)),
+                        "RES block shares the position"
+                    );
+                }
+                other => panic!("unexpected kind {other:?}"),
+            }
+        }
+
+        // Observations at rounds 101/201/301/401 show 4/5/6/7 own agents.
+        for (counts, faction) in [(enl_counts, "ENL"), (res_counts, "RES")] {
+            let counts = counts.lock().expect("uncontended");
+            for (round, expected) in [(101u32, 4usize), (201, 5), (301, 6), (401, 7)] {
+                let seen = counts
+                    .iter()
+                    .find(|(r, _)| *r == round)
+                    .expect("every round was observed")
+                    .1;
+                assert_eq!(seen, expected, "{faction} own agents in round {round}");
+            }
+        }
+    }
+
+    // Checklist 45: the whole match is deterministic — same game_seed, same
+    // map, fresh bots, identical reports and identical final state (the M3
+    // gate extended to the full 500-round field match).
+    #[test]
+    fn gate_m4_full_match_determinism() {
+        let (reports_a, state_a, _, _) = run_field_match(M4_GAME_SEED);
+        let (reports_b, state_b, _, _) = run_field_match(M4_GAME_SEED);
+        assert_eq!(reports_a, reports_b, "Vec<RoundReport> equal");
+        assert_eq!(state_a, state_b, "GameState equal (PartialEq)");
+        // The gate is not vacuous.
+        assert_eq!(state_a.round(), 501);
+        assert!(state_a.score(Faction::Enl) > 0);
+        assert!(state_a.score(Faction::Res) > 0);
+        assert!(state_a.link_graph().fields().len() >= 2);
+    }
+
+    // Checklist 46: runtime bound — catches accidental per-round complexity
+    // blowups (A-CORE). `Instant` is test scaffolding only; no float enters
+    // an authoritative path.
+    #[test]
+    fn gate_m4_runtime_under_60_seconds() {
+        let start = Instant::now();
+        let (_reports, state, _, _) = run_field_match(M4_GAME_SEED);
+        let elapsed = start.elapsed();
+        assert_eq!(state.round(), 501);
+        assert!(
+            elapsed < Duration::from_secs(60),
+            "the full match took {elapsed:?}"
+        );
+    }
+
+    // Checklist 47 (P1-FIELD): the incrementally maintained field cache
+    // equals the from-scratch recompute over the real 500-round final state.
+    #[test]
+    fn gate_m4_field_cache_equals_full_recompute_at_match_end() {
+        let (_reports, state, _, _) = run_field_match(M4_GAME_SEED);
+        assert_eq!(
+            *state.link_graph().fields(),
+            state.fields_full_recompute(),
+            "cache == full recompute on real match data"
         );
     }
 }

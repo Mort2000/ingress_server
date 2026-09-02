@@ -6,10 +6,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::EventKind;
-use crate::geometry::{in_bounds, move_cost, within_closed_range};
+use crate::geometry::{
+    dist2, in_bounds, move_cost, point_on_segment, segments_intersect, within_closed_range,
+};
 use crate::rng::RandomOracle;
 use crate::state::{GameState, faction_as_owner};
-use crate::types::{AgentId, Command, Coord, Faction, Owner, PortalId};
+use crate::types::{AgentId, Command, Coord, Faction, FieldId, LinkId, Owner, PortalId, Score2};
 
 /// One agent's ordered Command Stream as handed to the resolver by the
 /// transport (or, in-process, by the harness). `received_at_ms` is the
@@ -197,6 +199,45 @@ pub enum DropReason {
         requested: u32,
         capacity: u32,
     },
+    /// LINK source and target are the same portal (R-LINK-01 rule 5).
+    LinkSelfLoop {
+        portal: PortalId,
+    },
+    /// LINK source or target is not owned by the acting faction (R-LINK-01
+    /// rule 1); reported for the source first.
+    LinkPortalNotOwned {
+        portal: PortalId,
+        owner: Owner,
+    },
+    /// The agent holds no key of the LINK target (R-LINK-01 rule 3).
+    LinkMissingTargetKey {
+        portal: PortalId,
+    },
+    /// Source-target distance exceeds the closed `MAX_LINK_DISTANCE`
+    /// (R-LINK-01 rule 4; squared i64 compare, no square root).
+    LinkDistanceExceeded {
+        source: PortalId,
+        target: PortalId,
+    },
+    /// The undirected pair already has a link, in either command direction
+    /// (R-LINK-01 rule 6).
+    LinkAlreadyExists {
+        link: LinkId,
+    },
+    /// Another portal lies on the closed source-target segment, endpoints
+    /// exempt (R-LINK-01 rule 7); the first offender in ascending `PortalId`
+    /// reports.
+    LinkBlockedByPortal {
+        link: LinkId,
+        portal: PortalId,
+    },
+    /// The new link illegally intersects an existing link (R-LINK-01 rule 8,
+    /// R-LINK-02): a geometric intersection without a shared portal
+    /// endpoint. The first offender in ascending `LinkId` reports.
+    LinkIntersectsLink {
+        link: LinkId,
+        existing: LinkId,
+    },
 }
 
 /// One enemy portal hit by an ATTACK, in ascending `PortalId` order (D25).
@@ -245,6 +286,13 @@ pub enum CommandEffect {
         supply: u32,
         keys: BTreeMap<PortalId, u32>,
     },
+    /// A successful LINK (R-LINK-01): the canonical undirected `link` and
+    /// the fields it closed, ascending `FieldId` (R-FIELD-02 layering can
+    /// close several at once).
+    Linked {
+        link: LinkId,
+        fields: Vec<FieldId>,
+    },
 }
 
 /// Per-command result: commands inside a stream are processed sequentially
@@ -282,13 +330,15 @@ pub enum SlotStatus {
 
 /// Full settlement record for one round. `execution_order` is the fixed
 /// stream order chosen before any command ran and is never reordered by
-/// results (R-RESOLVE-03).
+/// results (R-RESOLVE-03). `score2_delta` is the round-end field scoring
+/// per faction (R-SCORE-01; P1-REPLAY per-round record).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct RoundReport {
     pub slots: BTreeMap<AgentId, SlotStatus>,
     pub execution_order: Vec<ExecutedStream>,
     pub ignored_duplicates: Vec<AgentId>,
     pub unlocatable: Vec<Unlocatable>,
+    pub score2_delta: BTreeMap<Faction, Score2>,
 }
 
 /// Round resolver, bound to the match's random oracle (D33): HACK draws its
@@ -315,11 +365,13 @@ impl Resolver {
         Resolver::with_seed(0)
     }
 
-    /// Settles one round (P1-RESOLVE steps 1-5 minus the M3+ items):
+    /// Settles one round (P1-RESOLVE steps 1-6):
     /// intake in submission order (locatability gate, freeze-first,
     /// structural check), auto-PASS for unfrozen agents, fair merge of the
-    /// executable streams, then sequential per-command execution against the
-    /// latest state. Mutates `state`; never advances the round (the harness
+    /// executable streams, sequential per-command execution against the
+    /// latest state, then the round-end field scoring (R-SCORE-01, recorded
+    /// as `score2_delta`) and the reinforcement boundary (R-SPAWN-02).
+    /// Mutates `state`; never advances the round (the harness
     /// owns [`GameState::advance_round`]).
     pub fn run_round(
         &self,
@@ -331,6 +383,7 @@ impl Resolver {
             execution_order: Vec::new(),
             ignored_duplicates: Vec::new(),
             unlocatable: Vec::new(),
+            score2_delta: BTreeMap::new(),
         };
         let bucket_ms = state.config().priority_bucket_ms;
         let current_round = state.round();
@@ -435,6 +488,35 @@ impl Resolver {
             }
         }
 
+        // --- Round-end settlement (P1-RESOLVE step 6) ----------------------
+        // Field scoring first (R-SCORE-01: the delta lands in the report),
+        // then the reinforcement boundary (R-SPAWN-02/D42). Agents appended
+        // here join AFTER this round's slots and scoring — they act, score
+        // nothing by construction, and first appear in the next round.
+        report.score2_delta = state.settle_scores();
+        let interval = state.config().reinforcement_interval_rounds;
+        let total_rounds = state.config().total_rounds;
+        if current_round % interval == 0 && current_round < total_rounds {
+            let index = current_round / interval;
+            let width_n = (state.config().map_width_cm as u32)
+                .checked_add(1)
+                .expect("map dimensions are capped by GameConfig::validate");
+            let height_n = (state.config().map_height_cm as u32)
+                .checked_add(1)
+                .expect("map dimensions are capped by GameConfig::validate");
+            // The interval index — NOT the hack epoch — is the stable index
+            // of the reinforcement RNG domain (R-RNG-01, D42).
+            let position = self.oracle.reinforcement_position(index, width_n, height_n);
+            let count = state.config().reinforcement_agents_per_faction;
+            let first_agent_id = state.add_reinforcement_agents(position, count);
+            state.push_event(EventKind::Reinforcement {
+                index,
+                position,
+                count_per_faction: count,
+                first_agent_id,
+            });
+        }
+
         report
     }
 }
@@ -486,6 +568,10 @@ fn execute_command(
             supply,
             keys,
         } => execute_transfer(state, agent_id, faction, *target_agent, *supply, keys),
+        Command::Link {
+            source_portal,
+            target_portal,
+        } => execute_link(state, agent_id, faction, *source_portal, *target_portal),
     }
 }
 
@@ -584,12 +670,26 @@ fn execute_attack(state: &mut GameState, agent_id: AgentId, faction: Faction) ->
             hp_after,
         });
         if neutralized {
-            state.neutralize_portal(portal);
+            let cascade = state.neutralize_portal(portal);
             state.push_event(EventKind::PortalNeutralized {
                 faction,
                 agent_id,
                 portal,
             });
+            for link in cascade.links {
+                state.push_event(EventKind::LinkDestroyed {
+                    faction,
+                    agent_id,
+                    link,
+                });
+            }
+            for field in cascade.fields {
+                state.push_event(EventKind::FieldDestroyed {
+                    faction,
+                    agent_id,
+                    field,
+                });
+            }
         }
         hits.push(AttackHit {
             portal,
@@ -796,6 +896,131 @@ fn execute_transfer(
         supply,
         keys: moved,
     })
+}
+
+/// LINK (R-LINK-01/02, D38/D39). Check order is contractual — the first
+/// failing rule reports, one DROP variant per rule failure (D24):
+/// source exists -> target exists -> distinct portals -> source owned ->
+/// target owned -> agent within CLOSED `portal_operation_range` of the
+/// SOURCE (the direction only pins the standing requirement and the key
+/// spent) -> at least one key of the TARGET -> source-target distance
+/// within the closed `MAX_LINK_DISTANCE` (squared i64 compare) -> the
+/// undirected pair unused -> no OTHER portal on the closed segment
+/// (endpoints exempt, first offender ascending `PortalId`) -> no illegal
+/// intersection with an existing link (D39: `segments_intersect && !shared
+/// portal endpoint`; the closed predicate already counts collinear overlap;
+/// shared endpoints are legal and field interiors never block — R-LINK-02).
+///
+/// Success consumes exactly one target key, inserts the undirected edge,
+/// derives the fields it closes (cached `area2`), and broadcasts
+/// `LINK_CREATED` then one `FIELD_CREATED` per field ascending.
+fn execute_link(
+    state: &mut GameState,
+    agent_id: AgentId,
+    faction: Faction,
+    source: PortalId,
+    target: PortalId,
+) -> CommandOutcome {
+    let Some(source_portal) = state.portal(source) else {
+        return CommandOutcome::Drop(DropReason::PortalNotFound { portal: source });
+    };
+    let Some(target_portal) = state.portal(target) else {
+        return CommandOutcome::Drop(DropReason::PortalNotFound { portal: target });
+    };
+    let (source_position, source_owner) = (source_portal.position, source_portal.owner);
+    let (target_position, target_owner) = (target_portal.position, target_portal.owner);
+    let Some(link) = LinkId::new(source, target) else {
+        return CommandOutcome::Drop(DropReason::LinkSelfLoop { portal: source });
+    };
+    let own_owner = faction_as_owner(faction);
+    if source_owner != own_owner {
+        return CommandOutcome::Drop(DropReason::LinkPortalNotOwned {
+            portal: source,
+            owner: source_owner,
+        });
+    }
+    if target_owner != own_owner {
+        return CommandOutcome::Drop(DropReason::LinkPortalNotOwned {
+            portal: target,
+            owner: target_owner,
+        });
+    }
+    let agent_position = state
+        .agent(agent_id)
+        .expect("intake verified the agent exists")
+        .position;
+    let operation_range = state.config().portal_operation_range_cm;
+    if !within_closed_range(agent_position, source_position, operation_range) {
+        return CommandOutcome::Drop(DropReason::OutOfOperationRange { portal: source });
+    }
+    let key_count = state
+        .agent(agent_id)
+        .expect("intake verified the agent exists")
+        .keys
+        .get(&target)
+        .copied()
+        .unwrap_or(0);
+    if key_count < 1 {
+        return CommandOutcome::Drop(DropReason::LinkMissingTargetKey { portal: target });
+    }
+    let max_distance = state.config().max_link_distance_cm as i64;
+    let max2 = max_distance
+        .checked_mul(max_distance)
+        .expect("bounded by GameConfig::validate");
+    if dist2(source_position, target_position) > max2 {
+        return CommandOutcome::Drop(DropReason::LinkDistanceExceeded { source, target });
+    }
+    if state.link_graph().link(link).is_some() {
+        return CommandOutcome::Drop(DropReason::LinkAlreadyExists { link });
+    }
+    // Rule 7: any OTHER portal on the closed segment blocks; dense slice
+    // order is ascending PortalId, so the first hit is the first offender.
+    for portal in state.portals() {
+        if portal.id == source || portal.id == target {
+            continue;
+        }
+        if point_on_segment(portal.position, source_position, target_position) {
+            return CommandOutcome::Drop(DropReason::LinkBlockedByPortal {
+                link,
+                portal: portal.id,
+            });
+        }
+    }
+    // Rule 8 (R-LINK-02): geometric intersection without a shared portal
+    // endpoint. BTreeMap order is ascending LinkId, so the first hit is the
+    // first offender. T-touch and interior-endpoint cases were already
+    // rejected by the portal-on-segment rule above.
+    for (&existing, _) in state.link_graph().links() {
+        if link.contains(existing.min) || link.contains(existing.max) {
+            continue; // shared portal endpoint is legal
+        }
+        let existing_min = state
+            .portal(existing.min)
+            .expect("dense portal ids")
+            .position;
+        let existing_max = state
+            .portal(existing.max)
+            .expect("dense portal ids")
+            .position;
+        if segments_intersect(source_position, target_position, existing_min, existing_max) {
+            return CommandOutcome::Drop(DropReason::LinkIntersectsLink { link, existing });
+        }
+    }
+
+    let (link, fields) = state.apply_link(agent_id, source, target);
+    state.push_event(EventKind::LinkCreated {
+        faction,
+        agent_id,
+        link,
+    });
+    for field in &fields {
+        state.push_event(EventKind::FieldCreated {
+            faction,
+            agent_id,
+            field: *field,
+        });
+    }
+    CommandOutcome::Ok(CommandEffect::Linked { link, fields })
 }
 
 #[cfg(test)]
@@ -3388,5 +3613,1196 @@ mod tests {
                 receive_seq: 0
             })
         );
+    }
+
+    // ------------------------------------------------------------------
+    // M4: LINK execution, cascade events, settlement, reinforcement
+    // (checklist 18-39)
+    // ------------------------------------------------------------------
+
+    use crate::types::{FieldId, LinkId, MatchResult};
+
+    fn enl_portal(id: u32, x: i32, y: i32) -> Portal {
+        portal_fixture(id, x, y, Owner::Enl, 100)
+    }
+
+    fn link_cmd(a: u32, b: u32) -> Command {
+        Command::Link {
+            source_portal: PortalId(a),
+            target_portal: PortalId(b),
+        }
+    }
+
+    /// State-level edge seeding for geometry-focused fixtures: grants the
+    /// target key and applies the link directly (no resolver checks).
+    fn seed_link(state: &mut GameState, agent: AgentId, a: u32, b: u32) {
+        state.grant_keys(agent, PortalId(b), 1);
+        state.apply_link(agent, PortalId(a), PortalId(b));
+    }
+
+    fn linked(outcome: &CommandOutcome) -> (LinkId, Vec<FieldId>) {
+        match outcome {
+            CommandOutcome::Ok(CommandEffect::Linked { link, fields }) => (*link, fields.clone()),
+            other => panic!("expected Linked, got {other:?}"),
+        }
+    }
+
+    fn drop_reason(outcome: &CommandOutcome) -> DropReason {
+        match outcome {
+            CommandOutcome::Drop(reason) => *reason,
+            other => panic!("expected Drop, got {other:?}"),
+        }
+    }
+
+    /// ENL square-ish default fixture: ENL agent 0 at `enl_pos`, RES agent 1
+    /// far away, `portals` appended after two neutral dummies... no — the
+    /// caller supplies every portal; only the rosters are fixed at 1+1.
+    fn link_state(
+        cfg: &GameConfig,
+        portals: Vec<Portal>,
+        enl_pos: Coord,
+        res_pos: Coord,
+    ) -> GameState {
+        fixture_state(cfg, portals, &[enl_pos], &[res_pos])
+    }
+
+    // Checklist 18: the full success path — capture, hack the target key,
+    // move back into source range, LINK.
+    #[test]
+    fn link_success_full_path() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 14_000, 10_000, Owner::Neutral, 0),
+            ],
+            Coord::new(10_000, 5_000),
+            Coord::new(29_000, 29_000),
+        );
+
+        // Round 1: capture P0 (closed boundary range), step under P1.
+        let _ = run(
+            &mut state,
+            &[enl(vec![
+                Command::Capture {
+                    portal: PortalId(0),
+                },
+                Command::Move {
+                    destination: Coord::new(14_000, 5_000),
+                },
+            ])],
+        );
+        state.advance_round();
+        // Round 2: hack P1's key (range 5_000 exactly), then capture P1.
+        let report = run(
+            &mut state,
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![
+                    hack_cmd(1),
+                    Command::Capture {
+                        portal: PortalId(1),
+                    },
+                ],
+            )],
+        );
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Hacked { .. })
+        ));
+        let keys_before = state
+            .agent(AgentId(0))
+            .map(|a| a.keys[&PortalId(1)])
+            .unwrap();
+        assert!(keys_before >= 1, "the hack yielded at least one key");
+        state.advance_round();
+
+        // Round 3: return to P0's range and link P0 -> P1.
+        let report = run(
+            &mut state,
+            &[stream(
+                3,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![
+                    Command::Move {
+                        destination: Coord::new(10_000, 5_000),
+                    },
+                    link_cmd(0, 1),
+                ],
+            )],
+        );
+        let outcomes = &report.execution_order[0].outcomes;
+        assert!(matches!(outcomes[0], CommandOutcome::Ok(_)), "the move ran");
+        let (link, fields) = linked(&outcomes[1]);
+        assert_eq!(
+            link,
+            LinkId::new(PortalId(0), PortalId(1)).expect("canonical")
+        );
+        assert!(fields.is_empty(), "no triangle exists");
+        // Exactly one target key consumed, and the edge is in the graph.
+        assert_eq!(
+            state
+                .agent(AgentId(0))
+                .map(|a| a.keys.get(&PortalId(1)).copied()),
+            Some(Some(keys_before - 1))
+        );
+        assert!(state.link_graph().link(link).is_some());
+        // LINK_CREATED broadcast; the capture events precede it.
+        assert!(matches!(
+            state.events()[state.events().len() - 1].kind,
+            crate::event::EventKind::LinkCreated { .. }
+        ));
+    }
+
+    // Checklist 19: unknown portals DROP at execution time (D27) — the
+    // stream still occupies its ordering slot.
+    #[test]
+    fn link_unknown_portals_drop_at_execution_time() {
+        let mut state = standard_state();
+        let report = run(&mut state, &[enl(vec![link_cmd(9, 0), link_cmd(0, 9)])]);
+        assert_eq!(
+            report.slots.get(&AgentId(0)),
+            Some(&SlotStatus::Executed {
+                bucket: 0,
+                receive_seq: 0
+            }),
+            "the stream executed and kept its slot"
+        );
+        let outcomes = &report.execution_order[0].outcomes;
+        assert_eq!(
+            drop_reason(&outcomes[0]),
+            DropReason::PortalNotFound {
+                portal: PortalId(9)
+            },
+            "unknown source reports first"
+        );
+        assert_eq!(
+            drop_reason(&outcomes[1]),
+            DropReason::PortalNotFound {
+                portal: PortalId(9)
+            },
+            "then the unknown target"
+        );
+        assert!(state.events().is_empty());
+    }
+
+    // Checklist 20: a self loop reports before any ownership check.
+    #[test]
+    fn link_self_loop_drops() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Res, 100),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 0)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkSelfLoop {
+                portal: PortalId(0)
+            },
+            "self loop beats the enemy-owner failure"
+        );
+    }
+
+    // Checklist 21: ownership reports the source first, then the target,
+    // with the owner in the payload.
+    #[test]
+    fn link_portal_not_owned_reports_source_then_target() {
+        // Neutral source (P0), ENL target (P1).
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                enl_portal(1, 14_000, 10_000),
+            ],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkPortalNotOwned {
+                portal: PortalId(0),
+                owner: Owner::Neutral
+            }
+        );
+
+        // ENL source (P0), enemy target (P1).
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 10_000, 10_000),
+                portal_fixture(1, 14_000, 10_000, Owner::Res, 100),
+            ],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkPortalNotOwned {
+                portal: PortalId(1),
+                owner: Owner::Res
+            }
+        );
+    }
+
+    // Checklist 22: the closed operation range applies to the SOURCE only —
+    // standing near the target does not satisfy the rule.
+    #[test]
+    fn link_range_is_closed_and_checks_source_only() {
+        let portals = || vec![enl_portal(0, 10_000, 10_000), enl_portal(1, 14_000, 10_000)];
+        // Agent exactly 5_000 cm below P0 (the closed boundary): succeeds.
+        let mut state = link_state(
+            &base_config(),
+            portals(),
+            Coord::new(10_000, 5_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            linked(&report.execution_order[0].outcomes[0]).0,
+            LinkId::new(PortalId(0), PortalId(1)).expect("canonical")
+        );
+
+        // Agent exactly 5_000 cm below P1 — within the TARGET's closed range
+        // but ~6_403 cm from the SOURCE: directional DROP.
+        let mut state = link_state(
+            &base_config(),
+            portals(),
+            Coord::new(14_000, 5_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::OutOfOperationRange {
+                portal: PortalId(0)
+            }
+        );
+    }
+
+    // Checklist 23: a missing target key mutates nothing.
+    #[test]
+    fn link_missing_target_key_drops_without_mutation() {
+        let mut state = link_state(
+            &base_config(),
+            vec![enl_portal(0, 10_000, 10_000), enl_portal(1, 14_000, 10_000)],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(0), 2); // source keys only
+        let before = agent_snapshot(&state, AgentId(0));
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkMissingTargetKey {
+                portal: PortalId(1)
+            }
+        );
+        assert_eq!(agent_snapshot(&state, AgentId(0)), before);
+        assert!(state.link_graph().links().is_empty());
+    }
+
+    // Checklist 24: MAX_LINK_DISTANCE is closed — the exact boundary
+    // succeeds, one unit further DROPs (squared compare, no square root).
+    #[test]
+    fn link_distance_closed_boundary() {
+        let mut cfg = base_config();
+        cfg.max_link_distance_cm = 10_000;
+        // Distance exactly 10_000.
+        let mut state = link_state(
+            &cfg,
+            vec![enl_portal(0, 10_000, 10_000), enl_portal(1, 20_000, 10_000)],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Linked { .. })
+        ));
+
+        // One unit further (10_001): DROP.
+        let mut state = link_state(
+            &cfg,
+            vec![enl_portal(0, 10_000, 10_000), enl_portal(1, 20_001, 10_000)],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkDistanceExceeded {
+                source: PortalId(0),
+                target: PortalId(1)
+            }
+        );
+    }
+
+    // Checklist 25: with A-B existing, both LINK(A,B) and LINK(B,A) DROP
+    // naming the same canonical LinkId.
+    #[test]
+    fn link_duplicate_pair_drops_both_directions() {
+        let mut state = link_state(
+            &base_config(),
+            vec![enl_portal(0, 10_000, 10_000), enl_portal(1, 14_000, 10_000)],
+            Coord::new(10_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        // Keys for both directions: each command names a different target.
+        state.grant_keys(AgentId(0), PortalId(1), 2);
+        state.grant_keys(AgentId(0), PortalId(0), 2);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1), link_cmd(1, 0)])]);
+        let canonical = LinkId::new(PortalId(0), PortalId(1)).expect("canonical");
+        for outcome in &report.execution_order[0].outcomes {
+            assert_eq!(
+                drop_reason(outcome),
+                DropReason::LinkAlreadyExists { link: canonical }
+            );
+        }
+    }
+
+    // Checklist 26: a portal strictly inside the closed segment blocks (the
+    // first offender in ascending PortalId reports); the segment endpoints
+    // themselves are exempt.
+    #[test]
+    fn link_blocked_by_portal_on_closed_segment() {
+        let mut cfg = base_config();
+        cfg.portal_min_distance_cm = 1_000;
+        // P2 (7_000) and P3 (12_000) both lie strictly inside P0-P1.
+        let mut state = link_state(
+            &cfg,
+            vec![
+                enl_portal(0, 4_000, 10_000),
+                enl_portal(1, 16_000, 10_000),
+                enl_portal(2, 7_000, 10_000),
+                enl_portal(3, 12_000, 10_000),
+            ],
+            Coord::new(4_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkBlockedByPortal {
+                link: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+                portal: PortalId(2),
+            },
+            "the first offender ascending (P2 before P3)"
+        );
+
+        // The short link between the two interior portals is legal: its own
+        // endpoints are exempt and no other portal lies on [7_000, 12_000].
+        state.grant_keys(AgentId(0), PortalId(3), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(2, 3)])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Linked { .. })
+        ));
+    }
+
+    // Checklist 27: a proper X crossing of an existing link DROPs naming the
+    // first existing link ascending.
+    #[test]
+    fn link_crossing_existing_link_drops() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 16_000, 16_000),
+                enl_portal(2, 4_000, 16_000),
+                enl_portal(3, 16_000, 4_000),
+            ],
+            Coord::new(4_000, 16_000), // the agent stands ON the source P2
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1); // the diagonal (0,1)
+        state.grant_keys(AgentId(0), PortalId(3), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(2, 3)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkIntersectsLink {
+                link: LinkId::new(PortalId(2), PortalId(3)).expect("canonical"),
+                existing: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+            }
+        );
+    }
+
+    // Checklist 28: a fan of links sharing one portal endpoint is entirely
+    // legal; collinear overlap WITHOUT a shared portal is illegal.
+    #[test]
+    fn link_shared_endpoint_legal_collinear_overlap_illegal() {
+        let mut cfg = base_config();
+        cfg.portal_min_distance_cm = 1_000;
+        let mut state = link_state(
+            &cfg,
+            vec![
+                enl_portal(0, 4_000, 10_000),
+                enl_portal(1, 12_000, 12_000),
+                enl_portal(2, 16_000, 4_000),
+                enl_portal(3, 12_000, 4_000),
+            ],
+            Coord::new(4_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        // Fan from P0: (0,1), (0,2), (0,3) — every pair shares P0.
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        state.grant_keys(AgentId(0), PortalId(2), 1);
+        state.grant_keys(AgentId(0), PortalId(3), 1);
+        let report = run(
+            &mut state,
+            &[enl(vec![link_cmd(0, 1), link_cmd(0, 2), link_cmd(0, 3)])],
+        );
+        for outcome in &report.execution_order[0].outcomes {
+            assert!(
+                matches!(outcome, CommandOutcome::Ok(CommandEffect::Linked { .. })),
+                "shared-portal fans are legal: {outcome:?}"
+            );
+        }
+
+        // Collinear overlap without a shared portal: existing (0,4) spans
+        // y = 10_000 from x 4_000 to 16_000; the new link (5,6) lies strictly
+        // inside that span on the same line.
+        let mut state = link_state(
+            &cfg,
+            vec![
+                enl_portal(0, 0, 10_000),
+                enl_portal(1, 24_000, 10_000),
+                enl_portal(2, 8_000, 10_000),
+                enl_portal(3, 14_000, 10_000),
+            ],
+            Coord::new(8_000, 10_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        state.grant_keys(AgentId(0), PortalId(3), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(2, 3)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkIntersectsLink {
+                link: LinkId::new(PortalId(2), PortalId(3)).expect("canonical"),
+                existing: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+            },
+            "collinear overlap with no shared portal is an illegal intersection"
+        );
+    }
+
+    // Checklist 29: a link through a field interior is legal (R-LINK-02) —
+    // only portal-on-segment and link crossings block.
+    #[test]
+    fn link_inside_existing_field_is_legal() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 20_000, 4_000),
+                enl_portal(2, 4_000, 20_000),
+                enl_portal(3, 8_000, 8_000),
+                enl_portal(4, 12_000, 8_000),
+            ],
+            Coord::new(8_000, 8_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        seed_link(&mut state, AgentId(0), 1, 2);
+        let field = FieldId::new(PortalId(0), PortalId(1), PortalId(2)).expect("canonical");
+        assert!(state.link_graph().fields().contains_key(&field));
+
+        state.grant_keys(AgentId(0), PortalId(4), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(3, 4)])]);
+        let (link, fields) = linked(&report.execution_order[0].outcomes[0]);
+        assert_eq!(
+            link,
+            LinkId::new(PortalId(3), PortalId(4)).expect("canonical")
+        );
+        assert!(
+            fields.is_empty(),
+            "an interior chord closes no triangle here"
+        );
+        assert!(
+            state.link_graph().fields().contains_key(&field),
+            "the surrounding field survives"
+        );
+    }
+
+    // Checklist 30: stacked violations report the first frozen reason —
+    // owner before key before distance before duplicate before geometry.
+    #[test]
+    fn link_check_order_is_contractual() {
+        // Owner beats key, distance, AND duplicate: the source is enemy
+        // owned, the agent holds no key, the pair is over max distance, and
+        // an edge already exists (seeded past the resolver's checks).
+        let mut cfg = base_config();
+        cfg.max_link_distance_cm = 5_000;
+        let build = |owner_p0: Owner| {
+            link_state(
+                &cfg,
+                vec![
+                    portal_fixture(0, 10_000, 10_000, owner_p0, 100),
+                    enl_portal(1, 20_000, 10_000),
+                ],
+                Coord::new(10_000, 10_000),
+                Coord::new(29_000, 29_000),
+            )
+        };
+        let mut state = build(Owner::Res);
+        seed_link(&mut state, AgentId(0), 0, 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkPortalNotOwned {
+                portal: PortalId(0),
+                owner: Owner::Res
+            }
+        );
+
+        // Key beats distance and duplicate: everything ENL owned, no key.
+        let mut state = build(Owner::Enl);
+        seed_link(&mut state, AgentId(0), 0, 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkMissingTargetKey {
+                portal: PortalId(1)
+            }
+        );
+
+        // Distance beats duplicate: key granted, pair 10_000 > 5_000 apart.
+        let mut state = build(Owner::Enl);
+        seed_link(&mut state, AgentId(0), 0, 1);
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkDistanceExceeded {
+                source: PortalId(0),
+                target: PortalId(1)
+            }
+        );
+
+        // Duplicate beats geometry: the pair is legal by distance but the
+        // edge exists AND a crossing edge exists — the duplicate reports.
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 16_000, 16_000),
+                enl_portal(2, 4_000, 16_000),
+                enl_portal(3, 16_000, 4_000),
+            ],
+            Coord::new(4_000, 4_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 2, 3);
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkAlreadyExists {
+                link: LinkId::new(PortalId(0), PortalId(1)).expect("canonical")
+            }
+        );
+
+        // Portal-on-segment beats intersection: the new link BOTH passes
+        // through portal 4 and crosses existing (2,3) — the portal reports.
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 16_000, 16_000),
+                enl_portal(2, 10_000, 6_000),
+                enl_portal(3, 6_000, 10_000),
+                enl_portal(4, 10_000, 10_000),
+            ],
+            Coord::new(4_000, 4_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 2, 3);
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+        assert_eq!(
+            drop_reason(&report.execution_order[0].outcomes[0]),
+            DropReason::LinkBlockedByPortal {
+                link: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+                portal: PortalId(4),
+            }
+        );
+    }
+
+    // Checklist 31 (R-RESOLVE-04 row 2): the first LINK in execution order
+    // is created; the later intersecting LINK DROPs.
+    #[test]
+    fn same_round_intersecting_links_r_resolve_04_row2() {
+        let mut cfg = base_config();
+        cfg.initial_agents_per_faction = 2;
+        let mut state = fixture_state(
+            &cfg,
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 16_000, 16_000),
+                enl_portal(2, 4_000, 16_000),
+                enl_portal(3, 16_000, 4_000),
+            ],
+            &[Coord::new(4_000, 4_000), Coord::new(4_000, 16_000)],
+            &[Coord::new(29_000, 29_000), Coord::new(29_000, 28_000)],
+        );
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        state.grant_keys(AgentId(1), PortalId(3), 1);
+        let first = stream(1, Faction::Enl, AgentId(0), 0, 0, vec![link_cmd(0, 1)]);
+        let second = stream(1, Faction::Enl, AgentId(1), 0, 1, vec![link_cmd(2, 3)]);
+        let report = run(&mut state, &[first, second]);
+
+        assert_eq!(report.execution_order.len(), 2);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Linked { .. })
+        ));
+        assert_eq!(
+            drop_reason(&report.execution_order[1].outcomes[0]),
+            DropReason::LinkIntersectsLink {
+                link: LinkId::new(PortalId(2), PortalId(3)).expect("canonical"),
+                existing: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+            }
+        );
+    }
+
+    // Checklist 32: a closing link emits LINK_CREATED then FIELD_CREATED per
+    // field ascending, and the effect lists the new field ids — layered
+    // fields included.
+    #[test]
+    fn link_completing_triangle_emits_events_in_frozen_order() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 20_000, 4_000),
+                enl_portal(2, 4_000, 20_000),
+                enl_portal(3, 20_000, 20_000),
+            ],
+            Coord::new(4_000, 20_000),
+            Coord::new(29_000, 29_000),
+        );
+        // Edges so that P2-P3 closes TWO layered fields: (0,2,3) and (1,2,3).
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        seed_link(&mut state, AgentId(0), 1, 2);
+        seed_link(&mut state, AgentId(0), 0, 3);
+        seed_link(&mut state, AgentId(0), 1, 3);
+        state.grant_keys(AgentId(0), PortalId(3), 1);
+        let events_before = state.events().len();
+
+        let report = run(&mut state, &[enl(vec![link_cmd(2, 3)])]);
+        let (link, fields) = linked(&report.execution_order[0].outcomes[0]);
+        assert_eq!(
+            link,
+            LinkId::new(PortalId(2), PortalId(3)).expect("canonical")
+        );
+        assert_eq!(
+            fields,
+            vec![
+                FieldId::new(PortalId(0), PortalId(2), PortalId(3)).expect("canonical"),
+                FieldId::new(PortalId(1), PortalId(2), PortalId(3)).expect("canonical"),
+            ],
+            "layered fields ascend in the effect"
+        );
+
+        let fresh: Vec<_> = state.events()[events_before..]
+            .iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(
+            fresh,
+            vec![
+                crate::event::EventKind::LinkCreated {
+                    faction: Faction::Enl,
+                    agent_id: AgentId(0),
+                    link: LinkId::new(PortalId(2), PortalId(3)).expect("canonical"),
+                },
+                crate::event::EventKind::FieldCreated {
+                    faction: Faction::Enl,
+                    agent_id: AgentId(0),
+                    field: FieldId::new(PortalId(0), PortalId(2), PortalId(3)).expect("canonical"),
+                },
+                crate::event::EventKind::FieldCreated {
+                    faction: Faction::Enl,
+                    agent_id: AgentId(0),
+                    field: FieldId::new(PortalId(1), PortalId(2), PortalId(3)).expect("canonical"),
+                },
+            ],
+            "LINK_CREATED then FIELD_CREATED per field ascending"
+        );
+    }
+
+    // Checklist 33: neutralization emits PORTAL_NEUTRALIZED, LINK_DESTROYED
+    // ascending, FIELD_DESTROYED ascending; unaffected neighbor fields
+    // survive; a layered field over two removed edges emits ONE destroy.
+    #[test]
+    fn attack_neutralization_cascades_in_frozen_event_order() {
+        let mut cfg = base_config();
+        cfg.attack_damage = 100;
+        let mut state = link_state(
+            &cfg,
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 20_000, 4_000),
+                enl_portal(2, 4_000, 20_000),
+                enl_portal(3, 20_000, 20_000),
+            ],
+            Coord::new(29_000, 29_000),
+            // RES sits 4_000 from P1 only.
+            Coord::new(20_000, 8_000),
+        );
+        // Field (0,1,2) and the disjoint-edge field (1,2,3) via edges
+        // (1,2),(1,3),(2,3).
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        seed_link(&mut state, AgentId(0), 1, 2);
+        seed_link(&mut state, AgentId(0), 1, 3);
+        seed_link(&mut state, AgentId(0), 2, 3);
+        assert_eq!(state.link_graph().fields().len(), 2);
+
+        let report = run(&mut state, &[res(vec![Command::Attack])]);
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Attacked { .. })
+        ));
+        let kinds: Vec<_> = state.events().iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::event::EventKind::PortalAttacked {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    portal: PortalId(1),
+                    damage: 100,
+                    hp_after: 0,
+                },
+                crate::event::EventKind::PortalNeutralized {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    portal: PortalId(1),
+                },
+                crate::event::EventKind::LinkDestroyed {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    link: LinkId::new(PortalId(0), PortalId(1)).expect("canonical"),
+                },
+                crate::event::EventKind::LinkDestroyed {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    link: LinkId::new(PortalId(1), PortalId(2)).expect("canonical"),
+                },
+                crate::event::EventKind::LinkDestroyed {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    link: LinkId::new(PortalId(1), PortalId(3)).expect("canonical"),
+                },
+                // The layered field (0,1,2) spans TWO removed edges ((0,1)
+                // and (1,2)) — one FIELD_DESTROYED, not two. (1,2,3) also
+                // dies with edges (1,2)/(1,3).
+                crate::event::EventKind::FieldDestroyed {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    field: FieldId::new(PortalId(0), PortalId(1), PortalId(2)).expect("canonical"),
+                },
+                crate::event::EventKind::FieldDestroyed {
+                    faction: Faction::Res,
+                    agent_id: AgentId(1),
+                    field: FieldId::new(PortalId(1), PortalId(2), PortalId(3)).expect("canonical"),
+                },
+            ]
+        );
+        assert!(
+            state.link_graph().fields().is_empty(),
+            "both fields touched P1"
+        );
+        // The edges not incident to P1 survive.
+        assert!(
+            state
+                .link_graph()
+                .link(LinkId::new(PortalId(0), PortalId(2)).expect("c"))
+                .is_some()
+        );
+        assert!(
+            state
+                .link_graph()
+                .link(LinkId::new(PortalId(2), PortalId(3)).expect("c"))
+                .is_some()
+        );
+    }
+
+    // Checklist 34: round-end settlement semantics — a field destroyed in
+    // its creation round scores 0; surviving fields score; the final round
+    // still settles.
+    #[test]
+    fn settle_scores_after_all_streams() {
+        let square = || {
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 20_000, 4_000),
+                enl_portal(2, 4_000, 20_000),
+            ]
+        };
+        // (a) Created and destroyed in the SAME round: scores 0.
+        let mut cfg = base_config();
+        cfg.attack_damage = 100;
+        let mut state = link_state(
+            &cfg,
+            square(),
+            Coord::new(20_000, 4_000),
+            Coord::new(20_000, 8_000), // RES 4_000 from P1
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        state.grant_keys(AgentId(0), PortalId(2), 1);
+        let report = run(
+            &mut state,
+            &[
+                enl(vec![link_cmd(1, 2)]),  // closes (0,1,2) — ENL settles first
+                res(vec![Command::Attack]), // neutralizes P1, field dies
+            ],
+        );
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Linked { .. })
+        ));
+        assert_eq!(
+            report.score2_delta.get(&Faction::Enl),
+            Some(&0),
+            "created-then-destroyed fields score nothing"
+        );
+        assert_eq!(state.score(Faction::Enl), 0);
+
+        // (b) A surviving field scores its full area2 (256_000_000).
+        let mut state = link_state(
+            &base_config(),
+            square(),
+            Coord::new(4_000, 20_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        let report = run(&mut state, &[enl(vec![link_cmd(2, 1)])]);
+        assert_eq!(report.score2_delta.get(&Faction::Enl), Some(&256_000_000));
+        assert_eq!(state.score(Faction::Enl), 256_000_000);
+        state.advance_round();
+        let report = run(&mut state, &[]);
+        assert_eq!(
+            report.score2_delta.get(&Faction::Enl),
+            Some(&256_000_000),
+            "the surviving field scores again next round"
+        );
+
+        // (c) The FINAL round still settles: total_rounds == 2, field closed
+        // in round 2, scored once.
+        let mut cfg = base_config();
+        cfg.total_rounds = 2;
+        let mut state = link_state(
+            &cfg,
+            square(),
+            Coord::new(4_000, 20_000),
+            Coord::new(29_000, 29_000),
+        );
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        state.grant_keys(AgentId(0), PortalId(1), 1);
+        state.advance_round();
+        let _ = run(&mut state, &[]); // round 1 settles nothing
+        assert_eq!(state.score(Faction::Enl), 0);
+        let report = run(
+            &mut state,
+            &[stream(
+                2,
+                Faction::Enl,
+                AgentId(0),
+                0,
+                0,
+                vec![link_cmd(2, 1)],
+            )],
+        );
+        assert_eq!(
+            report.score2_delta.get(&Faction::Enl),
+            Some(&256_000_000),
+            "the last round's new field scores once (R-SCORE-01)"
+        );
+        assert_eq!(state.score(Faction::Enl), 256_000_000);
+        assert_eq!(state.final_result(), MatchResult::EnlWin);
+    }
+
+    // Checklist 35: the report's delta map equals the per-faction sum of
+    // surviving field areas.
+    #[test]
+    fn round_report_carries_score2_delta() {
+        let mut state = link_state(
+            &base_config(),
+            vec![
+                enl_portal(0, 4_000, 4_000),
+                enl_portal(1, 20_000, 4_000),
+                enl_portal(2, 4_000, 20_000),
+                enl_portal(3, 20_000, 20_000),
+                enl_portal(4, 28_000, 4_000),
+                portal_fixture(5, 4_000, 30_000, Owner::Res, 100),
+            ],
+            Coord::new(4_000, 4_000),
+            Coord::new(4_000, 30_000),
+        );
+        // ENL field (0,1,2): 256_000_000.
+        seed_link(&mut state, AgentId(0), 0, 1);
+        seed_link(&mut state, AgentId(0), 0, 2);
+        seed_link(&mut state, AgentId(0), 1, 2);
+        // RES field (3,4,5): cross((20,20)->(28,4), (20,20)->(4,30))
+        // = 8_000*10_000 - 16_000*16_000 -> 176_000_000.
+        seed_link(&mut state, AgentId(1), 3, 4);
+        seed_link(&mut state, AgentId(1), 3, 5);
+        seed_link(&mut state, AgentId(1), 4, 5);
+
+        let report = run(&mut state, &[]);
+        let mut expected = BTreeMap::new();
+        expected.insert(Faction::Enl, 256_000_000u128);
+        expected.insert(Faction::Res, 176_000_000u128);
+        assert_eq!(report.score2_delta, expected);
+        assert_eq!(state.score(Faction::Enl), 256_000_000u128);
+        assert_eq!(state.score(Faction::Res), 176_000_000u128);
+    }
+
+    // Checklist 36: reinforcement lands after the boundary round's whole
+    // settlement — absent from its slots and snapshot, actable in the next.
+    #[test]
+    fn reinforcement_boundary_timing() {
+        let mut cfg = base_config();
+        cfg.total_rounds = 6;
+        cfg.reinforcement_interval_rounds = 2;
+        cfg.reinforcement_agents_per_faction = 1;
+        let mut state = link_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            Coord::new(10_000, 5_000),
+            Coord::new(6_000, 10_000),
+        );
+
+        // Round 1: no boundary (1 % 2 != 0), nothing spawns.
+        let _ = run(&mut state, &[]);
+        assert!(state.events().is_empty());
+        assert_eq!(state.agents().len(), 2);
+        state.advance_round();
+
+        // Round 2: the boundary — agents spawn AFTER the round's slots.
+        let report = run(&mut state, &[]);
+        assert_eq!(
+            report.slots.keys().copied().collect::<Vec<_>>(),
+            vec![AgentId(0), AgentId(1)],
+            "the new agents take no boundary-round slot"
+        );
+        assert_eq!(report.score2_delta.get(&Faction::Enl), Some(&0));
+        assert!(matches!(
+            state.events()[0].kind,
+            crate::event::EventKind::Reinforcement { .. }
+        ));
+        assert_eq!(state.events()[0].round, 2);
+        assert_eq!(state.agents().len(), 4);
+        let position = state
+            .agent(AgentId(2))
+            .map(|a| a.position)
+            .expect("spawned");
+        assert_eq!(state.agent(AgentId(3)).map(|a| a.position), Some(position));
+        state.advance_round();
+
+        // Round 3: the reinforcement agent CAN act in its first round.
+        let report = run(
+            &mut state,
+            &[stream(
+                3,
+                Faction::Enl,
+                AgentId(2),
+                0,
+                0,
+                vec![Command::Move {
+                    destination: position,
+                }],
+            )],
+        );
+        assert!(matches!(
+            report.execution_order[0].outcomes[0],
+            CommandOutcome::Ok(CommandEffect::Moved { .. })
+        ));
+    }
+
+    // Checklist 37: both factions' new agents sit at the oracle-recomputed
+    // shared position (golden cross-check, ADR-0011).
+    #[test]
+    fn reinforcement_position_matches_oracle_golden() {
+        let game_seed = 0xA11CE;
+        let mut cfg = base_config();
+        cfg.total_rounds = 10;
+        cfg.reinforcement_interval_rounds = 3;
+        let mut state = link_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            Coord::new(10_000, 5_000),
+            Coord::new(6_000, 10_000),
+        );
+        // Rounds 3, 6, 9 are boundaries; 9 < 10 spawns the last block.
+        let mut positions = Vec::new();
+        for round in 1..=9u32 {
+            let _ = run_with(game_seed, &mut state, &[]);
+            if round % 3 == 0 && round < 10 {
+                let index = round / 3;
+                let oracle = RandomOracle::new(game_seed);
+                let expected = oracle.reinforcement_position(index, 30_001, 30_001);
+                let first = 2 + 2 * (index - 1); // ENL newcomer of this block
+                assert_eq!(
+                    state.agent(AgentId(first)).map(|a| a.position),
+                    Some(expected),
+                    "round {round} ENL newcomer at the oracle position"
+                );
+                assert_eq!(
+                    state.agent(AgentId(first + 1)).map(|a| a.position),
+                    Some(expected),
+                    "round {round} RES newcomer shares it"
+                );
+                positions.push(expected);
+            }
+            state.advance_round();
+        }
+        assert_eq!(positions.len(), 3);
+        assert!(
+            positions[0] != positions[1] || positions[1] != positions[2],
+            "different interval indices draw different addresses"
+        );
+    }
+
+    // Checklist 38: no ghost spawn past the final round.
+    #[test]
+    fn reinforcement_skipped_past_final_round() {
+        let mut cfg = base_config();
+        cfg.total_rounds = 4;
+        cfg.reinforcement_interval_rounds = 4;
+        let mut state = link_state(
+            &cfg,
+            vec![
+                portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+            ],
+            Coord::new(10_000, 5_000),
+            Coord::new(6_000, 10_000),
+        );
+        for _round in 1..=4u32 {
+            let _ = run(&mut state, &[]);
+            state.advance_round();
+        }
+        assert!(state.events().is_empty(), "round 4 == total: no spawn");
+        assert_eq!(state.agents().len(), 2);
+        assert_eq!(state.next_agent_id(), AgentId(2));
+    }
+
+    // Checklist 39: the default schedule grows each faction 3 -> 7 with
+    // consecutive global ids, ENL block first.
+    #[test]
+    fn reinforcement_roster_growth_three_to_seven() {
+        let mut cfg = GameConfig::default();
+        cfg.map_width_cm = 30_000;
+        cfg.map_height_cm = 30_000;
+        cfg.portal_count = 2;
+        cfg.portal_cluster_count = 2;
+        cfg.portal_min_distance_cm = 4_000;
+        let map = MapDefinition::new(vec![
+            portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+            portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+        ]);
+        let (enl_roster, res_roster) = GameState::initial_roster(&cfg);
+        let enl_entries: Vec<(AgentId, Coord)> = enl_roster
+            .iter()
+            .copied()
+            .zip([Coord::new(0, 0), Coord::new(1_000, 0), Coord::new(2_000, 0)])
+            .collect();
+        let res_entries: Vec<(AgentId, Coord)> = res_roster
+            .iter()
+            .copied()
+            .zip([
+                Coord::new(0, 1_000),
+                Coord::new(1_000, 1_000),
+                Coord::new(2_000, 1_000),
+            ])
+            .collect();
+        let enl = validate_initial_spawn_set(&enl_roster, &enl_entries, &cfg).expect("spawns");
+        let res = validate_initial_spawn_set(&res_roster, &res_entries, &cfg).expect("spawns");
+        let mut state = GameState::new(cfg, &map, &enl, &res).expect("state");
+
+        // Boundaries 100/200/300/400 under the default schedule: k = 1 each.
+        let mut expected_enl: Vec<AgentId> = enl_roster.clone();
+        let mut expected_res: Vec<AgentId> = res_roster.clone();
+        for (boundary, next_id) in [(100u32, 6u32), (200, 8), (300, 10), (400, 12)] {
+            while state.round() < boundary {
+                let _ = run(&mut state, &[]);
+                state.advance_round();
+            }
+            let report = run(&mut state, &[]); // the boundary round itself
+            assert_eq!(state.round(), boundary);
+            // The boundary round's slots cover only the PRE-growth roster;
+            // the newcomers join after settlement.
+            assert_eq!(
+                report.slots.keys().copied().max().expect("slots exist"),
+                AgentId(next_id - 1),
+                "boundary {boundary}: newcomers take no slot"
+            );
+            assert_eq!(
+                state.agent(AgentId(next_id)).map(|a| a.faction),
+                Some(Faction::Enl),
+                "boundary {boundary}: ENL block continues the counter"
+            );
+            assert_eq!(
+                state.agent(AgentId(next_id + 1)).map(|a| a.faction),
+                Some(Faction::Res)
+            );
+            expected_enl.push(AgentId(next_id));
+            expected_res.push(AgentId(next_id + 1));
+            let enl_count = state
+                .agents()
+                .values()
+                .filter(|a| a.faction == Faction::Enl)
+                .count();
+            let res_count = state
+                .agents()
+                .values()
+                .filter(|a| a.faction == Faction::Res)
+                .count();
+            assert_eq!(enl_count, expected_enl.len(), "boundary {boundary} ENL");
+            assert_eq!(res_count, expected_res.len(), "boundary {boundary} RES");
+            state.advance_round();
+        }
+        assert_eq!(expected_enl.len(), 7, "3 -> 7 across four boundaries");
+        assert_eq!(expected_res.len(), 7);
+        // Consecutive global blocks: ids 6..=13 with ENL first in each pair.
+        let mut all: Vec<u32> = state.agents().keys().map(|id| id.0).collect();
+        all.sort_unstable();
+        assert_eq!(all, (0..14).collect::<Vec<_>>());
+        assert_eq!(state.next_agent_id(), AgentId(14));
     }
 }

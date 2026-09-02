@@ -97,6 +97,39 @@ impl LinkId {
     }
 }
 
+/// Derived triangle identity over three distinct portals (R-FIELD-01): the
+/// canonical `a < b < c` triple makes any vertex permutation the same field.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct FieldId {
+    pub a: PortalId,
+    pub b: PortalId,
+    pub c: PortalId,
+}
+
+impl FieldId {
+    /// Canonical identity for the unordered portal triple; `None` when any
+    /// two portals coincide (a field needs three distinct vertices).
+    pub fn new(a: PortalId, b: PortalId, c: PortalId) -> Option<FieldId> {
+        let mut triple = [a, b, c];
+        triple.sort_unstable();
+        let [min, mid, max] = triple;
+        if min == mid || mid == max {
+            None
+        } else {
+            Some(FieldId {
+                a: min,
+                b: mid,
+                c: max,
+            })
+        }
+    }
+
+    /// Whether portal `p` is a vertex of this field.
+    pub fn contains(&self, p: PortalId) -> bool {
+        p == self.a || p == self.b || p == self.c
+    }
+}
+
 /// Integer two-dimensional coordinate in centimetres, origin at the map's
 /// lower-left corner (R-MAP-01).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -113,9 +146,10 @@ impl Coord {
 
 /// Command payload submitted inside an Agent Command Stream (R-ACTION-01).
 ///
-/// M2 carries MOVE, ATTACK, CAPTURE, and RECHARGE; M3 adds HACK and TRANSFER
-/// (both auxiliary). `Clone` but not `Copy` since D30 — TRANSFER owns a key
-/// map, and every construction site moves or borrows commands anyway.
+/// M2 carries MOVE, ATTACK, CAPTURE, and RECHARGE; M3 adds HACK and TRANSFER;
+/// M4 adds LINK (all auxiliary except ATTACK/CAPTURE/RECHARGE). `Clone` but
+/// not `Copy` since D30 — TRANSFER owns a key map, and every construction
+/// site moves or borrows commands anyway.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
     /// Absolute destination coordinate; cost is billed per segment from the
@@ -142,18 +176,36 @@ pub enum Command {
         supply: u32,
         keys: BTreeMap<PortalId, u32>,
     },
+    /// Creates a link between two portals (R-LINK-01). Auxiliary action. The
+    /// direction is command-local: the acting agent must stand within
+    /// `PORTAL_OPERATION_RANGE` of `source_portal` and spends one key of
+    /// `target_portal`; the resulting link is the canonical undirected edge
+    /// `LinkId(min, max)`, so `LINK(A,B)` and `LINK(B,A)` name the same link.
+    Link {
+        source_portal: PortalId,
+        target_portal: PortalId,
+    },
 }
 
 impl Command {
     /// Whether this command belongs to the Major Action category
     /// (R-ACTION-01): ATTACK, RECHARGE, and CAPTURE — at most one per agent
-    /// per round. MOVE, HACK, and TRANSFER (LINK lands later) are auxiliary.
+    /// per round. MOVE, HACK, TRANSFER, and LINK are auxiliary.
     pub fn is_major(&self) -> bool {
         matches!(
             self,
             Command::Attack | Command::Capture { .. } | Command::Recharge { .. }
         )
     }
+}
+
+/// Normal end-of-match result (R-SCORE-01): the plain `score2` comparison
+/// with no secondary tie-break — equal scores are a `Draw` (CONTEXT Draw).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum MatchResult {
+    EnlWin,
+    ResWin,
+    Draw,
 }
 
 #[cfg(test)]
@@ -304,6 +356,91 @@ mod tests {
         for faction in [Faction::Enl, Faction::Res] {
             assert_eq!(faction.opposite().opposite(), faction);
         }
+    }
+
+    // Checklist 1 (M4): FieldId canonicalizes any permutation to a<b<c and
+    // rejects any repeated portal.
+    #[test]
+    fn fieldid_canonicalizes_sorted_triple_and_rejects_duplicates() {
+        let a = PortalId(2);
+        let b = PortalId(7);
+        let c = PortalId(5);
+        let canonical = FieldId { a, b: c, c: b };
+        for (x, y, z) in [
+            (a, c, b),
+            (a, b, c),
+            (c, a, b),
+            (c, b, a),
+            (b, a, c),
+            (b, c, a),
+        ] {
+            assert_eq!(FieldId::new(x, y, z), Some(canonical), "permutation");
+        }
+        assert!(canonical.a < canonical.b && canonical.b < canonical.c);
+        assert_eq!(canonical.a, PortalId(2));
+        assert_eq!(canonical.b, PortalId(5));
+        assert_eq!(canonical.c, PortalId(7));
+        assert!(canonical.contains(PortalId(5)));
+        assert!(!canonical.contains(PortalId(0)));
+        // Any repeated portal yields no field.
+        for (x, y, z) in [(a, a, b), (a, b, a), (b, a, a), (a, a, a)] {
+            assert_eq!(FieldId::new(x, y, z), None, "repeated portal");
+        }
+    }
+
+    // Checklist 2 (M4): LINK payload shape; auxiliary classification keeps
+    // the structural caps unchanged (several LINKs in one stream).
+    #[test]
+    fn link_command_is_auxiliary_with_source_target_payload() {
+        let command = Command::Link {
+            source_portal: PortalId(3),
+            target_portal: PortalId(11),
+        };
+        match command {
+            Command::Link {
+                source_portal,
+                target_portal,
+            } => {
+                assert_eq!(source_portal, PortalId(3));
+                assert_eq!(target_portal, PortalId(11));
+            }
+            _ => panic!("unexpected command variant"),
+        }
+        assert!(!command.is_major(), "LINK is an Auxiliary Action");
+        // Several auxiliary LINK commands fit one stream (only majors cap at
+        // one); LinkId::new gives both orders the same undirected identity.
+        let links = [
+            Command::Link {
+                source_portal: PortalId(0),
+                target_portal: PortalId(1),
+            },
+            Command::Link {
+                source_portal: PortalId(1),
+                target_portal: PortalId(2),
+            },
+            Command::Link {
+                source_portal: PortalId(2),
+                target_portal: PortalId(0),
+            },
+        ];
+        assert!(links.iter().all(|c| !c.is_major()));
+        assert_eq!(
+            LinkId::new(PortalId(0), PortalId(1)),
+            LinkId::new(PortalId(1), PortalId(0))
+        );
+    }
+
+    // Checklist 3 (M4): MatchResult covers exactly the three variants; the
+    // shape is exercised through GameState::final_result in state.rs.
+    #[test]
+    fn match_result_covers_three_variants() {
+        let results = [MatchResult::EnlWin, MatchResult::ResWin, MatchResult::Draw];
+        let distinct: std::collections::BTreeSet<_> = results.iter().collect();
+        assert_eq!(distinct.len(), 3);
+        assert!(results.iter().all(|r| matches!(
+            r,
+            MatchResult::EnlWin | MatchResult::ResWin | MatchResult::Draw
+        )));
     }
 
     #[test]

@@ -8,6 +8,8 @@
 //! Milestone M2 adds: event (R-EVENT-01 broadcast log), state (GameState),
 //! resolve (R-RESOLVE intake/ordering/execution), observe (R-VIS faction
 //! views), harness (in-process scripted matches).
+//! Milestone M4 adds: linkgraph (link storage + derived field cache,
+//! R-LINK/R-FIELD) and the field scoring / reinforcement settlement.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +17,7 @@ pub mod config;
 pub mod event;
 pub mod geometry;
 pub mod harness;
+pub mod linkgraph;
 pub mod map;
 pub mod observe;
 pub mod resolve;

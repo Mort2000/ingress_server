@@ -35,7 +35,8 @@ after each milestone; every agent should read it before starting work.
 | M0 skeleton | done | c0a1495 | workspace, ADR-0012; corrected by ADR-0013 (cargo mirror, official blake3) |
 | M1 core geometry/RNG | done | 6f9966b | 97 tests green; types/config/geometry/rng/map/spawn; decisions D1–D15 |
 | M2 basic combat | done | e530047 | 156 tests green; state/event/resolve/observe/harness; decisions D16–D29; reviewer major (unchecked u64 in virtual receive) fixed |
-| M3 economy | done | (this commit) | 180 tests green; HACK/TRANSFER in types/state/resolve/harness; decisions D30–D35; golden vectors pinned to the M1 RNG address; economy + determinism acceptance gates |
+| M3 economy | done | d8fa100 | 180 tests green; HACK/TRANSFER in types/state/resolve/harness; decisions D30–D35; golden vectors pinned to the M1 RNG address; economy + determinism acceptance gates |
+| M4 field game | done | (this commit) | 229 tests green; linkgraph/state/event/resolve/observe extended; first playable: full 500-round match in-process (0.08s); decisions D36–D43 |
 
 ## Frozen design decisions (must not silently change)
 
@@ -103,3 +104,23 @@ From M3 review (minor):
 - No test pins that `HACK_LIMIT_PER_EPOCH` is per (agent, portal) across DIFFERENT pairs (same-pair saturation is tested).
 - Public `epoch_index` panics on round == 0 (documented 1-based precondition, but public surface).
 - `command_hack_and_transfer_payload_shapes` is a compile-time tautology test.
+
+M4 (Basic Combat → Field Game) additions:
+
+- D36 storage — `linkgraph.rs`: `links: BTreeMap<LinkId, Link{faction}>`, adjacency `BTreeMap<PortalId, BTreeSet<PortalId>>`, `fields: BTreeMap<FieldId, Field{faction, area2}>` (area2 computed once at derivation); `FieldId` canonical `a<b<c`.
+- D37 field cache — `insert_link` derives fields from `adj(A) ∩ adj(B)` before the edge exists; `remove_links_incident` unions dead fields before removal (layered fields over two removed edges counted once); `fields_full_recompute` is the diagnostic cross-check (each triple once).
+- D38 LINK check order — source exists → target exists → self-loop → source owned → target owned → closed source range → target key → max-link-distance (squared i64) → duplicate canonical LinkId → portal-on-closed-segment (first offender ascending) → illegal intersection (first offender ascending).
+- D39 intersection composition — illegal iff `segments_intersect(new, existing) && !shared_portal_endpoint` (D8; collinear overlap counts as intersect); check 10 precedes 11; field interiors never block links.
+- D40 neutralize cascade — PORTAL_NEUTRALIZED → incident LINK_DESTROYED ascending → dead FIELD_DESTROYED ascending; a triangle's links share the endpoints' owner (faction invariant); D25 hook now returns the cascade inventory.
+- D41 score settlement — `settle_scores` at the end of `run_round` sums cached area2 into `Score2(u128)` and returns the delta map; `final_result` compares scores only, equal ⇒ `MatchResult::Draw`; first field of the acceptance fixture scores at round 14.
+- D42 reinforcement — boundary `round % interval == 0 && round < total`; stable index = interval index (1,2,3,4 default), NOT the hack epoch; both factions share `RandomOracle::reinforcement_position(index, w, h)`; newcomer AgentIds are consecutive ENL then RES blocks from `next_agent_id` (init 2n); they join after the boundary round's slots/scoring.
+- D43 observation — links/fields exposed as ascending public vectors identical for both factions; scores real (D29 retired).
+
+From M4 review (minor; the first two matter for M5):
+
+- **`run_round` has no same-round double-call guard; since M4 a double call observably corrupts scores (settle_scores runs again). M5's replay engine must settle exactly once per round — add the guard.**
+- Reinforcement event carries index/position/count/first_agent_id but no faction/agent_id field (R-EVENT-01 wording wants them on every event).
+- `reinforcement_position` panics on zero width/height (documented contract, public surface).
+- `remove_links_incident` scans the whole links map instead of using adjacency (perf only).
+- Rule-8 comment overclaims T-touch pre-rejection; late-DROP key-consumption not pinned by a test; every cascade test kills ALL fields of a portal (no partial-survival pin).
+- Tautology tests: `match_result_covers_three_variants` and two similar; `next_agent_id` init expect is vacuous while the real hazard is the unchecked append increment.

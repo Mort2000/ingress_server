@@ -9,7 +9,7 @@
 //! `"ARNG"` (4 ASCII bytes) || u32 rng_version || u64 game_seed ||
 //! u32 domain_tag || u32 index_count || index_count × u64 index.
 
-use crate::types::{AgentId, PortalId};
+use crate::types::{AgentId, Coord, PortalId};
 
 /// Version of the runtime RNG address encoding; bumping it changes every
 /// derived random value and therefore the rule version.
@@ -93,6 +93,17 @@ impl RandomOracle {
     /// Reinforcement address: stable indices `(epoch, axis)`.
     pub fn reinforcement_address(&self, epoch: u32, axis: Axis) -> Vec<u8> {
         self.address(RngDomain::Reinforcement, &[epoch as u64, axis as u64])
+    }
+
+    /// Shared reinforcement spawn position for reinforcement interval
+    /// `index` (R-SPAWN-02): one rejection-sampled uniform per axis over the
+    /// closed map range `[0, dim_cm]` — i.e. `n = dim_cm + 1` values per
+    /// axis, so the drawn coordinate is in bounds by construction. Both
+    /// factions spawn at this one position.
+    pub fn reinforcement_position(&self, index: u32, width_n: u32, height_n: u32) -> Coord {
+        let x = self.uniform(&self.reinforcement_address(index, Axis::X), width_n);
+        let y = self.uniform(&self.reinforcement_address(index, Axis::Y), height_n);
+        Coord::new(x as i32, y as i32)
     }
 
     /// Fresh XOF bytes for `address`; every call derives from scratch.
