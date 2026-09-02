@@ -1,6 +1,6 @@
 # 游戏规则规范 v0.1
 
-本目录是比赛行为与结算语义的唯一事实源。默认参数集中在 [`R-CONFIG`](./06-configuration.md)；工程结构、协议选型和交付顺序属于 [MVP 方案](../mvp/README.md)。术语见 [术语表](../glossary.md)。
+本目录是比赛行为与结算语义的唯一事实源。默认参数集中在 [`R-CONFIG`](./06-configuration.md)；工程结构、协议选型和交付顺序属于 [MVP 方案](../mvp/README.md)。统一术语见 [`CONTEXT.md`](../../../CONTEXT.md)。
 
 ## 游戏摘要
 
@@ -16,7 +16,7 @@ ENL 与 RES 各自用一个 AI Client 控制多个 Agent，在随机二维地图
 | R-GOAL-02 | Key、路线、Anchor、攻防和物流应形成长期策略与多 Agent 分工 |
 | R-GOAL-03 | Portal、Link、Field 全局公开；敌方 Agent 状态不直接公开，但可由事件推断 |
 | R-GOAL-04 | 得分不直接增强战斗、移动或产出，避免不可逆滚雪球 |
-| R-GOAL-05 | 相同 Seed、配置、动作序列和 Server 版本必须得到完全一致的结果 |
+| R-GOAL-05 | 相同 Seed、配置、动作序列、接收 Bucket 和 Server 版本必须得到完全一致的结果 |
 
 ## 专题目录
 
@@ -30,18 +30,9 @@ ENL 与 RES 各自用一个 AI Client 控制多个 Agent，在随机二维地图
 | [06-configuration.md](./06-configuration.md) | v0.1 默认参数单一事实源 | `R-CONFIG` |
 | [07-strategy-balance-scope.md](./07-strategy-balance-scope.md) | 非规范性策略、平衡指标与明确不做项 | `R-BALANCE`、`R-SCOPE` |
 
-## 待确认项索引
-
-| 编号 | 问题 | 位置 |
-|---|---|---|
-| `Q-R-SPAWN-01` | 增援在边界轮何时生成、何时可行动 | [比赛与地图](./01-match-map.md) |
-| `Q-R-ACTION-01` | 多个 Major Action 使整条 Stream 失败，还是只丢弃后续 Major | [Agent 与动作](./02-agents-actions.md) |
-| `Q-R-HACK-01` | Hack 冷却的 Round 端点 | [Portal 与资源](./03-portals-resources.md) |
-| `Q-R-RESOLVE-01` | 同 Bucket 以 Stream 还是单条命令排序 | [可见性与结算](./05-visibility-resolution-rng.md) |
-
 ## 规范性约定
 
 - “必须 / 不得 / 最多”是强制规则；“推荐 / 可”是实现或调参建议。
 - 动作是否合法，以动作实际执行时的权威状态为准。
 - `Field` 是 `Link Graph` 的派生状态；缓存不能改变规则结果。
-- 原稿尚未钉死的边界语义以“待确认”标出，不在重编时静默补充规则。
+- 已确认的边界语义必须用公式或示例固化，并进入自动测试。

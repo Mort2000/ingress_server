@@ -34,8 +34,8 @@ stop
 | `M5` Replay | Replay Log、Deterministic Replay、State Hash | 1,000 场比赛 100% 重放得到相同 Final Hash |
 | `M6` Baseline AI | 五种 Baseline、批量 Self-play、首轮调参 | 10,000 场比赛并产出第一份平衡分析 |
 | `M7` External Runtime | Server、双 Client、SHM、RPC、Timeout | 外部 Client 与本地 Bot 的 Core 行为一致 |
-| `M8` Sandbox | Container、资源限制、网络隔离、崩溃处理 | 信息与资源隔离测试通过 |
-| `M9` Tournament | Batch Match、Seed Set、Faction Swap、Elo、Archive | 可追溯地批量运行并排名 |
+| `M8` Sandbox | 安全 Rust、受控依赖、冻结且受审计的离线构建、Container 与资源隔离 | 构建闭包和产物可追溯，SDK 能力边界、信息及资源隔离测试通过 |
+| `M9` Tournament | Batch Match、Map Set、Elo、Archive | 无自动 Faction Swap，可追溯地批量运行并排名 |
 | `M10` Viewer | 基础地图 Replay UI 与三种观察视图 | 可播放、跳转并正确呈现 Replay；MVP 完成 |
 
 ## MVP Done
@@ -43,9 +43,11 @@ stop
 | 编号 | 维度 | 验收条件 |
 |---|---|---|
 | `A-CORE` | Game Core | 支持全部 v0.1 规则；500 Round 稳定完赛；处理至少 200 Portal；不存在明显且不必要的高于 O(N²) 瓶颈 |
-| `A-DETERMINISM` | Determinism | 相同 Server 版本下，`seed + config + submitted actions` 得到完全一致的逐轮 Hash 和 Final State |
-| `A-RUNTIME` | Runtime | 双 Client 独立运行；deadline 生效；慢 Client 不阻塞；Client Crash 不导致 Server Crash |
-| `A-ISOLATION` | Isolation | Client 不能读取敌方 Private State、写 Shared Memory 或访问默认关闭的外部网络 |
+| `A-DETERMINISM` | Determinism | BLAKE3 Random Oracle Golden Vectors 跨实现一致；相同版本下，`seed + config + submissions + receive buckets + Faction receive order + signal order` 得到完全一致的 Canonical State Hash 和 Final State |
+| `A-RUNTIME` | Runtime | 双 Client 独立运行；Observation 保持 Client 侧零拷贝；deadline 生效；慢 Client 不阻塞；Client Crash 不导致 Server Crash |
+| `A-LATENCY` | Latency Competition | 可追踪提交延迟、Bucket 分布和冲突结果，并能区分策略速度收益与调度噪声 |
+| `A-ISOLATION` | Isolation | 只运行比赛方以锁定工具链从完整受审计闭包离线构建的安全 Rust Client；系统访问仅经官方 SDK，Client 不能读取敌方 Private State、写 SHM 或访问默认关闭的外部网络 |
+| `A-PHASE-INTEGRITY` | Phase Integrity | 官方 SDK 在 Settlement Phase 禁止 SHM 读取；白盒审计确认 Audited Client 未绕过该边界 |
 | `A-BALANCE` | Balance | 没有已知简单策略在绝大多数随机地图上以超过 90% 胜率碾压其他合理 Baseline |
 | `A-OBSERVABILITY` | Observability | Replay 可定位每个动作及非法原因、Portal 变化、Link、Field 和逐轮 Score |
 

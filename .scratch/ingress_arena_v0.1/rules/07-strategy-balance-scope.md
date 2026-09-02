@@ -26,6 +26,7 @@
 | 资源 | Average Supply、Hack Count、Key Utilization、Attack / Recharge Count |
 | 事件影响 | Reinforcement Impact |
 | 滚雪球 | `P(win ∣ leading at Round 50/100/200/300)` |
+| 阵营偏差 | ENL / RES Win Rate 与 Score Delta 分布 |
 
 若 `P(win | leading at Round 100)` 接近或超过 90%—95%，应重点检查 Link 距离、Portal 密度、攻防强度、Blocking 及大 Field 权重；约 60%—75% 通常表示仍有明显翻盘空间。具体实验流程见 [`P2.5`](../mvp/03-bots-self-play.md)。
 

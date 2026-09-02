@@ -7,11 +7,13 @@
 | 分组 | 参数 | 默认值 |
 |---|---|---:|
 | 时间 | `TOTAL_ROUNDS` | 500 Round |
+| 时间 | `INITIAL_SPAWN_WINDOW` | 5000 ms |
 | 时间 | `DECISION_WINDOW` | 1000 ms |
 | 时间 | `PRIORITY_BUCKET` | 5 ms |
 | 时间 | `EPOCH_LENGTH` | 100 Round |
 | 地图 | `COORDINATE_UNIT` | 1 cm |
-| 地图 | `MAP_SIZE` | 6000 m × 6000 m |
+| 地图 | `MAP_WIDTH` | 6000 m |
+| 地图 | `MAP_HEIGHT` | 6000 m |
 | 地图 | `PORTAL_COUNT` | 120 |
 | 地图 | `PORTAL_MIN_DISTANCE` | 80 m |
 | 地图 | `CLUSTERED_PORTAL_RATIO` | 70% |
@@ -29,12 +31,12 @@
 | Portal | `RECHARGE_AMOUNT` | 15 HP |
 | Portal | `RECHARGE_COST` | 1 Supply |
 | Hack | `HACK_SUPPLY_YIELD` | 1 Supply |
-| Hack | `HACK_KEY_YIELD` | 1—3 Keys |
+| Hack | `HACK_KEY_YIELD` | `DiscreteUniform{1,2,3}` Keys |
 | Hack | `HACK_COOLDOWN` | 3 Round |
 | Hack | `HACK_LIMIT_PER_EPOCH` | 5 / `(agent, portal)` |
 | Link | `MAX_LINK_DISTANCE` | 2000 m |
-| 协议防护 | `MAX_COMMANDS_PER_AGENT_ROUND` | 256（建议硬上限） |
-| 协议防护 | `MAX_RPC_PAYLOAD` | 64 KB（建议硬上限） |
+| 动作 | `MAX_COMMANDS_PER_AGENT_ROUND` | 10 |
+| 协议防护 | `MAX_FRAME_PAYLOAD_BYTES` | 65,536 bytes（64 KiB，硬上限） |
 
 ## R-CONFIG-02 调参纪律
 

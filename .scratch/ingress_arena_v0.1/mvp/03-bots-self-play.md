@@ -12,22 +12,26 @@
 | `DestroyAnchorBot` | 计算敌方 Portal 所承载 Field 面积总和，优先攻击最高者 | 防守是否容易被单点瓦解 |
 | `HybridBot` | 组合 Field Construction、Critical Portal Attack 与 Recharge | 作为后续默认 Benchmark |
 
-Bot 应保持简单、可解释和固定版本；它们是测量工具，不追求成为最终强 AI。
+Bot 应保持简单、可解释和固定版本；它们是测量工具，不追求成为最终强 AI。每个 Bot 还必须实现基于完整地图选择任意合法整数出生坐标的初始化策略。
 
 ## P2.5 批量比赛
 
-首轮运行 1,000—10,000 场不同地图 Seed 的比赛，至少覆盖以下配对，并对每个 Seed 交换阵营：
+首轮在不同 Map Definition 上运行 1,000—10,000 场单局比赛，至少覆盖以下对阵；MVP 不为同一地图自动追加 Faction Swap 复赛：
 
 - Random vs Random；
 - Nearest vs Nearest、Nearest vs Greedy；
 - Greedy vs DestroyAnchor、Greedy vs Hybrid；
 - Hybrid vs Hybrid。
 
-实验记录必须绑定 Game Config、Seed、双方 Bot 构建版本和阵营，失败或超时也计入结果集。
+同一 Bot Pair 跨不同地图的阵营分配由固定 Schedule Seed 决定，并保证双方担任 ENL / RES 的场次数之差不超过 1；这只改变单场分配，不增加复赛。
+
+平衡实验默认把双方所有 Agent Stream 放入 Bucket 0；各 Bot 调用 Harness 提交接口的顺序作为本 Faction 的虚拟到达顺序，再按奇偶轮从 Round Start Signal 顺序相反的一方开始交替。另设显式虚拟 Bucket 用例验证跨 Bucket 先后手语义。实验不测量本地 Bot wall-clock，真实延迟留到 `P3` Runtime。
+
+实验记录必须绑定 Game Config、完整 Map Definition 与生成元数据、Schedule Seed、虚拟 Bucket 策略、双方 Bot 构建版本和阵营，失败或超时也计入结果集。
 
 ## P2.5-METRICS 指标
 
-除 [`R-BALANCE-02`](../rules/07-strategy-balance-scope.md) 的玩法指标外，至少汇总 Win Rate、Score Ratio、Attack / Recharge / Hack Count、Supply Remaining，以及崩溃、非法动作和超时率。
+除 [`R-BALANCE-02`](../rules/07-strategy-balance-scope.md) 的玩法指标外，至少汇总 Win Rate、按 ENL / RES 分组的胜率与分差、Score Ratio、Attack / Recharge / Hack Count、Supply Remaining，以及崩溃、非法动作和超时率。阵营指标用于检验“不需要 Faction Swap”的假设，而不触发自动复赛。
 
 滚雪球重点计算：
 
@@ -52,4 +56,4 @@ P(win | leading at Round 50/100/200/300)
 
 ## P2.5-GATE 完成门槛
 
-10,000 场可复现 Self-play 完成并产出第一份平衡分析；没有已知简单策略在绝大多数随机地图上以超过 90% 胜率碾压其他合理 Baseline，或相关问题已被明确记录和排期。
+10,000 场采用固定虚拟 Bucket 策略的可复现 Self-play 完成并产出第一份平衡分析；没有已知简单策略在绝大多数随机地图上以超过 90% 胜率碾压其他合理 Baseline，或相关问题已被明确记录和排期。
