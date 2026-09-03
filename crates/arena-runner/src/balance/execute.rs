@@ -286,24 +286,38 @@ pub fn run_balance_batch_with(
                         } else {
                             (spec_b.clone(), spec_a.clone())
                         };
-                        let cell_setup = setup(
-                            cell,
-                            &enl_spec,
-                            &res_spec,
-                            cfg,
-                            &pool[cell.map_index as usize],
-                        );
                         let descriptor = cell_descriptor(cell, &spec_a, &spec_b);
-                        let played = crate::run::run_match_recorded(
-                            &descriptor,
-                            cfg,
-                            &pool[cell.map_index as usize],
-                            &cell_setup.enl_spawns,
-                            &cell_setup.res_spawns,
-                            cell_setup.enl,
-                            cell_setup.res,
-                            replay_sample(cell),
-                        );
+                        let map = &pool[cell.map_index as usize];
+                        // The WHOLE cell — strategy construction and spawn
+                        // validation included — runs under catch_unwind,
+                        // matching the frozen m6 `run_match` crash contract:
+                        // a single-match panic (bot build, spawn rejection,
+                        // any round) is recorded as THIS cell's Crash and
+                        // never aborts the batch.
+                        let started = Instant::now();
+                        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let cell_setup = setup(cell, &enl_spec, &res_spec, cfg, map);
+                            crate::run::run_match_recorded(
+                                &descriptor,
+                                cfg,
+                                map,
+                                &cell_setup.enl_spawns,
+                                &cell_setup.res_spawns,
+                                cell_setup.enl,
+                                cell_setup.res,
+                                replay_sample(cell),
+                            )
+                        }));
+                        let played = match caught {
+                            Ok(played) => played,
+                            Err(_panic) => crate::run::RecordedMatch {
+                                record: crate::metrics::MatchRecord::crashed(
+                                    &descriptor,
+                                    started.elapsed().as_millis() as u64,
+                                ),
+                                replay: None,
+                            },
+                        };
                         let replay = played.replay.map(|bytes| BalanceReplay {
                             cell_index: cell.index,
                             variant_id: cell.variant_id.clone(),

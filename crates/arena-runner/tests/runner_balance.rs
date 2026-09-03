@@ -446,6 +446,33 @@ mod executor_gates {
         assert!(run.replays.is_empty(), "no sampling requested");
     }
 
+    // The crash contract covers the WHOLE cell, not just the rounds: a
+    // panic while constructing a cell (strategy build, spawn validation)
+    // is one failed match, recorded as Crash — it must not abort the
+    // batch (the frozen m6 `run_match` crash contract, plan 5.2 "isolate
+    // single-match failures").
+    #[test]
+    fn a_panicking_cell_setup_is_recorded_as_crash_per_match() {
+        let plan = tiny_plan();
+        let run = run_balance_batch_with(
+            &plan,
+            2,
+            &|_cell, _enl, _res, _cfg, _map| -> CellSetup {
+                panic!("crash seam: cell setup panicked");
+            },
+            &|_| false,
+        )
+        .expect("the batch survives per-cell setup panics");
+        assert_eq!(run.records.len(), 8, "every cell stays in the result set");
+        for record in &run.records {
+            assert_eq!(record.result, BalanceOutcome::Played(Outcome::Crash));
+            assert_eq!(record.enl_score2, 0);
+            assert_eq!(record.res_score2, 0);
+        }
+        assert_eq!(run.crashes(), 8);
+        assert!(run.replays.is_empty());
+    }
+
     // Sampled replays decode, replay and match their records (IARP capture
     // through the shared m6 play path).
     #[test]
@@ -493,7 +520,6 @@ mod executor_gates {
 // modulo elapsed_ms; and the full section-12 artifact set.
 // ---------------------------------------------------------------------
 mod smoke_gates {
-    use arena_bots::policy::PolicyId;
     use arena_runner::balance::archive::{ArchiveError, decode_map, write_balance_artifacts};
     use arena_runner::balance::execute::run_balance_batch;
     use arena_runner::balance::pairs::{compute_paired_results, variant_summaries};
