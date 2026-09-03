@@ -21,6 +21,35 @@ use crate::policy::BucketPolicy;
 // TSV serialization
 // ---------------------------------------------------------------------
 
+/// The 23 per-faction metric field names in fixed column order (shared by
+/// the m6 `matches.tsv` and the balance record payload — one source of
+/// truth so the two formats can never drift).
+pub const FACTION_STAT_FIELDS: [&str; 23] = [
+    "commands_submitted",
+    "commands_ok",
+    "commands_dropped",
+    "moves",
+    "captures",
+    "attacks",
+    "attack_hits",
+    "anchor_attack_hits",
+    "recharges",
+    "hacks",
+    "keys_gained",
+    "transfers",
+    "links_created",
+    "links_by_reinforcements",
+    "first_field_round",
+    "fields_created",
+    "fields_destroyed",
+    "field_area2_sum",
+    "destroyed_lifetime_rounds_sum",
+    "fields_surviving",
+    "surviving_lifetime_rounds_sum",
+    "layering_depth_max",
+    "supply_remaining",
+];
+
 /// The fixed `matches.tsv` column order (frozen with the experiment).
 pub fn columns() -> Vec<String> {
     let mut cols: Vec<String> = [
@@ -50,31 +79,7 @@ pub fn columns() -> Vec<String> {
     .map(|s| s.to_string())
     .collect();
     for prefix in ["enl", "res"] {
-        for field in [
-            "commands_submitted",
-            "commands_ok",
-            "commands_dropped",
-            "moves",
-            "captures",
-            "attacks",
-            "attack_hits",
-            "anchor_attack_hits",
-            "recharges",
-            "hacks",
-            "keys_gained",
-            "transfers",
-            "links_created",
-            "links_by_reinforcements",
-            "first_field_round",
-            "fields_created",
-            "fields_destroyed",
-            "field_area2_sum",
-            "destroyed_lifetime_rounds_sum",
-            "fields_surviving",
-            "surviving_lifetime_rounds_sum",
-            "layering_depth_max",
-            "supply_remaining",
-        ] {
+        for field in FACTION_STAT_FIELDS {
             cols.push(format!("{prefix}_{field}"));
         }
     }
@@ -87,6 +92,14 @@ pub fn columns() -> Vec<String> {
 }
 
 fn faction_row(stats: &FactionMatchStats) -> Vec<String> {
+    faction_stats_row(stats)
+}
+
+/// Serializes one faction's counters into the fixed per-faction column
+/// order (shared by the m6 `matches.tsv` and the balance record — the
+/// balance layer reuses this helper so the metric payload bytes can never
+/// drift between the two formats).
+pub fn faction_stats_row(stats: &FactionMatchStats) -> Vec<String> {
     vec![
         stats.commands_submitted.to_string(),
         stats.commands_ok.to_string(),
@@ -126,6 +139,12 @@ fn leader_tag(leader: Option<Faction>) -> &'static str {
 }
 
 fn checkpoint_rows(stats: &MatchStats) -> Vec<String> {
+    checkpoint_stat_rows(stats)
+}
+
+/// Serializes the checkpoint snapshots into the fixed column order (the
+/// shared helper behind the frozen m6 rows).
+pub fn checkpoint_stat_rows(stats: &MatchStats) -> Vec<String> {
     let mut out = Vec::with_capacity(12);
     for snapshot in &stats.checkpoints {
         out.push(snapshot.enl.to_string());
@@ -206,78 +225,87 @@ pub fn parse_matches_tsv(text: &str) -> Result<Vec<MatchRecord>, String> {
     Ok(records)
 }
 
-fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
-    let faction_stats = |prefix: &str| -> Result<FactionMatchStats, String> {
-        let mut stats = FactionMatchStats::default();
-        let u64s = |name: &str, slot: &mut u64| -> Result<(), String> {
-            *slot = map
-                .get(format!("{prefix}_{name}").as_str())
-                .copied()
-                .unwrap_or("")
-                .parse()
-                .map_err(|e| format!("{prefix}_{name}: {e}"))?;
-            Ok(())
-        };
-        for (name, slot) in [
-            ("commands_submitted", &mut stats.commands_submitted),
-            ("commands_ok", &mut stats.commands_ok),
-            ("commands_dropped", &mut stats.commands_dropped),
-            ("moves", &mut stats.moves),
-            ("captures", &mut stats.captures),
-            ("attacks", &mut stats.attacks),
-            ("attack_hits", &mut stats.attack_hits),
-            ("anchor_attack_hits", &mut stats.anchor_attack_hits),
-            ("recharges", &mut stats.recharges),
-            ("hacks", &mut stats.hacks),
-            ("keys_gained", &mut stats.keys_gained),
-            ("transfers", &mut stats.transfers),
-            ("links_created", &mut stats.links_created),
-            (
-                "links_by_reinforcements",
-                &mut stats.links_by_reinforcements,
-            ),
-            ("fields_created", &mut stats.fields_created),
-            ("fields_destroyed", &mut stats.fields_destroyed),
-            (
-                "destroyed_lifetime_rounds_sum",
-                &mut stats.destroyed_lifetime_rounds_sum,
-            ),
-            ("fields_surviving", &mut stats.fields_surviving),
-            (
-                "surviving_lifetime_rounds_sum",
-                &mut stats.surviving_lifetime_rounds_sum,
-            ),
-            ("supply_remaining", &mut stats.supply_remaining),
-        ] {
-            u64s(name, slot)?;
-        }
-        stats.field_area2_sum = map
-            .get(format!("{prefix}_field_area2_sum").as_str())
+/// Parses one faction's counters back (the inverse of
+/// [`faction_stats_row`]); shared by the m6 and balance record parsers.
+pub fn parse_faction_stats(
+    map: &BTreeMap<&str, &str>,
+    prefix: &str,
+) -> Result<FactionMatchStats, String> {
+    let mut stats = FactionMatchStats::default();
+    let u64s = |name: &str, slot: &mut u64| -> Result<(), String> {
+        *slot = map
+            .get(format!("{prefix}_{name}").as_str())
             .copied()
             .unwrap_or("")
             .parse()
-            .map_err(|e| format!("{prefix}_field_area2_sum: {e}"))?;
-        stats.layering_depth_max = map
-            .get(format!("{prefix}_layering_depth_max").as_str())
-            .copied()
-            .unwrap_or("")
-            .parse()
-            .map_err(|e| format!("{prefix}_layering_depth_max: {e}"))?;
-        stats.first_field_round = match map
-            .get(format!("{prefix}_first_field_round").as_str())
-            .copied()
-            .unwrap_or("")
-        {
-            "-" => None,
-            value => Some(
-                value
-                    .parse()
-                    .map_err(|e| format!("{prefix}_first_field_round: {e}"))?,
-            ),
-        };
-        Ok(stats)
+            .map_err(|e| format!("{prefix}_{name}: {e}"))?;
+        Ok(())
     };
+    for (name, slot) in [
+        ("commands_submitted", &mut stats.commands_submitted),
+        ("commands_ok", &mut stats.commands_ok),
+        ("commands_dropped", &mut stats.commands_dropped),
+        ("moves", &mut stats.moves),
+        ("captures", &mut stats.captures),
+        ("attacks", &mut stats.attacks),
+        ("attack_hits", &mut stats.attack_hits),
+        ("anchor_attack_hits", &mut stats.anchor_attack_hits),
+        ("recharges", &mut stats.recharges),
+        ("hacks", &mut stats.hacks),
+        ("keys_gained", &mut stats.keys_gained),
+        ("transfers", &mut stats.transfers),
+        ("links_created", &mut stats.links_created),
+        (
+            "links_by_reinforcements",
+            &mut stats.links_by_reinforcements,
+        ),
+        ("fields_created", &mut stats.fields_created),
+        ("fields_destroyed", &mut stats.fields_destroyed),
+        (
+            "destroyed_lifetime_rounds_sum",
+            &mut stats.destroyed_lifetime_rounds_sum,
+        ),
+        ("fields_surviving", &mut stats.fields_surviving),
+        (
+            "surviving_lifetime_rounds_sum",
+            &mut stats.surviving_lifetime_rounds_sum,
+        ),
+        ("supply_remaining", &mut stats.supply_remaining),
+    ] {
+        u64s(name, slot)?;
+    }
+    stats.field_area2_sum = map
+        .get(format!("{prefix}_field_area2_sum").as_str())
+        .copied()
+        .unwrap_or("")
+        .parse()
+        .map_err(|e| format!("{prefix}_field_area2_sum: {e}"))?;
+    stats.layering_depth_max = map
+        .get(format!("{prefix}_layering_depth_max").as_str())
+        .copied()
+        .unwrap_or("")
+        .parse()
+        .map_err(|e| format!("{prefix}_layering_depth_max: {e}"))?;
+    stats.first_field_round = match map
+        .get(format!("{prefix}_first_field_round").as_str())
+        .copied()
+        .unwrap_or("")
+    {
+        "-" => None,
+        value => Some(
+            value
+                .parse()
+                .map_err(|e| format!("{prefix}_first_field_round: {e}"))?,
+        ),
+    };
+    Ok(stats)
+}
 
+/// Parses the checkpoint columns back (the inverse of
+/// [`checkpoint_stat_rows`]).
+pub fn parse_checkpoints(
+    map: &BTreeMap<&str, &str>,
+) -> Result<[crate::metrics::ScoreSnapshot; 4], String> {
     let mut checkpoints = [crate::metrics::ScoreSnapshot {
         round: 0,
         enl: 0,
@@ -313,9 +341,14 @@ fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
             leader,
         };
     }
+    Ok(checkpoints)
+}
 
+/// Parses a lowercase hex State Hash string back into its 32 bytes
+/// (`arena_replay::canon::hex` inverse; shared by the m6 and balance
+/// record parsers).
+pub fn parse_state_hash_hex(hash_hex: &str) -> Result<[u8; 32], String> {
     let mut hash_bytes = [0u8; 32];
-    let hash_hex = map.get("final_state_hash").copied().unwrap_or("");
     for (index, pair) in hash_hex.as_bytes().chunks(2).enumerate() {
         if pair.len() != 2 {
             return Err("final_state_hash: odd length".to_string());
@@ -324,6 +357,13 @@ fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
         let low = (pair[1] as char).to_digit(16).ok_or("hash hex")?;
         hash_bytes[index] = (high * 16 + low) as u8;
     }
+    Ok(hash_bytes)
+}
+
+fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
+    let faction_stats = |prefix: &str| parse_faction_stats(map, prefix);
+    let checkpoints = parse_checkpoints(map)?;
+    let hash_bytes = parse_state_hash_hex(map.get("final_state_hash").copied().unwrap_or(""))?;
 
     Ok(MatchRecord {
         index: map
@@ -377,7 +417,7 @@ fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
     })
 }
 
-fn u64_of(map: &BTreeMap<&str, &str>, name: &str) -> Result<u64, String> {
+pub fn u64_of(map: &BTreeMap<&str, &str>, name: &str) -> Result<u64, String> {
     map.get(name)
         .copied()
         .unwrap_or("0")
@@ -385,7 +425,7 @@ fn u64_of(map: &BTreeMap<&str, &str>, name: &str) -> Result<u64, String> {
         .map_err(|e| format!("{name}: {e}"))
 }
 
-fn u128f_of(map: &BTreeMap<&str, &str>, name: &str) -> Result<u128, String> {
+pub fn u128f_of(map: &BTreeMap<&str, &str>, name: &str) -> Result<u128, String> {
     map.get(name)
         .copied()
         .unwrap_or("0")
