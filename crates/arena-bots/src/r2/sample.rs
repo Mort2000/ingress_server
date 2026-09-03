@@ -68,18 +68,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arena_core::types::Faction;
     use crate::r2::rng::R2Stream;
+    use arena_core::types::Faction;
 
     #[test]
     fn the_band_floor_is_truncated_integer_permille() {
         // best 1000, permille 33: slack = 33 (1000*33/1000), floor 967.
         let mut rng = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
-        assert_eq!(pick_near_equal(&[1000i64, 968], |v| *v, 33, &mut rng), Some(&1000));
+        assert_eq!(
+            pick_near_equal(&[1000i64, 968], |v| *v, 33, &mut rng),
+            Some(&1000)
+        );
         let mut rng = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
         assert!(
-            pick_near_equal(&[1000i64, 967, 900], |v| *v, 33, &mut rng).map(|v| *v)
-                != Some(900),
+            pick_near_equal(&[1000i64, 967, 900], |v| *v, 33, &mut rng).map(|v| *v) != Some(900),
             "900 is outside the band"
         );
         // Every draw over a fixed stream is stable across 64 repetitions.

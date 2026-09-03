@@ -25,10 +25,7 @@ pub enum Task {
     /// HACK a portal for keys and Supply (the key-acquisition task).
     KeyFarm { portal: PortalId },
     /// Create the link `source -> target` (consumes a Key of `target`).
-    Link {
-        source: PortalId,
-        target: PortalId,
-    },
+    Link { source: PortalId, target: PortalId },
     /// Attack an enemy portal. The ONLY task that may carry coordinated
     /// capacity > 1 (plan 6.3's explicit exception).
     Attack { portal: PortalId },
@@ -216,7 +213,9 @@ mod tests {
 
     #[test]
     fn zero_capacity_clamps_to_one_shot() {
-        let task = Task::KeyFarm { portal: PortalId(0) };
+        let task = Task::KeyFarm {
+            portal: PortalId(0),
+        };
         let mut board = TaskBoard::new(2);
         assert!(board.claim(AgentId(0), task, 0));
         assert!(!board.claim(AgentId(1), task, 0));
@@ -229,7 +228,9 @@ mod tests {
             Task::Capture {
                 portal: PortalId(0),
             },
-            Task::KeyFarm { portal: PortalId(1) },
+            Task::KeyFarm {
+                portal: PortalId(1),
+            },
             Task::Link {
                 source: PortalId(1),
                 target: PortalId(2),

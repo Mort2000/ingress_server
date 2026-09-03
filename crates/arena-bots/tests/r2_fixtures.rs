@@ -996,7 +996,10 @@ fn sampling_is_deterministic_given_the_stream_position() {
     // Uniform pick over the same stream state is deterministic too.
     let mut a = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
     let mut b = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
-    assert_eq!(pick_uniform(&[7, 8, 9], &mut a), pick_uniform(&[7, 8, 9], &mut b));
+    assert_eq!(
+        pick_uniform(&[7, 8, 9], &mut a),
+        pick_uniform(&[7, 8, 9], &mut b)
+    );
     assert_eq!(pick_uniform::<i64>(&[], &mut a), None);
     assert_eq!(pick_near_equal(&[], |v: &i64| *v, 1000, &mut a), None);
 }
