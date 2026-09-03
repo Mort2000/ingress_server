@@ -311,6 +311,18 @@ fn main() {
                 base_commit,
             ));
         }
+        Some("balance-b1") => {
+            // B1 smoke run (docs/ai-balance-plan.md section 14 row B1): the
+            // frozen two-variant x two-policy same-map faction-swap batch,
+            // archived into a NEW runs/balance/b1-smoke-r1/ directory.
+            let output_root =
+                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
+            let base_commit = args.get(3).map(|s| s.as_str());
+            std::process::exit(arena_runner::balance::smoke::run_b1_smoke(
+                &output_root,
+                base_commit,
+            ));
+        }
         Some(other) if other.starts_with("tournament") => {
             eprintln!(
                 "unknown tournament subcommand {other:?} (tournament-r1 | tournament-inprocess-r1)"

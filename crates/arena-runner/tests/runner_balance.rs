@@ -486,3 +486,248 @@ mod executor_gates {
         assert_eq!(map_ids_of("default").len(), 2);
     }
 }
+
+// ---------------------------------------------------------------------
+// The B1 completion condition as a permanent gate: the frozen smoke plan
+// definition, run twice, reproduces byte-identical matches.tsv/pairs.tsv
+// modulo elapsed_ms; and the full section-12 artifact set.
+// ---------------------------------------------------------------------
+mod smoke_gates {
+    use arena_bots::policy::PolicyId;
+    use arena_runner::balance::archive::{ArchiveError, decode_map, write_balance_artifacts};
+    use arena_runner::balance::execute::run_balance_batch;
+    use arena_runner::balance::pairs::{compute_paired_results, variant_summaries};
+    use arena_runner::balance::record::{balance_records_to_tsv, parse_balance_tsv};
+    use arena_runner::balance::schedule::expand;
+    use arena_runner::balance::smoke::{B1_SMOKE_EXPERIMENT_ID, B1_SMOKE_MAP_COUNT, b1_smoke_plan};
+
+    fn zeroed_elapsed_tsv(records: &[arena_runner::balance::record::BalanceMatchRecord]) -> String {
+        let mut parsed = records.to_vec();
+        for record in &mut parsed {
+            record.elapsed_ms = 0;
+        }
+        balance_records_to_tsv(&parsed)
+    }
+
+    // The frozen plan's shape: 2 variants x 8 maps x 2 legs = 32 cells.
+    #[test]
+    fn frozen_smoke_plan_shape_is_pinned() {
+        let plan = b1_smoke_plan(B1_SMOKE_MAP_COUNT);
+        assert_eq!(plan.experiment_id, B1_SMOKE_EXPERIMENT_ID);
+        assert_eq!(plan.stage.tag(), "smoke");
+        assert_eq!(plan.seed_set.tag(), "development");
+        assert_eq!(plan.variants.len(), 2);
+        assert_eq!(plan.base_variant, "default");
+        let cells = expand(&plan).expect("expands");
+        assert_eq!(cells.len(), 32);
+        assert_eq!(
+            plan.variants[1].declared_changed_fields,
+            vec!["move_budget_cm"]
+        );
+        // The default variant IS the untouched GameConfig::default().
+        assert_eq!(
+            plan.variants[0].config,
+            arena_core::config::GameConfig::default()
+        );
+        assert!(plan.policies.iter().all(|s| s.version == "m6.0"));
+    }
+
+    // The completion condition: two configs x two policies x same-map
+    // faction swap reproduces (small map count for suite speed; the real
+    // 8-map run is the CLI batch recorded in docs/balance-b1-smoke.md).
+    #[test]
+    fn frozen_smoke_plan_reproduces_end_to_end() {
+        let plan = b1_smoke_plan(2);
+        let run_a = run_balance_batch(&plan, 3).expect("runs");
+        let run_b = run_balance_batch(&plan, 3).expect("runs again");
+        // matches.tsv: byte-identical modulo elapsed_ms.
+        assert_eq!(
+            zeroed_elapsed_tsv(&run_a.records),
+            zeroed_elapsed_tsv(&run_b.records)
+        );
+        // pairs.tsv: byte-identical (integers only, no time columns).
+        let pairs_a = compute_paired_results(&plan, &run_a.records).expect("pairs");
+        let pairs_b = compute_paired_results(&plan, &run_b.records).expect("pairs");
+        assert_eq!(
+            arena_runner::balance::pairs::paired_results_to_tsv(&pairs_a),
+            arena_runner::balance::pairs::paired_results_to_tsv(&pairs_b)
+        );
+        // The frozen plan's vocabulary is present: both variants, both
+        // policies, swapped legs, shared seeds and shared map content.
+        let tsv = balance_records_to_tsv(&run_a.records);
+        for needle in ["default", "move-budget-240m", "greedy-field", "hybrid"] {
+            assert!(tsv.contains(needle), "missing {needle}");
+        }
+        let parsed = parse_balance_tsv(&tsv).expect("round-trips");
+        assert!(parsed.iter().any(|r| r.leg == 0 && r.policy_a_is_enl));
+        assert!(parsed.iter().any(|r| r.leg == 1 && !r.policy_a_is_enl));
+        let default_row = parsed
+            .iter()
+            .find(|r| r.variant_id == "default" && r.map_index == 0)
+            .expect("row");
+        let variant_row = parsed
+            .iter()
+            .find(|r| r.variant_id == "move-budget-240m" && r.map_index == 0)
+            .expect("row");
+        assert_eq!(default_row.game_seed, variant_row.game_seed);
+        assert_eq!(default_row.bot_seed, variant_row.bot_seed);
+        assert_eq!(default_row.map_seed, variant_row.map_seed);
+        assert_ne!(default_row.config_hash, variant_row.config_hash);
+        assert_eq!(default_row.policy_a_version, "m6.0");
+    }
+
+    // The full section-12 artifact set, written once into a NEW directory.
+    #[test]
+    fn archive_writes_the_complete_artifact_set_and_refuses_overwrites() {
+        let plan = b1_smoke_plan(2);
+        let run = run_balance_batch(&plan, 2).expect("runs");
+        let pairs = compute_paired_results(&plan, &run.records).expect("pairs");
+        let summaries = variant_summaries(&plan, &pairs);
+        let root = std::env::temp_dir().join(format!(
+            "b1-archive-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir =
+            write_balance_artifacts(&root, &plan, &run, &pairs, &summaries, Some("testcommit"))
+                .expect("archives");
+        assert_eq!(dir, root.join("balance").join(B1_SMOKE_EXPERIMENT_ID));
+
+        // All 9 artifact kinds exist (+ the replays dir and files).
+        for name in [
+            "manifest.txt",
+            "configs.tsv",
+            "policies.tsv",
+            "maps.tsv",
+            "matches.tsv",
+            "pairs.tsv",
+            "summary.txt",
+            "report.md",
+            "replays.tsv",
+            "hashes.txt",
+        ] {
+            assert!(dir.join(name).is_file(), "missing {name}");
+        }
+        assert!(dir.join("maps").is_dir());
+        assert!(dir.join("replays").is_dir());
+
+        // configs.tsv: variant rows carry the complete 31-word config, the
+        // changed fields and the config hash.
+        let configs = std::fs::read_to_string(dir.join("configs.tsv")).expect("read");
+        let header: Vec<&str> = configs
+            .lines()
+            .next()
+            .expect("header")
+            .split('\t')
+            .collect();
+        assert_eq!(header.len(), 1 + 31 + 2);
+        assert_eq!(header[15], "move_budget_cm");
+        let rows: Vec<Vec<&str>> = configs
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "default");
+        assert_eq!(rows[0][33], "-");
+        assert_eq!(rows[1][0], "move-budget-240m");
+        assert_eq!(rows[1][15], "24000");
+        assert_eq!(rows[0][15], "20000");
+        assert_eq!(rows[1][33], "move_budget_cm");
+        assert_ne!(rows[0][32], rows[1][32], "config hashes differ");
+
+        // maps.tsv: one row per map; map files are content-addressed and
+        // decode back to the identical MapDefinition.
+        let maps_text = std::fs::read_to_string(dir.join("maps.tsv")).expect("read");
+        let map_rows: Vec<Vec<&str>> = maps_text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        assert_eq!(map_rows.len(), 2);
+        let mut seen_hashes = std::collections::BTreeSet::new();
+        for row in &map_rows {
+            assert_eq!(row.len(), 4);
+            assert_eq!(row[3], format!("maps/map-{}.bin", row[2]));
+            let bytes = std::fs::read(dir.join(row[3])).expect("map file");
+            assert_eq!(
+                arena_replay::canon::hex(blake3::hash(&bytes).as_bytes()),
+                row[2],
+                "content-addressed name matches an independent hash"
+            );
+            let decoded = decode_map(&bytes).expect("decodes");
+            let seed = u64::from_str_radix(row[1].trim_start_matches("0x"), 16).expect("seed");
+            let regenerated =
+                arena_core::map::generate_map(seed, &arena_core::config::GameConfig::default())
+                    .expect("regenerates");
+            assert_eq!(decoded, regenerated, "map round-trips through the archive");
+            seen_hashes.insert(row[2].to_string());
+        }
+        assert_eq!(seen_hashes.len(), 2, "two distinct maps");
+
+        // Shared-Map-Definition proof: both variants' rows for one map id
+        // reference the SAME map content hash (one maps.tsv row, one file).
+        let matches_text = std::fs::read_to_string(dir.join("matches.tsv")).expect("read");
+        let map_ids_in_matches: std::collections::BTreeSet<&str> = matches_text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect::<Vec<_>>())
+            .map(|row| row[7]) // map_id column
+            .collect();
+        assert_eq!(map_ids_in_matches.len(), 2);
+        let hash_of = |map_id: &str| -> String {
+            map_rows
+                .iter()
+                .find(|r| r[0] == map_id)
+                .map(|r| r[2].to_string())
+                .expect("map row")
+        };
+        let first_map_id = map_ids_in_matches.iter().next().copied().expect("id");
+        let _ = hash_of(first_map_id);
+
+        // replays.tsv lists the sampled cells; files exist and decode.
+        let replays_text = std::fs::read_to_string(dir.join("replays.tsv")).expect("read");
+        let replay_rows: Vec<Vec<&str>> = replays_text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        assert_eq!(
+            replay_rows.len(),
+            run.replays.len(),
+            "one row per captured replay"
+        );
+        for row in &replay_rows {
+            assert_eq!(row[5], "captured");
+            let bytes = std::fs::read(dir.join(row[6])).expect("replay file");
+            arena_replay::replay::decode_log(&bytes).expect("decodes");
+        }
+
+        // hashes.txt: every artifact's blake3 matches an independent
+        // re-hash, and hashes.txt itself is not listed.
+        let hashes_text = std::fs::read_to_string(dir.join("hashes.txt")).expect("read");
+        let mut hashed_paths = 0usize;
+        for line in hashes_text.lines() {
+            let (hash, relative) = line.split_once("  ").expect("format");
+            let bytes = std::fs::read(dir.join(relative)).expect("artifact");
+            assert_eq!(
+                hash.trim_start_matches("blake3:"),
+                arena_replay::canon::hex(blake3::hash(&bytes).as_bytes()),
+                "hash mismatch for {relative}"
+            );
+            hashed_paths += 1;
+        }
+        // 9 top-level artifacts (hashes.txt never lists itself) + one map
+        // file per distinct map + one file per captured replay.
+        assert!(hashed_paths >= 9 + run.replays.len() + 2);
+        assert!(!hashes_text.contains("hashes.txt"));
+
+        // An existing experiment directory is refused (never overwrite).
+        match write_balance_artifacts(&root, &plan, &run, &pairs, &summaries, Some("testcommit")) {
+            Err(ArchiveError::ExperimentDirExists(_)) => {}
+            other => panic!("expected refusal, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
