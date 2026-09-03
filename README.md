@@ -52,6 +52,7 @@ cargo run --release -p replay-export -- <replay.iarp> -o out.html --faction enl
 cargo run --release -p arena-runner -- tournament-r1             # 冻结的 r1 锦标赛：3 个基线程序 × 14 场，沙箱内运行
 cargo run --release -p arena-runner -- tournament-inprocess-r1   # 同赛程但全部在进程内运行，速度快
 cargo run --release -p arena-runner -- conflict-stats            # 对归档回放做冲突结算统计
+cargo run --release -p arena-runner -- drop-reasons runs/m6-r1 runs  # 重放冻结批次逐场并按 DropReason 统计丢弃原因（先逐场校验状态哈希）
 cargo run --release -p arena-runner                              # 不带参数：运行冻结的平衡实验批次（m6-r1，10000 场）
 ```
 

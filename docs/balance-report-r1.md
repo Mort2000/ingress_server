@@ -105,9 +105,13 @@ Drop-rate note (illegal-action rate): the aggregate drop rate is 0–7% for
 every bot except `greedy-field` whenever the opponent actively contests
 portals (12.7% vs NearestPortal, 19.6% vs DestroyAnchor). Recomputed over
 the whole Greedy x DestroyAnchor matchup — `matches.tsv` stores drop
-totals only, so reasons come from deterministically re-executing the
-frozen matches — GreedyField's 856,473 dropped commands break down as
-630,271 `CaptureTargetNotNeutral` (73.6%; internal capture races — all
+totals only, so the reasons come from the committed
+`arena-runner drop-reasons` tally, which deterministically re-executes
+every archived match from its own per-match record and verifies each
+re-execution's final State Hash and per-faction submitted/ok/dropped
+counts against the archived row before the tally is trusted —
+GreedyField's 856,473 dropped commands break down as 630,271
+`CaptureTargetNotNeutral` (73.6%; internal capture races — all
 GreedyField agents walk the same station in the same order), 57,455
 `LinkPortalNotOwned` (6.7%; vertex neutralized between observation and
 execution), 74,865 `LinkAlreadyExists` (8.7%; two own agents link the
@@ -116,7 +120,22 @@ expansion attack raced by a teammate). (DestroyAnchor's own 35,744 drops
 are almost entirely the same race, 33,658
 `CaptureTargetNotNeutral`.) Against a passive opponent the same bot drops
 < 5% (pinned by the arena-bots legality gate), so these are same-round
-races under pressure, not illegal-by-design commands.
+races under pressure, not illegal-by-design commands. The derivation is
+archived in `runs/balance/b0-drop-reasons-m6-r1/` (B0): all 10,000
+archived matches of the frozen batch re-executed and verified in one
+exit-0 run; `drop-reasons.tsv` holds the integer counts behind every
+number above (every reason row per bot, zeros included, plus totals) and
+`summary.txt` the per-matchup breakdown with the archived-totals
+reconciliation (shares there are truncated permille; the percentages in
+this report are the same counts rounded). `runs/` is untracked, so the
+content hashes pin what this
+report cites (plan section 12): `drop-reasons.tsv` blake3
+`36cdaba2981230638b02ff2c2526eac0364c239538882c2400e8c0dd803c2e2a`,
+`summary.txt` blake3
+`f0ed307ad3d44cca3841972b6b442a0efb1b6d19134f3aa96a0962ac1f0bdd3a`.
+Reproduce: `cargo run --release -p arena-runner -- drop-reasons runs/m6-r1
+runs <base-commit>` (tally: `crates/arena-runner/src/drops.rs`; run
+provenance in the archive's `manifest.txt`).
 
 ## 3. Faction-bias check (ENL vs RES)
 
@@ -204,8 +223,8 @@ condition is met via the documented-and-scheduled clause).**
   fields/match drop from 5.41 vs Nearest to 1.69 vs Hybrid). Part of the
   gap is bot-quality (GreedyField's all-agents-one-order tour bunches —
   internal capture races cause 630,271 of its 856,473 dropped commands in
-  the GD matchup — so the pure builder is weaker than its plan deserves),
-  but a fixed-version simple
+  the GD matchup; archived derivation in the S2 drop-rate note — so the
+  pure builder is weaker than its plan deserves), but a fixed-version simple
   strategy beating every other reasonable baseline 100% is exactly the
   pattern A-BALANCE looks for, and it compounds with the R100 snowball
   threshold above.
