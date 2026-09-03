@@ -202,8 +202,9 @@ fn sat_i64(value: i128) -> i64 {
 }
 
 /// Whole rounds an agent needs to cover `from -> to` at one round's
-/// MOVE_BUDGET (ceil of the exact integer distance).
-fn travel_rounds_between(from: Coord, to: Coord, budget_cm: u32) -> u32 {
+/// MOVE_BUDGET (ceil of the exact integer distance). Public: the builder
+/// core and policy overlays reuse the same travel estimate.
+pub fn travel_rounds_between(from: Coord, to: Coord, budget_cm: u32) -> u32 {
     if budget_cm == 0 {
         return u32::MAX; // GameConfig::validate rejects this; stay total
     }

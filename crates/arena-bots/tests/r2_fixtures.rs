@@ -216,7 +216,7 @@ fn field_candidates_find_viable_triangles_and_rank_by_area2() {
     assert_eq!(triangle_a.area2, 144_000_000);
     assert_eq!(triangle_b.area2, 144_000_000);
     // Generation ranks area2 descending, ties by ascending triple.
-    let mut areas: Vec<u64> = candidates.iter().map(|c| c.area2).collect();
+    let areas: Vec<u64> = candidates.iter().map(|c| c.area2).collect();
     let mut sorted = areas.clone();
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     assert_eq!(areas, sorted, "area2 descending");
@@ -974,6 +974,477 @@ fn allocation_is_a_pure_deterministic_function_of_its_inputs() {
     // Agent order in the slice never matters (requests carry the ids).
     let reordered = allocate(&mut TaskBoard::new(3), &[AgentId(1), AgentId(0)], &requests);
     assert_eq!(first, reordered);
+}
+
+// ---------------------------------------------------------------------
+// Limited opponent model (plan 5.1/6.2): threat and enemy build zones
+// from the LEGAL public event history only — obs.events — never enemy
+// private state (unreachable from the Observation type by construction)
+// ---------------------------------------------------------------------
+
+use arena_bots::r2::opponent::{OpponentModel, OpponentParams};
+
+fn link_created(seq: u64, round: u32, faction: Faction, a: u32, b: u32) -> Event {
+    Event {
+        seq,
+        round,
+        kind: EventKind::LinkCreated {
+            faction,
+            agent_id: AgentId(9),
+            link: arena_core::types::LinkId::new(PortalId(a), PortalId(b)).expect("distinct"),
+        },
+    }
+}
+
+#[test]
+fn opponent_model_reads_pressure_from_public_history_only() {
+    let params = OpponentParams::default();
+    let mut model = OpponentModel::new(params, Faction::Res);
+    // Round 10 observation: the enemy hit P0 twice (rounds 9 and 10, both
+    // inside the default window) and P1 once, long ago (round 1).
+    let obs = ObsBuilder::new(10)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 60)
+        .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 90)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .event(enemy_attack(0, 9, 0, 80))
+        .event(enemy_attack(1, 10, 0, 60))
+        .event(enemy_attack(2, 1, 1, 90))
+        .build();
+    model.update(&obs);
+    assert_eq!(model.pressure(&obs, PortalId(0)), 2, "two in-window hits");
+    assert_eq!(
+        model.pressure(&obs, PortalId(1)),
+        0,
+        "round-1 hit is outside"
+    );
+    assert_eq!(model.pressure(&obs, PortalId(2)), 0, "never attacked");
+    assert_eq!(
+        model.top_threat(&obs),
+        Some((PortalId(0), 2)),
+        "the hottest portal wins, ascending-id ties"
+    );
+    assert!(model.any_threat(&obs));
+    // Determinism and idempotence: re-observing the same history changes
+    // nothing (each event is consumed once by seq).
+    model.update(&obs);
+    assert_eq!(model.pressure(&obs, PortalId(0)), 2);
+}
+
+#[test]
+fn a_calm_enemy_yields_zero_threat_and_zones() {
+    let mut model = OpponentModel::new(OpponentParams::default(), Faction::Res);
+    let obs = ObsBuilder::new(10)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 100)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .event(own_attack(0, 10, 0))
+        .build();
+    model.update(&obs);
+    assert_eq!(
+        model.pressure(&obs, PortalId(0)),
+        0,
+        "own attacks are not pressure"
+    );
+    assert!(!model.any_threat(&obs));
+    assert_eq!(model.top_threat(&obs), None);
+    assert_eq!(model.build_zone_heat(&obs, PortalId(0)), 0);
+}
+
+#[test]
+fn opponent_model_tracks_enemy_build_zones_and_updates_incrementally() {
+    let params = OpponentParams::default();
+    let mut model = OpponentModel::new(params, Faction::Res);
+    // Round 4: the enemy linked (P2, P3) this round and (P3, P4) two rounds
+    // ago; both are inside the default zone window.
+    let round4 = ObsBuilder::new(4)
+        .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Res, 100)
+        .portal(3, Coord::new(36 * KM, 4 * KM), Owner::Res, 100)
+        .portal(4, Coord::new(36 * KM, 16 * KM), Owner::Res, 100)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .event(link_created(0, 2, Faction::Res, 3, 4))
+        .event(link_created(1, 4, Faction::Res, 2, 3))
+        .build();
+    model.update(&round4);
+    assert_eq!(
+        model.build_zone_heat(&round4, PortalId(3)),
+        2,
+        "shared endpoint"
+    );
+    assert_eq!(model.build_zone_heat(&round4, PortalId(2)), 1);
+    // Own links never count.
+    let with_own = ObsBuilder::new(4)
+        .portal(5, Coord::new(24 * KM, 16 * KM), Owner::Enl, 100)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .event(link_created(2, 4, Faction::Enl, 0, 5))
+        .build();
+    model.update(&with_own);
+    assert_eq!(model.build_zone_heat(&with_own, PortalId(5)), 0);
+    // Both windows slide: at round 40 every round-4 fact is stale.
+    let round40 = ObsBuilder::new(40)
+        .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Res, 100)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .build();
+    model.update(&round40);
+    assert_eq!(model.build_zone_heat(&round40, PortalId(3)), 0);
+    assert_eq!(model.top_threat(&round40), None);
+    // Repeated rounds with no new events stay deterministic.
+    model.update(&round40);
+    assert_eq!(model.build_zone_heat(&round40, PortalId(2)), 0);
+}
+
+#[test]
+fn opponent_pressure_caps_at_the_recorded_bound_and_params_round_trip() {
+    let mut params = OpponentParams::default();
+    params.pressure_cap_per_portal = 3;
+    let mut model = OpponentModel::new(params, Faction::Res);
+    let mut builder = ObsBuilder::new(10)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 40)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20);
+    for seq in 0..9u64 {
+        builder = builder.event(enemy_attack(seq, 10, 0, 80));
+    }
+    let obs = builder.build();
+    model.update(&obs);
+    assert_eq!(model.pressure(&obs, PortalId(0)), 3, "saturated at the cap");
+    // The recorded parameter set round-trips canonically.
+    let default = OpponentParams::default();
+    assert_eq!(OpponentParams::from_tag(&default.tag()), Some(default));
+    let mut tuned = default;
+    tuned.threat_window_rounds = 12;
+    tuned.zone_window_rounds = 30;
+    tuned.pressure_cap_per_portal = 7;
+    assert_eq!(OpponentParams::from_tag(&tuned.tag()), Some(tuned));
+    assert_ne!(tuned.tag(), default.tag());
+    assert_eq!(OpponentParams::from_tag("window=8"), None);
+    assert_eq!(OpponentParams::from_tag("bad"), None);
+}
+
+// ---------------------------------------------------------------------
+// Coordinated builder core (plan 5.1/6.1): ranked candidates with seeded
+// near-equal top pick, station-to-agent assignment with per-round
+// reservation (no two agents on one one-shot station — the GreedyField
+// 73.6% CaptureTargetNotNeutral root cause), FieldPlanner-semantics
+// replanning, and claim-spread fallback
+// ---------------------------------------------------------------------
+
+use arena_bots::r2::build::{BuilderCore, CoreParams};
+use arena_core::map::MapDefinition;
+use arena_core::observe::Observation;
+use arena_core::types::Command;
+
+fn core_params() -> CoreParams {
+    CoreParams::default()
+}
+
+fn spawned_core(map: &MapDefinition) -> BuilderCore {
+    let cfg = support::fixture_cfg();
+    let mut core = BuilderCore::new(
+        Faction::Enl,
+        0x5EED_0000_0000_00B2,
+        R2Stream::GreedyCoordinated,
+        &cfg,
+        core_params(),
+    );
+    let roster: Vec<AgentId> = (0..3).map(AgentId).collect();
+    core.choose_spawns(&cfg, map, &roster);
+    core
+}
+
+/// The first round after spawning on the two-triangle fixture map: the
+/// three roster agents stand on the chosen triangle's vertices, and the
+/// allocator grants three DISTINCT capture stations — one agent per
+/// vertex, never two agents on one neutral portal.
+#[test]
+fn builder_core_assigns_distinct_stations_to_distinct_agents() {
+    let map = support::fixture_map();
+    let mut core = spawned_core(&map);
+    let spawns = core.last_spawns().to_vec();
+    let triangle = core.active().expect("spawn seeds the plan").vertices;
+    let mut by_agent: Vec<(AgentId, Coord)> = spawns.clone();
+    by_agent.sort_by_key(|(agent, _)| agent.0);
+    assert_eq!(by_agent.len(), 3);
+    for (_, coord) in &by_agent {
+        assert!(
+            triangle
+                .iter()
+                .any(|v| map.portal(*v).expect("map portal").position == *coord),
+            "every spawn stands on a plan vertex"
+        );
+    }
+    // Round 1 observation: everyone at their spawn, everything neutral.
+    let mut b = ObsBuilder::new(1);
+    for portal in map.portals() {
+        b = b.portal(portal.id.0, portal.position, portal.owner, portal.hp);
+    }
+    for (_index, (agent, coord)) in by_agent.iter().enumerate() {
+        b = b.agent(agent.0, *coord, 20);
+    }
+    let obs = b.build();
+    core.refresh(&obs);
+    let agents: Vec<AgentId> = by_agent.iter().map(|(a, _)| *a).collect();
+    let requests = core.build_requests(&obs);
+    let grants = arena_bots::r2::tasks::allocate(
+        &mut arena_bots::r2::tasks::TaskBoard::new(1),
+        &agents,
+        &requests,
+    );
+    let mut captured_portals: Vec<PortalId> = grants
+        .values()
+        .filter_map(|task| match task {
+            Task::Capture { portal } => Some(*portal),
+            _ => None,
+        })
+        .collect();
+    captured_portals.sort_unstable();
+    captured_portals.dedup();
+    assert_eq!(captured_portals.len(), 3, "three distinct capture stations");
+    assert_eq!(
+        captured_portals,
+        triangle.to_vec(),
+        "the stations are exactly the plan vertices (sorted)"
+    );
+    // And the emitted commands are structurally legal: every agent at most
+    // one Major Action and one Move, captures only when standing on the
+    // neutral portal.
+    let commands = core.execute(&obs, &grants);
+    assert_eq!(commands.len(), 3);
+    let mut built_by_agent: BTreeMap<AgentId, Vec<Command>> = BTreeMap::new();
+    for (agent, list) in commands {
+        let built = list.build();
+        assert!(
+            !built.is_empty(),
+            "agent {} is never idle on round 1",
+            agent.0
+        );
+        assert!(built.len() <= 10);
+        built_by_agent.insert(agent, built);
+    }
+    // An agent standing on its own neutral station emits exactly one
+    // Capture (a Major Action) and no Move.
+    let me0 = &obs.own_agents[0];
+    let station = obs
+        .portals
+        .iter()
+        .find(|p| p.position == me0.position)
+        .expect("spawned on a portal")
+        .id;
+    assert_eq!(
+        built_by_agent.get(&me0.id).expect("agent 0 has commands"),
+        &vec![Command::Capture { portal: station }],
+        "standing on the neutral station: capture, no move"
+    );
+}
+
+/// Replan semantics mirror the frozen FieldPlanner: a plan whose three own
+/// links all exist is COMPLETE and the next-best viable triangle takes
+/// over; a plan with an enemy-owned vertex is INVALID and likewise
+/// replans. Triangle A completed -> triangle B becomes active.
+#[test]
+fn builder_core_replans_on_complete_and_invalid() {
+    let map = support::fixture_map();
+    let mut core = spawned_core(&map);
+    let triangle = core.active().expect("spawn plan").vertices;
+    let (a, b, c) = (triangle[0], triangle[1], triangle[2]);
+
+    // COMPLETE: all three own links of the spawn triangle exist.
+    let mut complete = ObsBuilder::new(5);
+    for portal in map.portals() {
+        let owner = if triangle.contains(&portal.id) {
+            Owner::Enl
+        } else {
+            Owner::Neutral
+        };
+        complete = complete.portal(
+            portal.id.0,
+            portal.position,
+            owner,
+            if owner == Owner::Enl { 100 } else { 0 },
+        );
+    }
+    complete = complete
+        .link(a.0, b.0, Faction::Enl)
+        .link(a.0, c.0, Faction::Enl)
+        .link(b.0, c.0, Faction::Enl)
+        .agent(0, map.portal(a).expect("map").position, 20)
+        .agent(1, map.portal(b).expect("map").position, 20)
+        .agent(2, map.portal(c).expect("map").position, 20);
+    let obs = complete.build();
+    core.refresh(&obs);
+    let next = core.active().expect("replanned").vertices;
+    assert_ne!(
+        next, triangle,
+        "a completed plan is replaced (its pairs are all linked, so the search cannot re-pick it)"
+    );
+
+    // INVALID: a vertex of the active plan belongs to the enemy.
+    let mut invalid = ObsBuilder::new(6);
+    for portal in map.portals() {
+        let owner = if next.contains(&portal.id) {
+            if portal.id == next[0] {
+                Owner::Res
+            } else {
+                Owner::Enl
+            }
+        } else {
+            Owner::Neutral
+        };
+        invalid = invalid.portal(
+            portal.id.0,
+            portal.position,
+            owner,
+            if owner == Owner::Neutral { 0 } else { 100 },
+        );
+    }
+    invalid = invalid
+        .agent(0, map.portal(next[1]).expect("map").position, 20)
+        .agent(1, map.portal(next[2]).expect("map").position, 20)
+        .agent(2, map.portal(next[0]).expect("map").position, 20);
+    let obs = invalid.build();
+    core.refresh(&obs);
+    let after = core
+        .active()
+        .expect("invalid plans replan immediately")
+        .vertices;
+    assert_ne!(after, next, "the enemy-held triangle is abandoned");
+}
+
+/// Fallback (no viable triangle anywhere — collinear portals): the
+/// allocator still spreads one-shot claims so agents work DIFFERENT
+/// portals, and the request set stays deterministic.
+#[test]
+fn builder_core_fallback_spreads_claims_deterministically() {
+    let collinear = MapDefinition::new(
+        [0, 1, 2, 3]
+            .map(|i| arena_core::types::Portal {
+                id: PortalId(i),
+                position: Coord::new(4_000 + i as i32 * 8_000, 4_000),
+                owner: Owner::Neutral,
+                hp: 0,
+            })
+            .to_vec(),
+    );
+    let cfg = support::fixture_cfg();
+    let mut core = BuilderCore::new(
+        Faction::Enl,
+        0x00C0_FFEE_0000_0001,
+        R2Stream::GreedyCoordinated,
+        &cfg,
+        core_params(),
+    );
+    let roster: Vec<AgentId> = (0..3).map(AgentId).collect();
+    core.choose_spawns(&cfg, &collinear, &roster);
+    assert!(core.active().is_none(), "no viable triangle on a line");
+
+    let mut b = ObsBuilder::new(1);
+    for portal in collinear.portals() {
+        b = b.portal(portal.id.0, portal.position, portal.owner, portal.hp);
+    }
+    for (agent, (_, coord)) in roster.iter().zip(core.last_spawns().to_vec()) {
+        b = b.agent(agent.0, coord, 20);
+    }
+    let obs = b.build();
+    core.refresh(&obs);
+    assert!(core.active().is_none());
+    let requests = core.fallback_requests(&obs);
+    let grants = arena_bots::r2::tasks::allocate(
+        &mut arena_bots::r2::tasks::TaskBoard::new(1),
+        &roster,
+        &requests,
+    );
+    let mut stations: Vec<PortalId> = grants
+        .values()
+        .filter_map(|task| task.target_portal())
+        .collect();
+    stations.sort_unstable();
+    stations.dedup();
+    assert_eq!(
+        stations.len(),
+        grants.len().min(4),
+        "claims spread over distinct portals"
+    );
+    // Determinism: an identical second pass grants the identical tasks.
+    let again = arena_bots::r2::tasks::allocate(
+        &mut arena_bots::r2::tasks::TaskBoard::new(1),
+        &roster,
+        &core.fallback_requests(&obs),
+    );
+    assert_eq!(grants, again);
+    // Fallback stations emit commands too (never unintended idle).
+    let commands = core.execute(&obs, &grants);
+    assert_eq!(commands.len(), grants.len());
+}
+
+/// The core round (refresh -> requests -> allocate -> execute) is a
+/// deterministic function of (observation, seed, faction, parameters), and
+/// mirror factions draw DIFFERENT plans at spawn time (faction-keyed
+/// near-equal sampling — plan 10.1 mirror gate at the decision level).
+#[test]
+fn builder_core_rounds_are_deterministic_and_mirror_factions_diverge() {
+    let map = support::fixture_map();
+    let round_obs = |core: &BuilderCore| -> Observation {
+        let mut b = ObsBuilder::new(1);
+        for portal in map.portals() {
+            b = b.portal(portal.id.0, portal.position, portal.owner, portal.hp);
+        }
+        for (agent, coord) in [(0usize, AgentId(0)), (1, AgentId(1)), (2, AgentId(2))]
+            .iter()
+            .map(|(i, a)| (*a, core.last_spawns()[*i].1))
+        {
+            b = b.agent(agent.0, coord, 20);
+        }
+        b.build()
+    };
+    let run = |faction: Faction, seed: u64| -> Vec<Vec<Command>> {
+        let cfg = support::fixture_cfg();
+        let mut core = BuilderCore::new(
+            faction,
+            seed,
+            R2Stream::GreedyCoordinated,
+            &cfg,
+            core_params(),
+        );
+        let roster: Vec<AgentId> = (0..3).map(AgentId).collect();
+        core.choose_spawns(&cfg, &map, &roster);
+        let obs = round_obs(&core);
+        core.refresh(&obs);
+        let requests = core.build_requests(&obs);
+        let grants = arena_bots::r2::tasks::allocate(
+            &mut arena_bots::r2::tasks::TaskBoard::new(1),
+            &roster,
+            &requests,
+        );
+        let mut commands = core.execute(&obs, &grants);
+        roster
+            .iter()
+            .map(|agent| {
+                commands
+                    .remove(agent)
+                    .map(|list| list.build())
+                    .unwrap_or_default()
+            })
+            .collect()
+    };
+    assert_eq!(
+        run(Faction::Enl, 42),
+        run(Faction::Enl, 42),
+        "deterministic"
+    );
+    assert_ne!(
+        run(Faction::Enl, 7),
+        run(Faction::Res, 7), /* same map, same seed */
+        "faction-keyed"
+    );
+
+    // CoreParams round-trip and identity sensitivity of the record.
+    let params = CoreParams::default();
+    assert_eq!(CoreParams::from_tag(&params.tag()), Some(params));
+    let mut tuned = params;
+    tuned.near_equal_permille = 250;
+    tuned.replan_retry_rounds = 40;
+    tuned.fallback_priority = 5;
+    assert_eq!(CoreParams::from_tag(&tuned.tag()), Some(tuned));
+    assert_ne!(tuned.tag(), params.tag());
+    assert_eq!(CoreParams::from_tag("nearequal=100"), None);
+    assert_eq!(CoreParams::from_tag(""), None);
 }
 
 // ---------------------------------------------------------------------

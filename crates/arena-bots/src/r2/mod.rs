@@ -23,6 +23,8 @@
 /// policies are registered in `crate::policy` with exactly this version).
 pub const R2_VERSION: &str = "r2.0";
 
+pub mod build;
+pub mod opponent;
 pub mod rng;
 pub mod sample;
 pub mod tasks;
