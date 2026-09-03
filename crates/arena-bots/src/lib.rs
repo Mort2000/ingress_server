@@ -14,6 +14,7 @@ pub mod greedy_field;
 pub mod hybrid;
 pub mod nearest;
 pub mod policy;
+pub mod r2;
 pub mod random;
 pub mod rng;
 
