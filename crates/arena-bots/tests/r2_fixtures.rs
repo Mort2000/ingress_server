@@ -1226,10 +1226,7 @@ fn builder_core_assigns_distinct_stations_to_distinct_agents() {
     let station = obs
         .portals
         .iter()
-        .find(|p| {
-            arena_core::geometry::dist2(p.position, me0.position)
-                <= 5_000i64 * 5_000
-        })
+        .find(|p| arena_core::geometry::dist2(p.position, me0.position) <= 5_000i64 * 5_000)
         .expect("spawned within operation range of a portal")
         .id;
     assert_eq!(
