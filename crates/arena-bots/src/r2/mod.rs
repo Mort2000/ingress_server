@@ -24,3 +24,4 @@
 pub const R2_VERSION: &str = "r2.0";
 
 pub mod rng;
+pub mod value;

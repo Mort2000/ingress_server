@@ -153,6 +153,7 @@ pub fn run_bot_match(
 }
 
 /// Hand-builds an `Observation` (unit fixtures inspect single decisions).
+#[derive(Clone)]
 pub struct ObsBuilder {
     round: u32,
     portals: Vec<Portal>,
