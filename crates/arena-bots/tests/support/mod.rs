@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use arena_bots::bot::{Bot, BotKind, make_bot};
+use arena_bots::bot::{BotKind, make_bot};
 use arena_core::config::GameConfig;
 use arena_core::harness::{AgentSubmission, MatchHarness, RoundStrategy};
 use arena_core::map::{MapDefinition, generate_map};
@@ -101,7 +101,7 @@ impl<S: RoundStrategy> RoundStrategy for Recording<S> {
 pub fn validate_bot_spawns(
     cfg: &GameConfig,
     faction: Faction,
-    map: &MapDefinition,
+    _map: &MapDefinition,
     entries: &[(AgentId, Coord)],
 ) -> InitialSpawns {
     let (enl_roster, res_roster) = GameState::initial_roster(cfg);

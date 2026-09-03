@@ -3,7 +3,7 @@
 
 mod support;
 
-use arena_bots::bot::{Bot, BotKind, make_bot};
+use arena_bots::bot::{BotKind, make_bot};
 use arena_core::config::GameConfig;
 use arena_core::event::{Event, EventKind};
 use arena_core::geometry::move_cost;

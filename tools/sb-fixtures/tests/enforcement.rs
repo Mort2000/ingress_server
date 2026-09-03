@@ -32,18 +32,30 @@ fn runner_bin() -> PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_sandbox-runner") {
         return PathBuf::from(path);
     }
-    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join("sandbox-runner");
-        if candidate.exists() {
-            return candidate;
-        }
+    // The runner is NOT a bin of this package, so cargo never sets
+    // CARGO_BIN_EXE_sandbox-runner here — the lookup must match the
+    // profile of THIS test build exactly. The sandboxed fixtures come
+    // from cargo's own CARGO_BIN_EXE_ vars (release under
+    // `cargo test --release`), and the runner's landlock grants
+    // read+exec only on its OWN directory (D74) — a debug-first
+    // directory scan paired the release fixtures with a DEBUG runner
+    // and every exec died with EACCES (`spawn_error`) in release runs
+    // (debug runs matched only by accident: both sides were debug).
+    // This package's fixture bins are addressed by compile-time
+    // CARGO_BIN_EXE_ vars, so their directory IS target/<profile> of
+    // the current build; the runner lives right next to them.
+    let profile_dir = Path::new(env!("CARGO_BIN_EXE_sb-spin"))
+        .parent()
+        .expect("fixture bin sits inside the profile directory")
+        .to_path_buf();
+    let candidate = profile_dir.join("sandbox-runner");
+    if candidate.exists() {
+        return candidate;
     }
-    panic!("sandbox-runner binary not built (run cargo build --workspace)");
+    panic!(
+        "sandbox-runner not built for this profile ({}); run cargo build --workspace",
+        profile_dir.display()
+    );
 }
 
 fn fixture_bin(name: &str) -> String {

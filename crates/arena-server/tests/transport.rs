@@ -963,20 +963,38 @@ fn mid_match_wrong_version_hello_is_an_envelope_reject() {
 }
 
 // (R-RESOLVE-01 / R-RESOLVE-03, D64) A frame claiming round N+1 that
-// completes during round N's settlement — pipelined the instant
-// ROUND_CLOSED(N) is observed, before round N+1's round_start — claimed a
-// FUTURE round at arrival. It must stay envelope-unlocatable: no bucket-0
+// completes before round N+1's ROUND_START_SIGNAL was written — pipelined
+// by a client that cannot yet have seen that signal — claimed a FUTURE
+// round at arrival. It must stay envelope-unlocatable: no bucket-0
 // priority, no frozen slot, never executed (its claimed round equals the
 // CURRENT round once collection for N+1 begins, so only the transport can
 // reject it). The pipelining client must never gain first-mover priority.
+//
+// Determinism: firing the claim on observing ROUND_CLOSED(N) races the
+// server's settlement of round N — in release the settle+publish path can
+// beat the client's socket wakeup, and a claim landing after the N+1
+// signal is a LEGAL in-round submission, so the verdict depended on
+// timing. The race is removed without weakening what is pinned: the claim
+// now rides BEHIND this client's own COMMIT_ROUND(N) in ONE write, after
+// a test-side barrier proves the opponent's slots are already frozen.
+// That commit is then the event that closes round N's input; the claim's
+// last byte is stamped by the SAME reader wakeup, microseconds behind the
+// commit's enqueue — strictly before the driver can dequeue the commit
+// (settlement of round N cannot even start). And because collect_round
+// re-checks BOTH-COMPLETE at the loop top after every dequeued event, the
+// already-queued claim is NOT dequeued in round N: it surfaces as the
+// FIRST event of round N+1's collection with claimed round == current
+// round and a receive stamp older than that round's signal. Pre-signal
+// arrival is forced by construction, not hoped for from the scheduler.
 #[test]
 fn settlement_pipelined_next_round_claim_is_unlocatable() {
     let _permit = MatchPermit::acquire();
     let total = 4u32;
     let server = wide("pipeline", total);
+    let (turn_tx, turn_rx) = mpsc::channel();
     std::thread::scope(|scope| {
-        scope.spawn(|| pipelining_client(&server.socket, total));
-        scope.spawn(|| play(&server, "res", Hello::Normal, noop_round));
+        scope.spawn(|| pipelining_client(&server.socket, total, turn_rx));
+        scope.spawn(|| completing_opponent(&server.socket, turn_tx));
     });
     let report = server.finish();
     assert!(
@@ -995,13 +1013,17 @@ fn settlement_pipelined_next_round_claim_is_unlocatable() {
     );
 }
 
-/// Plays the match, but on every ROUND_CLOSED(N) (except the last)
-/// immediately fires a SUBMIT_COMMAND_STREAM claiming round N+1 — the
-/// frame completes inside the settlement window, before round N+1 begins.
-/// Every such claim must come back unlocatable, and the real first
-/// submissions of every round must still be accepted-first (a pipelined
-/// claim never froze anything).
-fn pipelining_client(socket: &std::path::Path, total_rounds: u32) {
+/// Plays the match while pipelining next-round claims: every round it
+/// submits its first two agents, then waits (test-side barrier) until the
+/// opponent's whole roster is frozen, then writes COMMIT_ROUND(N) and a
+/// SUBMIT_COMMAND_STREAM claiming round N+1 back-to-back in ONE write.
+/// The claim's last byte therefore lands while round N's input is still
+/// open — before round N+1 exists, pre-signal by construction — yet it is
+/// only dequeued once collection for round N+1 is underway: the
+/// pipelining window the transport must reject. Every such claim must
+/// come back unlocatable, and the real first submissions of every round
+/// must still be accepted-first (a pipelined claim never froze anything).
+fn pipelining_client(socket: &std::path::Path, total_rounds: u32, turn: mpsc::Receiver<()>) {
     let mut client = RawClient::hello(socket, "pipeline").expect("connect");
     let faction = match client.next_envelope(Duration::from_secs(10)) {
         Some(Envelope::ServerHello {
@@ -1048,7 +1070,27 @@ fn pipelining_client(socket: &std::path::Path, total_rounds: u32) {
                         commands: vec![],
                     });
                 }
-                client.send_envelope(&Envelope::CommitRound { round });
+                // Hold this round's input open until the opponent's slots
+                // are frozen: our COMMIT (riding in front of the claim
+                // below) must be the event that closes collection, so the
+                // claim queued behind it cannot be dequeued in round N.
+                turn.recv_timeout(Duration::from_secs(30))
+                    .expect("opponent completed the round");
+                let mut burst =
+                    arena_protocol::build::envelope_frame(&Envelope::CommitRound { round });
+                if round < total_rounds {
+                    // The exploit under test: a claim for the NEXT round,
+                    // landing before round N's input closes (and so, with
+                    // certainty, before round N+1's start signal).
+                    burst.extend_from_slice(&arena_protocol::build::envelope_frame(
+                        &Envelope::SubmitCommandStream {
+                            round: round + 1,
+                            agent_id: pipelined_agent,
+                            commands: vec![],
+                        },
+                    ));
+                }
+                client.send_raw(&burst);
             }
             Some(Envelope::SubmissionResult {
                 agent_id, status, ..
@@ -1065,17 +1107,87 @@ fn pipelining_client(socket: &std::path::Path, total_rounds: u32) {
                     );
                 }
             }
-            Some(Envelope::RoundClosed { round: closed }) => {
-                if closed < total_rounds {
-                    // The exploit under test: claim the NEXT round while
-                    // the server is still settling this one.
+            Some(Envelope::RoundClosed { .. }) => {}
+            Some(Envelope::GameEnd { .. }) => return,
+            Some(other) => panic!("unexpected {other:?}"),
+            None => return,
+        }
+    }
+}
+
+/// The compliant opponent, shaped only to make round completion
+/// observable: every round it submits a stream for EVERY agent (freezing
+/// the whole roster) and only then hands the turn to the pipelining
+/// client. The handoff is strictly after the driver dequeued — and replied
+/// to — the last of those streams, which is exactly when this faction
+/// became complete for the round; the reply is what the loop observes.
+fn completing_opponent(socket: &std::path::Path, turn: mpsc::Sender<()>) {
+    let mut client = RawClient::hello(socket, "opponent").expect("connect");
+    let faction = match client.next_envelope(Duration::from_secs(10)) {
+        Some(Envelope::ServerHello {
+            status: HELLO_OK,
+            assigned_faction,
+            ..
+        }) => assigned_faction,
+        other => panic!("hello {other:?}"),
+    };
+    let info = match client.next_envelope(Duration::from_secs(10)) {
+        Some(Envelope::InitialSpawnStart { info, .. }) => info,
+        other => panic!("start {other:?}"),
+    };
+    let n = info.initial_agents_per_faction;
+    assert!(n >= 3, "the fixture assumes a 3-agent roster");
+    let offset = match faction {
+        Faction::Enl => 0,
+        Faction::Res => n,
+    };
+    let roster: Vec<AgentId> = (0..n).map(|i| AgentId(offset + i)).collect();
+    let positions: Vec<SpawnEntry> = roster
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| SpawnEntry {
+            agent_id: id,
+            position: Coord::new(i as i32 + 1, i as i32),
+        })
+        .collect();
+    client.send_envelope(&Envelope::SubmitInitialSpawns { positions });
+    match client.next_envelope(Duration::from_secs(10)) {
+        Some(Envelope::InitialSpawnResult { status: 0, .. }) => {}
+        other => panic!("spawn {other:?}"),
+    }
+    let mut round = 0u32;
+    loop {
+        match client.next_envelope(Duration::from_secs(30)) {
+            Some(Envelope::RoundStartSignal) => {
+                round += 1;
+                for &agent in &roster {
                     client.send_envelope(&Envelope::SubmitCommandStream {
-                        round: closed + 1,
-                        agent_id: pipelined_agent,
+                        round,
+                        agent_id: agent,
                         commands: vec![],
                     });
                 }
+                // Observe this round's ACCEPTED-first replies: the last
+                // one proves the driver froze every slot of this faction
+                // (the reply is sent after the freeze, and ROUND_CLOSED
+                // cannot arrive first — input stays open until the
+                // pipelining client's post-barrier commit).
+                let mut accepted = 0usize;
+                while accepted < roster.len() {
+                    match client.next_envelope(Duration::from_secs(30)) {
+                        Some(Envelope::SubmissionResult {
+                            status: SUBMIT_ACCEPTED,
+                            ..
+                        }) => accepted += 1,
+                        Some(other) => {
+                            panic!("unexpected while completing round {round}: {other:?}")
+                        }
+                        None => return,
+                    }
+                }
+                turn.send(()).expect("turn handoff");
             }
+            Some(Envelope::RoundClosed { .. }) | Some(Envelope::SubmissionResult { .. }) => {}
             Some(Envelope::GameEnd { .. }) => return,
             Some(other) => panic!("unexpected {other:?}"),
             None => return,

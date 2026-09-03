@@ -207,7 +207,7 @@ fn sandbox_killed_client_forfeits_and_server_finishes_cleanly() {
     // The victim runs under the real sandbox binary with an 8 MiB
     // address space (the deterministic kill point: the SDK's public
     // region mapping is ~16 MiB of VA by itself).
-    let mut victim = Command::new(sandbox_runner_bin())
+    let victim = Command::new(sandbox_runner_bin())
         .arg("--as")
         .arg("8MiB")
         .arg("--rw")

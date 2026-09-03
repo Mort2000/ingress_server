@@ -15,8 +15,6 @@
 //!   mapping immediately; the SDK Session API itself has no code path
 //!   that does this (pinned by the compile-fail snippets).
 
-use std::path::PathBuf;
-
 use arena_client_sdk::round::Session;
 use arena_client_sdk::shm::region_names;
 use arena_core::types::Faction;

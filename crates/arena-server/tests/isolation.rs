@@ -42,7 +42,6 @@ struct Server {
     child: Child,
     #[allow(dead_code)]
     socket: PathBuf,
-    tag: String,
 }
 
 impl Drop for Server {
@@ -79,11 +78,7 @@ fn spawn_server(tag: &str, rounds: u32) -> Server {
         assert!(Instant::now() < deadline, "socket never appeared");
         std::thread::sleep(Duration::from_millis(5));
     }
-    Server {
-        child,
-        socket,
-        tag: tag.to_string(),
-    }
+    Server { child, socket }
 }
 
 fn region_files(match_id: &str) -> Vec<PathBuf> {
