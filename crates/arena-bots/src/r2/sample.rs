@@ -73,12 +73,25 @@ mod tests {
 
     #[test]
     fn the_band_floor_is_truncated_integer_permille() {
-        // best 1000, permille 33: slack = 33 (1000*33/1000), floor 967.
+        // best 1000: slack = best * permille / 1000 truncated, floor =
+        // best - slack. permille 33 -> slack 33 -> floor 967, so 968 STAYS
+        // in the band and the uniform draw may legitimately return either
+        // member; permille 31 -> slack 31 -> floor 969, which excludes 968
+        // on every stream.
         let mut rng = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
-        assert_eq!(
-            pick_near_equal(&[1000i64, 968], |v| *v, 33, &mut rng),
-            Some(&1000)
+        let pick = pick_near_equal(&[1000i64, 968], |v| *v, 33, &mut rng).map(|v| *v);
+        assert!(
+            pick == Some(1000) || pick == Some(968),
+            "floor 967 keeps 968 eligible, got {pick:?}"
         );
+        for seed in 0..32u64 {
+            let mut rng = R2Rng::new(seed, Faction::Enl, R2Stream::Idle);
+            assert_eq!(
+                pick_near_equal(&[1000i64, 968], |v| *v, 31, &mut rng).map(|v| *v),
+                Some(1000),
+                "floor 969 excludes 968 on every stream (seed {seed})"
+            );
+        }
         let mut rng = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
         assert!(
             pick_near_equal(&[1000i64, 967, 900], |v| *v, 33, &mut rng).map(|v| *v) != Some(900),
