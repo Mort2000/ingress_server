@@ -4,7 +4,10 @@
 //! publish (P3-RPC).
 
 /// Wire protocol version (IARP `PROTOCOL_VERSION` placeholder retired: the
-/// server now stamps this constant and `arena-replay` records it).
+/// server now stamps this constant and `arena-replay` records it). The IARP
+/// header constant `arena_replay::format::PROTOCOL_VERSION` must equal this
+/// value; arena-replay's `protocol_version_tie` test (dev-dep on this
+/// crate) fails the build on drift.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Public snapshot schema version (public SHM root `schema_version`).

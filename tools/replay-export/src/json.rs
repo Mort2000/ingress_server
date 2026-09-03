@@ -19,6 +19,13 @@
 
 use std::fmt;
 
+/// Maximum container nesting the parser accepts and the writer emits
+/// (M-final review fix). The viewer payload nests at most five levels
+/// (root object -> header/rounds -> round -> arrays -> scalars); anything
+/// deeper is hostile input, and a clean error beats recursing toward a
+/// stack overflow on a hand-crafted `[[[[…`.
+pub const MAX_DEPTH: usize = 256;
+
 /// A mini-JSON value. Objects preserve insertion order (the schema's key
 /// order is part of the frozen `ingress-viewer-v1` contract).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -109,7 +116,9 @@ impl Json {
 
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&write_json(self))
+        // Depth-safe by construction: an over-deep value renders as this
+        // placeholder instead of recursing (write_json enforces MAX_DEPTH).
+        f.write_str(&write_json(self).unwrap_or_else(|_| "\"<max depth exceeded>\"".into()))
     }
 }
 
@@ -117,16 +126,32 @@ impl fmt::Display for Json {
 // Writer (compact; `<`, `>`, `&`, and controls escaped)
 // ---------------------------------------------------------------------------
 
-/// Serializes `value` compactly. String contents escape the JSON-mandated
-/// characters PLUS `<`, `>`, and `&` so the bytes can be embedded inside a
-/// `<script>` element without any possibility of element breakout.
-pub fn write_json(value: &Json) -> String {
-    let mut out = String::new();
-    write_value(value, &mut out);
-    out
+/// Writer-side failure: the value nests deeper than [`MAX_DEPTH`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DepthError {
+    pub max_depth: usize,
 }
 
-fn write_value(value: &Json, out: &mut String) {
+impl fmt::Display for DepthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "nesting exceeds the maximum depth {}", self.max_depth)
+    }
+}
+
+impl std::error::Error for DepthError {}
+
+/// Serializes `value` compactly. String contents escape the JSON-mandated
+/// characters PLUS `<`, `>`, and `&` so the bytes can be embedded inside a
+/// `<script>` element without any possibility of element breakout. Values
+/// nested deeper than [`MAX_DEPTH`] return [`DepthError`] instead of
+/// recursing toward a stack overflow.
+pub fn write_json(value: &Json) -> Result<String, DepthError> {
+    let mut out = String::new();
+    write_value(value, 0, &mut out)?;
+    Ok(out)
+}
+
+fn write_value(value: &Json, depth: usize, out: &mut String) -> Result<(), DepthError> {
     match value {
         Json::Null => out.push_str("null"),
         Json::Bool(true) => out.push_str("true"),
@@ -134,16 +159,18 @@ fn write_value(value: &Json, out: &mut String) {
         Json::Int(number) => out.push_str(&number.to_string()),
         Json::Str(text) => write_string(text, out),
         Json::Array(items) => {
+            depth_check(depth)?;
             out.push('[');
             for (index, item) in items.iter().enumerate() {
                 if index > 0 {
                     out.push(',');
                 }
-                write_value(item, out);
+                write_value(item, depth + 1, out)?;
             }
             out.push(']');
         }
         Json::Object(pairs) => {
+            depth_check(depth)?;
             out.push('{');
             for (index, (key, item)) in pairs.iter().enumerate() {
                 if index > 0 {
@@ -151,10 +178,21 @@ fn write_value(value: &Json, out: &mut String) {
                 }
                 write_string(key, out);
                 out.push(':');
-                write_value(item, out);
+                write_value(item, depth + 1, out)?;
             }
             out.push('}');
         }
+    }
+    Ok(())
+}
+
+fn depth_check(depth: usize) -> Result<(), DepthError> {
+    if depth >= MAX_DEPTH {
+        Err(DepthError {
+            max_depth: MAX_DEPTH,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -203,13 +241,15 @@ impl std::error::Error for ParseError {}
 /// Parses one JSON document. Whitespace between tokens is allowed (the
 /// emitter never writes any, but `meta.json` inputs are pretty-printed);
 /// anything after the document's root value is an error, float syntax is
-/// rejected, and raw control characters inside strings are rejected.
+/// rejected, raw control characters inside strings are rejected, and
+/// container nesting deeper than [`MAX_DEPTH`] is a clean error instead of
+/// unbounded recursion.
 pub fn parse_json(text: &str) -> Result<Json, ParseError> {
     let mut parser = Parser {
         bytes: text.as_bytes(),
         position: 0,
     };
-    let value = parser.value()?;
+    let value = parser.value(0)?;
     parser.skip_ws();
     if parser.position != parser.bytes.len() {
         return Err(parser.error("trailing bytes after the JSON document"));
@@ -244,11 +284,11 @@ impl<'a> Parser<'a> {
         self.bytes.get(self.position).copied()
     }
 
-    fn value(&mut self) -> Result<Json, ParseError> {
+    fn value(&mut self, depth: usize) -> Result<Json, ParseError> {
         self.skip_ws();
         match self.peek() {
-            Some(b'{') => self.object(),
-            Some(b'[') => self.array(),
+            Some(b'{') => self.object(depth),
+            Some(b'[') => self.array(depth),
             Some(b'"') => Ok(Json::Str(self.string()?)),
             Some(b't') => self.literal("true", Json::Bool(true)),
             Some(b'f') => self.literal("false", Json::Bool(false)),
@@ -350,7 +390,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn array(&mut self) -> Result<Json, ParseError> {
+    fn array(&mut self, depth: usize) -> Result<Json, ParseError> {
+        self.depth_check(depth)?;
         self.position += 1; // '['
         let mut items = Vec::new();
         self.skip_ws();
@@ -359,7 +400,7 @@ impl<'a> Parser<'a> {
             return Ok(Json::Array(items));
         }
         loop {
-            items.push(self.value()?);
+            items.push(self.value(depth + 1)?);
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.position += 1,
@@ -372,7 +413,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn object(&mut self) -> Result<Json, ParseError> {
+    fn object(&mut self, depth: usize) -> Result<Json, ParseError> {
+        self.depth_check(depth)?;
         self.position += 1; // '{'
         let mut pairs = Vec::new();
         self.skip_ws();
@@ -391,7 +433,7 @@ impl<'a> Parser<'a> {
                 return Err(self.error("expected ':' after object key"));
             }
             self.position += 1;
-            pairs.push((key, self.value()?));
+            pairs.push((key, self.value(depth + 1)?));
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.position += 1,
@@ -401,6 +443,14 @@ impl<'a> Parser<'a> {
                 }
                 _ => return Err(self.error("expected ',' or '}' in object")),
             }
+        }
+    }
+
+    fn depth_check(&self, depth: usize) -> Result<(), ParseError> {
+        if depth >= MAX_DEPTH {
+            Err(self.error("nesting exceeds the maximum depth"))
+        } else {
+            Ok(())
         }
     }
 }
@@ -431,11 +481,14 @@ mod tests {
             ("empty_arr", Json::arr(vec![])),
             ("empty_obj", Json::obj(vec![])),
         ]);
-        let text = write_json(&value);
+        let text = write_json(&value).expect("writes");
         assert_eq!(parse_json(&text).expect("parses"), value);
         // Structural identity is byte identity: writing the parse result
         // reproduces the exact compact document.
-        assert_eq!(write_json(&parse_json(&text).expect("parses")), text);
+        assert_eq!(
+            write_json(&parse_json(&text).expect("parses")).expect("writes"),
+            text
+        );
     }
 
     // D92: `<`, `>`, `&`, quotes, backslashes, and control characters are
@@ -444,7 +497,7 @@ mod tests {
     #[test]
     fn script_breakout_is_impossible() {
         let hostile = "</script><script>alert(1)</script>&\"\\ \u{0001}\u{001f}\n\t";
-        let text = write_json(&Json::str(hostile));
+        let text = write_json(&Json::str(hostile)).expect("writes");
         assert!(!text.contains("</script>"), "no literal close tag: {text}");
         assert!(
             !text.contains('<') && !text.contains('>'),
@@ -457,7 +510,7 @@ mod tests {
             Json::Str(hostile.to_string())
         );
         // A full document embedding the hostile string is equally inert.
-        let doc = write_json(&Json::obj(vec![("meta", Json::str(hostile))]));
+        let doc = write_json(&Json::obj(vec![("meta", Json::str(hostile))])).expect("writes");
         assert!(!doc.contains("</script>"));
         assert_eq!(
             parse_json(&doc)
@@ -494,7 +547,8 @@ mod tests {
         let text = write_json(&Json::obj(vec![
             ("a", Json::int(1)),
             ("b", Json::arr(vec![Json::int(2), Json::int(3)])),
-        ]));
+        ]))
+        .expect("writes");
         assert_eq!(text, "{\"a\":1,\"b\":[2,3]}");
         assert!(!text.contains(' ') && !text.contains('\n') && !text.contains('\t'));
     }
@@ -546,10 +600,60 @@ mod tests {
     #[test]
     fn utf8_round_trip() {
         let text = "拼图 — enthusiast™ 日本語";
-        let encoded = write_json(&Json::str(text));
+        let encoded = write_json(&Json::str(text)).expect("writes");
         assert_eq!(
             parse_json(&encoded).expect("parses"),
             Json::Str(text.to_string())
         );
+    }
+
+    // M-final review fix: unbounded recursion is gone from BOTH directions.
+    // A hostile deeply nested document parses to a clean Err (never a stack
+    // overflow), and an over-deep VALUE writes to a clean Err; the boundary
+    // itself round-trips exactly.
+    #[test]
+    fn depth_cap_rejects_deep_nesting_cleanly() {
+        let nested_text = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+
+        // Parser: exactly MAX_DEPTH levels still parse, one more is a clean
+        // error naming the depth.
+        let at_cap = parse_json(&nested_text(MAX_DEPTH)).expect("the cap itself parses");
+        let over_cap = parse_json(&nested_text(MAX_DEPTH + 1)).expect_err("must not recurse");
+        assert!(
+            over_cap.message.contains("depth"),
+            "expected a depth rejection, got: {over_cap}"
+        );
+        // The capped value really is MAX_DEPTH levels deep (the innermost
+        // level is the empty array).
+        let mut depth_of = 0usize;
+        let mut walker = &at_cap;
+        while let Json::Array(items) = walker {
+            depth_of += 1;
+            match items.first() {
+                Some(inner) => walker = inner,
+                None => break,
+            }
+        }
+        assert_eq!(depth_of, MAX_DEPTH);
+
+        // Writer: the same boundary from the value side, with a clean
+        // DepthError (not a crash) beyond it.
+        let mut deep = Json::int(0);
+        for _ in 0..MAX_DEPTH {
+            deep = Json::arr(vec![deep]);
+        }
+        assert!(write_json(&deep).is_ok(), "the cap itself writes");
+        let mut deeper = Json::arr(vec![deep]);
+        for _ in 0..3 {
+            deeper = Json::arr(vec![deeper]);
+        }
+        let error = write_json(&deeper).expect_err("must not recurse");
+        assert_eq!(error.max_depth, MAX_DEPTH);
+        assert!(error.to_string().contains("256"));
+
+        // Parse->write identity holds at the cap.
+        let written = write_json(&at_cap).expect("writes");
+        assert_eq!(parse_json(&written).expect("parses"), at_cap);
+        assert_eq!(written, nested_text(MAX_DEPTH));
     }
 }

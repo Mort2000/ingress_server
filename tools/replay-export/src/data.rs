@@ -218,7 +218,7 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
 /// Decode → verify → materialize → payload → ONE self-contained HTML page.
 pub fn export(iarp: &[u8], options: &ExportOptions) -> Result<Exported, String> {
     let (payload, summary) = build_payload(iarp, options)?;
-    let payload_text = crate::json::write_json(&payload);
+    let payload_text = crate::json::write_json(&payload).map_err(|error| error.to_string())?;
     let html = assemble_html(&payload_text);
     Ok(Exported {
         payload,
@@ -230,6 +230,13 @@ pub fn export(iarp: &[u8], options: &ExportOptions) -> Result<Exported, String> 
 
 /// Assembles the final page: the template with the stylesheet, the
 /// `VIEWER_DATA` constant, and the six viewer scripts inlined.
+///
+/// Substitution is ONE-PASS and marker-exact: each marker is located only
+/// in the still-unconsumed TEMPLATE tail (M-final review fix — the previous
+/// `str::replace` chain rescanned already-inserted content, so a hostile
+/// payload string containing a marker token could pull the stylesheet or
+/// the whole script bundle into the data block). Inserted content is never
+/// searched for markers, so payload bytes cannot influence assembly.
 pub fn assemble_html(payload_text: &str) -> String {
     let data_block = format!("const VIEWER_DATA = {payload_text};");
     let scripts = [
@@ -241,10 +248,24 @@ pub fn assemble_html(payload_text: &str) -> String {
         JS_SELFTEST,
     ]
     .join("\n");
-    TEMPLATE
-        .replace("/*__VIEWER_CSS__*/", VIEWER_CSS)
-        .replace("/*__VIEWER_DATA__*/", &data_block)
-        .replace("/*__VIEWER_JS__*/", &scripts)
+
+    let mut page =
+        String::with_capacity(TEMPLATE.len() + VIEWER_CSS.len() + data_block.len() + scripts.len());
+    let mut rest = TEMPLATE;
+    for (marker, content) in [
+        ("/*__VIEWER_CSS__*/", VIEWER_CSS),
+        ("/*__VIEWER_DATA__*/", data_block.as_str()),
+        ("/*__VIEWER_JS__*/", scripts.as_str()),
+    ] {
+        let index = rest
+            .find(marker)
+            .unwrap_or_else(|| panic!("viewer template must carry the marker {marker}"));
+        page.push_str(&rest[..index]);
+        page.push_str(content);
+        rest = &rest[index + marker.len()..];
+    }
+    page.push_str(rest);
+    page
 }
 
 /// Extracts the embedded payload text back out of an emitted page (the

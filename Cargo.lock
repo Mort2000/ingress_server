@@ -46,6 +46,7 @@ name = "arena-replay"
 version = "0.1.0"
 dependencies = [
  "arena-core",
+ "arena-protocol",
  "blake3",
 ]
 

@@ -215,7 +215,9 @@ pub fn replay_bytes(bytes: &[u8]) -> Result<ReplayOutcome, ReplayError> {
 }
 
 /// Rebuilds a validated [`InitialSpawns`] from the header's spawn list.
-fn initial_spawns(
+/// `pub(crate)`: the offline conflict-analysis pass (crate::analysis)
+/// rebuilds the same state without duplicating the validation mapping.
+pub(crate) fn initial_spawns(
     cfg: &GameConfig,
     faction: Faction,
     entries: &[(arena_core::types::AgentId, arena_core::types::Coord)],

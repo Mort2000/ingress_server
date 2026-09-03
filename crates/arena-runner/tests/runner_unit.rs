@@ -22,7 +22,7 @@ use arena_runner::metrics::{
 };
 use arena_runner::policy::{BucketPolicy, PolicyStrategy};
 use arena_runner::report::{BatchSummary, fraction_str, mean_u64_str, permille_str, summary_text};
-use arena_runner::run::run_batch;
+use arena_runner::run::{BatchError, run_batch};
 use arena_runner::schedule::a_is_enl_decisions;
 
 // ---------------------------------------------------------------------
@@ -737,4 +737,43 @@ fn small_batch_runs_and_records_metadata() {
         assert_ne!(record.result, Outcome::Crash);
         assert!(record.elapsed_ms < 60_000);
     }
+}
+
+// BatchError implements Display + std::error::Error (the ReplayError/SdkError
+// house style) and a genuinely infeasible config surfaces it from run_batch.
+#[test]
+fn batch_error_displays_and_infeasible_maps_surface_it() {
+    let error = BatchError::MapInfeasible { map_index: 2 };
+    assert!(error.to_string().contains("map 2"), "got: {error}");
+    let boxed: Box<dyn std::error::Error> = Box::new(error);
+    assert!(boxed.to_string().contains("infeasible"));
+
+    // A config that cannot be laid out (50 portals, min distance 1000 cm on
+    // a 1000x1000 map — at most 4 mutually spaced points exist) aborts the
+    // batch as a config defect instead of skipping matches (no map skip
+    // rule, D58).
+    let mut cfg = GameConfig::default();
+    cfg.map_width_cm = 1_000;
+    cfg.map_height_cm = 1_000;
+    cfg.portal_count = 50;
+    cfg.portal_min_distance_cm = 1_000;
+    let batch = BatchConfig {
+        batch_id: "infeasible".to_string(),
+        matchups: vec![Matchup::new(
+            "NN",
+            BotKind::NearestPortal,
+            BotKind::NearestPortal,
+            2,
+        )],
+        map_count: 1,
+        master_seed: 0x1BAD_BEEF,
+        bucket_policy: BucketPolicy::Flat(0),
+        config: cfg,
+    };
+    let error = match run_batch(&batch, 1) {
+        Ok(_) => panic!("the config cannot be laid out"),
+        Err(error) => error,
+    };
+    assert_eq!(error, BatchError::MapInfeasible { map_index: 0 });
+    assert!(error.to_string().contains("config defect"), "got: {error}");
 }

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod batch;
+pub mod conflict;
 pub mod metrics;
 pub mod policy;
 pub mod report;

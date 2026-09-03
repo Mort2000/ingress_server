@@ -93,10 +93,10 @@ const Controls = {
           this.jump(D.roundCount);
           break;
         case "+":
-          this.shiftSpeed(-1);
+          this.shiftSpeed(1);
           break;
         case "-":
-          this.shiftSpeed(1);
+          this.shiftSpeed(-1);
           break;
         case "v":
         case "V":

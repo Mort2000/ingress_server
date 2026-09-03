@@ -6,6 +6,8 @@
 //! is in-memory only) — the determinism test target. There is NO auto
 //! faction-swap rematch anywhere: each (matchup, j) appears exactly once.
 
+use std::fmt;
+
 use arena_core::map::MapDefinition;
 
 use crate::tournament::config::TournamentConfig;
@@ -31,6 +33,22 @@ pub enum TournamentError {
     /// `TournamentConfig::validate` failed.
     Invalid(String),
 }
+
+impl fmt::Display for TournamentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TournamentError::MapInfeasible { map_index } => write!(
+                f,
+                "generated Benchmark Seed Set map {map_index} is infeasible for this config (config defect)"
+            ),
+            TournamentError::Invalid(reason) => {
+                write!(f, "tournament config invalid: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TournamentError {}
 
 /// Everything one match needs, derived and frozen up front. Echoed into
 /// `index.tsv` and each `meta.json`.
@@ -153,5 +171,25 @@ mod tests {
         let other =
             arena_core::map::generate_map(8, &arena_core::config::GameConfig::default()).unwrap();
         assert_ne!(map_codec_hash(&map), map_codec_hash(&other));
+    }
+
+    // TournamentError implements Display + std::error::Error (the
+    // ReplayError/SdkError house style) so it flows through `?` in main
+    // and boxed error reporting.
+    #[test]
+    fn tournament_error_displays_and_is_an_error() {
+        let map_error = TournamentError::MapInfeasible { map_index: 3 };
+        assert!(map_error.to_string().contains("map 3"), "got: {map_error}");
+        let invalid = TournamentError::Invalid("entrant names must be unique".to_string());
+        assert!(
+            invalid.to_string().contains("entrant names must be unique"),
+            "got: {invalid}"
+        );
+        let boxed: Box<dyn std::error::Error> = Box::new(map_error);
+        assert!(
+            boxed
+                .to_string()
+                .starts_with("generated Benchmark Seed Set map")
+        );
     }
 }

@@ -5,6 +5,7 @@
 //! recorded as `Outcome::Crash`, and stays in the result set. Reports are
 //! never retained — each round folds into the stats and is dropped.
 
+use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +32,19 @@ pub enum BatchError {
     /// D58).
     MapInfeasible { map_index: u32 },
 }
+
+impl fmt::Display for BatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BatchError::MapInfeasible { map_index } => write!(
+                f,
+                "generated map {map_index} is infeasible for this config (config defect)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BatchError {}
 
 /// One completed batch: records in descriptor order, the aggregate
 /// summary, and run metadata (wall clock — metadata only).

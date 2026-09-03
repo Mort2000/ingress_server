@@ -7,3 +7,11 @@ publish.workspace = true
 [dependencies]
 arena-core = { path = "../arena-core" }
 blake3 = "1.8.7"
+
+# Dev-dep only (M-final version-drift tie): arena-protocol owns the wire
+# PROTOCOL_VERSION (D61) while the IARP header echoes its own copy; the
+# test below fails the build if the two constants ever drift apart.
+# arena-protocol depends only on arena-core + planus, so this cannot form
+# a dependency cycle.
+[dev-dependencies]
+arena-protocol = { path = "../arena-protocol" }

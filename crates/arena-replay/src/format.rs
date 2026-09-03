@@ -55,7 +55,12 @@ pub const FORMAT_VERSION: u32 = 1;
 /// Server (rules-engine) version that produced the file.
 pub const SERVER_VERSION: u32 = 1;
 
-/// Protocol version placeholder (M7 wires real negotiation).
+/// Protocol version placeholder (M7 wires real negotiation). MUST equal
+/// `arena_protocol::PROTOCOL_VERSION` (D61) — the server stamps that
+/// constant into CLIENT_HELLO negotiation and the IARP header echoes this
+/// one; the `protocol_version_tie` test pins the two together via a
+/// dev-dependency on arena-protocol (see also the doc cross-reference in
+/// `crates/arena-protocol/src/versions.rs`).
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Checkpoints are written after every `CHECKPOINT_INTERVAL`-th round
@@ -1970,5 +1975,23 @@ mod tests {
             decode(&file.encode()),
             Err(ReplayError::SpawnsOutOfOrder { .. })
         ));
+    }
+
+    // M-final version-drift tie: the IARP header's protocol version and the
+    // wire protocol's own constant (arena-protocol, D61) were duplicated on
+    // purpose (arena-replay takes no runtime dep on arena-protocol) — this
+    // test fails the build the moment one side bumps without the other.
+    // arena-protocol depends only on arena-core + planus, so the dev-dep
+    // cannot form a cycle.
+    #[test]
+    fn protocol_version_tie() {
+        assert_eq!(
+            PROTOCOL_VERSION,
+            arena_protocol::PROTOCOL_VERSION,
+            "arena-replay::format::PROTOCOL_VERSION and arena-protocol::PROTOCOL_VERSION drifted"
+        );
+        // The header actually stamps the tied value (fixture header carries
+        // the constant; decode enforces equality against it).
+        assert_eq!(fixture_header(1).protocol_version, PROTOCOL_VERSION);
     }
 }

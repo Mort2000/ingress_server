@@ -283,6 +283,13 @@ fn main() {
             run_tournament_inprocess_r1(&output_root);
             return;
         }
+        Some("conflict-stats") => {
+            // A-LATENCY offline conflict analysis (D70 realized): a frozen
+            // 8-match self-play batch plus every archived tournament IARP.
+            let output_root =
+                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
+            std::process::exit(arena_runner::conflict::run_conflict_stats(&output_root));
+        }
         Some(other) if other.starts_with("tournament") => {
             eprintln!(
                 "unknown tournament subcommand {other:?} (tournament-r1 | tournament-inprocess-r1)"

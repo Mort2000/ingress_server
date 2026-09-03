@@ -32,7 +32,19 @@ const MAP_SEED: u64 = 0x006d_3a00_0000_0034;
 
 fn fixture_config() -> GameConfig {
     let mut cfg = GameConfig::default();
-    cfg.total_rounds = 100;
+    // 150 rounds with one reinforcement at round 75 (M-final review fix:
+    // the old 100-round fixture with the default interval-100 never once
+    // fired a reinforcement — the boundary `round % 100 == 0 && round < 100`
+    // is empty — so the export path was never exercised over reinforcement
+    // data). Interval 75, not the suggested 50: on this fixture map the
+    // GreedyField builder completes its first triangle around round 87, and
+    // an earlier reinforcement (interval 50 measured) adds a fourth agent
+    // to the FIXED tour plan whose duplicated stations break the build for
+    // the rest of the match — the fixture's own "must score" pin fails.
+    // One reinforcement at 75 keeps the fixture non-vacuous while still
+    // exercising both factions' newcomer rows in the embedded data.
+    cfg.total_rounds = 150;
+    cfg.reinforcement_interval_rounds = 75;
     cfg.map_width_cm = 300_000;
     cfg.map_height_cm = 300_000;
     cfg.portal_count = 40;
@@ -103,11 +115,11 @@ fn play_rounds(rounds: u32) -> (Vec<u8>, Vec<(Score2, Score2)>) {
     (writer.finish(state).expect("finish"), deltas)
 }
 
-/// A verified NORMAL 100-round IARP (fields, captures, links; checkpoints
-/// at 50 and 100).
+/// A verified NORMAL 150-round IARP (fields, captures, links, one
+/// reinforcement round; checkpoints at 50, 100, and 150).
 fn normal_iarp() -> &'static [u8] {
     static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-    BYTES.get_or_init(|| play_rounds(100).0)
+    BYTES.get_or_init(|| play_rounds(fixture_config().total_rounds).0)
 }
 
 /// An ABNORMAL IARP: the same match cut at round 37 with the D68
@@ -189,17 +201,25 @@ fn payload_of(html: &str) -> Json {
 
 /// The shortest real r1 tournament replay, `matches/m11` at 32,714 B
 /// (present wherever the runs/ artifacts exist; skip on a fresh clone —
-/// the M9 convention).
+/// the M9 convention). Resolved from the REPOSITORY root: test binaries
+/// run with the package directory as cwd (M-final review fix — the bare
+/// relative path never resolved, so this evidence always skipped).
 fn real_iarp() -> Option<&'static [u8]> {
     static BYTES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
     BYTES
-        .get_or_init(|| std::fs::read("runs/tournaments/r1/matches/m11/server/replay.iarp").ok())
+        .get_or_init(|| {
+            std::fs::read(repo_relative(
+                "runs/tournaments/r1/matches/m11/server/replay.iarp",
+            ))
+            .ok()
+        })
         .as_deref()
 }
 
 /// A meta.json echo parsed from the real r1 archive when present.
 fn real_meta() -> Option<Json> {
-    let text = std::fs::read_to_string("runs/tournaments/r1/matches/m11/meta.json").ok()?;
+    let text =
+        std::fs::read_to_string(repo_relative("runs/tournaments/r1/matches/m11/meta.json")).ok()?;
     Some(json::parse_json(&text).expect("meta.json parses"))
 }
 
@@ -564,7 +584,7 @@ fn round_count_matches() {
         .iter()
         .filter_map(Json::as_int)
         .collect();
-    assert_eq!(checkpoints, vec![50, 100]);
+    assert_eq!(checkpoints, vec![50, 100, 150]);
 
     // Abnormal: last_round + outcome_tag preserved, rounds truncated at
     // the last COMPLETED round.
@@ -589,7 +609,11 @@ fn round_count_matches() {
         Some(37),
         "rounds_completed == last completed round"
     );
-    assert_eq!(header.get("total_rounds").unwrap().as_int(), Some(100));
+    assert_eq!(
+        header.get("total_rounds").unwrap().as_int(),
+        Some(150),
+        "total_rounds echoes the config"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -732,7 +756,7 @@ fn three_views_derive_from_one_base() {
     // Per-round public materialization exists for every round (one base
     // state shared by all views; the twin only selects agents).
     let rounds = payload.get("rounds").unwrap().as_array().unwrap();
-    assert_eq!(rounds.len(), 100);
+    assert_eq!(rounds.len(), 150);
     for round in rounds {
         assert!(!round.get("portals").unwrap().as_array().unwrap().is_empty());
     }
@@ -759,7 +783,10 @@ fn json_mini_roundtrip_on_full_payload() {
     // writer -> parser identity (structural equality) ...
     assert_eq!(&parsed, &exported.payload);
     // ... and the re-write is byte-identical (canonical compact form).
-    assert_eq!(json::write_json(&parsed), exported.payload_text);
+    assert_eq!(
+        json::write_json(&parsed).expect("fixture payload nests shallowly"),
+        exported.payload_text
+    );
     // The data block can never close the script element and never carries
     // a raw angle bracket or ampersand.
     assert!(!exported.payload_text.contains("</script>"));
@@ -924,6 +951,231 @@ fn selftest_mode_present() {
     assert!(html.contains("event filter predicate"));
     assert!(html.contains("jump determinism"));
     assert!(html.contains("score2 display conversion"));
+}
+
+// ---------------------------------------------------------------------------
+// 13b. M-final review fix — reinforcement rounds are exercised in the export
+// fixture (the old 100-round/interval-100 fixture never fired one)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reinforcement_rounds_present_in_embedded_data() {
+    let exported = export_normal();
+    let payload = payload_of(&exported.html);
+
+    // The IARP carried the fixture's single reinforcement boundary (round
+    // 75; round 150 is NOT < total, so it does not fire).
+    let reinforcement_rounds: Vec<i64> = payload
+        .get("rounds")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|round| {
+            round
+                .get("events")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event.get("k").and_then(Json::as_int) == Some(8))
+        })
+        .map(|round| round.get("r").unwrap().as_int().unwrap())
+        .collect();
+    assert_eq!(reinforcement_rounds, vec![75]);
+
+    // Both factions' NEW agents exist in the embedded per-round private
+    // data from the boundary round on: the fixture starts with 3 agents
+    // per faction (ENL 0-2, RES 3-5), so the reinforcement adds one id
+    // >= 6 per faction. Round 75 close (rounds[74]) shows 4 agents each.
+    for key in ["enl", "res"] {
+        let agents = payload
+            .get("agents")
+            .unwrap()
+            .get(key)
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(agents.len(), 150, "one agent row per round for {key}");
+        let at_boundary: Vec<i64> = agents[74]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| agent.as_array().unwrap()[0].as_int().unwrap())
+            .collect();
+        assert_eq!(at_boundary.len(), 4, "{key} roster grew");
+        assert!(
+            at_boundary.iter().any(|id| *id >= 6),
+            "{key} reinforcement agent present: {at_boundary:?}"
+        );
+        // And it stays for the rest of the match.
+        let last: Vec<i64> = agents[149]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| agent.as_array().unwrap()[0].as_int().unwrap())
+            .collect();
+        assert!(last.iter().any(|id| *id >= 6));
+        // Before the boundary the roster was exactly the initial three.
+        let before: Vec<i64> = agents[73]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| agent.as_array().unwrap()[0].as_int().unwrap())
+            .collect();
+        assert_eq!(before.len(), 3);
+    }
+
+    // The reinforcement event itself carries the D51 shape (both-faction:
+    // index, position, count, first agent — no f/a fields).
+    let event = payload.get("rounds").unwrap().as_array().unwrap()[74]
+        .get("events")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event.get("k").and_then(Json::as_int) == Some(8))
+        .expect("round 75 carries the reinforcement event");
+    assert_eq!(event.get("i").and_then(Json::as_int), Some(1));
+    assert_eq!(event.get("n").and_then(Json::as_int), Some(1));
+    assert_eq!(event.get("fa").and_then(Json::as_int), Some(6));
+    assert!(event.get("f").is_none() && event.get("a").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 13c. M-final review fix — template marker injection (D87 assembly)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hostile_marker_tokens_cannot_subvert_assembly() {
+    // A hostile meta string containing EVERY template marker token plus a
+    // script-close/open pair. Under the old str::replace chain the marker
+    // tokens inside the inserted payload were rescanned: the JS bundle
+    // could be pulled into the data block and the page structure subverted.
+    let hostile =
+        "/*__VIEWER_CSS__*//*__VIEWER_DATA__*//*__VIEWER_JS__*/</script><script>steal()//";
+    let exported = data::export(
+        normal_iarp(),
+        &ExportOptions {
+            dev: true,
+            faction: None,
+            meta: Some(Json::obj(vec![("evil", Json::str(hostile))])),
+        },
+    )
+    .expect("hostile meta stays an ordinary string");
+    let html = &exported.html;
+
+    // Exactly the two STRUCTURAL script elements from the template — the
+    // payload contributes no third one (angle brackets are escaped by the
+    // writer, and the markers are inert bytes inside a JS string literal).
+    assert_eq!(
+        html.matches("<script>").count(),
+        2,
+        "two structural scripts"
+    );
+    assert_eq!(
+        html.matches("</script>").count(),
+        2,
+        "two structural closes"
+    );
+
+    // Each interpolated asset landed exactly once: the script bundle and
+    // stylesheet are single-occurrence, and the template skeleton is not
+    // duplicated by payload-driven re-substitution. (The data-block anchor
+    // is newline-anchored like `extract_embedded_json` — data.js's header
+    // comment legitimately mentions the constant mid-line.)
+    assert_eq!(html.matches("const Controls = {").count(), 1);
+    assert_eq!(html.matches("\nconst VIEWER_DATA = ").count(), 1);
+    assert_eq!(html.matches("<!DOCTYPE html>").count(), 1);
+    // The one data block is the REAL payload (extraction is newline-
+    // anchored), and it still parses back to the exact hostile string.
+    let payload = payload_of(html);
+    assert_eq!(
+        payload
+            .get("header")
+            .unwrap()
+            .get("meta")
+            .unwrap()
+            .get("evil")
+            .and_then(Json::as_str),
+        Some(hostile)
+    );
+
+    // Direct unit check of the assembler with the SAME hostile bytes as a
+    // bare payload: every marker byte-sequence that appears in the emitted
+    // page comes from the payload itself (each once, inertly inside the
+    // data block) — the template's own markers are consumed, none survive
+    // unfilled, and payload markers trigger no re-substitution.
+    let assembled = data::assemble_html(&format!("{{\"m\":\"{hostile}\"}}"));
+    for marker in [
+        "/*__VIEWER_CSS__*/",
+        "/*__VIEWER_DATA__*/",
+        "/*__VIEWER_JS__*/",
+    ] {
+        let in_payload = format!("{{\"m\":\"{hostile}\"}}").matches(marker).count();
+        assert_eq!(in_payload, 1, "the hostile payload carries {marker} once");
+        assert_eq!(
+            assembled.matches(marker).count(),
+            in_payload,
+            "no {marker} beyond the payload-carried occurrence (no unfilled slot, no re-substitution)"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 13d. M-final review fix — viewer speed keys point the documented way
+// (docs/viewer.md: "+ / − speed up / slow down"). A static check: no browser
+// automation exists (D93), so the Rust side reads the asset and pins the
+// direction of the '+'/'-' key mapping.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn viewer_speed_keys_match_the_documented_direction() {
+    let controls =
+        std::fs::read_to_string(repo_relative("viewer/controls.js")).expect("viewer/controls.js");
+
+    // The speed ladder is DESCENDING milliseconds, so a LARGER index means
+    // FEWER milliseconds per round — direction +1 speeds playback up.
+    let ladder = controls
+        .lines()
+        .find(|line| line.contains("const steps ="))
+        .expect("the steps ladder exists");
+    assert!(
+        ladder.contains("[1000, 500, 250, 125]"),
+        "descending ms ladder: {ladder}"
+    );
+
+    let case_body = |key: &str| -> String {
+        let start = controls
+            .find(&format!("case \"{key}\":"))
+            .unwrap_or_else(|| panic!("case {key} exists"));
+        let rest = &controls[start..];
+        let end = rest.find("break;").expect("case body ends with break");
+        rest[..end].to_string()
+    };
+    let plus = case_body("+");
+    assert!(
+        plus.contains("this.shiftSpeed(1);"),
+        "'+' must move toward faster (smaller ms), got: {plus}"
+    );
+    let minus = case_body("-");
+    assert!(
+        minus.contains("this.shiftSpeed(-1);"),
+        "'-' must move toward slower (larger ms), got: {minus}"
+    );
+
+    // The emitted page embeds the FIXED asset (exactly one '+' handler).
+    let html = export_normal().html;
+    assert_eq!(html.matches("this.shiftSpeed(1);").count(), 1);
+    assert_eq!(html.matches("this.shiftSpeed(-1);").count(), 1);
+
+    // And the documented contract says the same thing.
+    let viewer_doc =
+        std::fs::read_to_string(repo_relative("docs/viewer.md")).expect("docs/viewer.md");
+    assert!(
+        viewer_doc.contains("`+` / `−` | speed up / slow down"),
+        "docs/viewer.md documents the direction"
+    );
 }
 
 // ---------------------------------------------------------------------------
