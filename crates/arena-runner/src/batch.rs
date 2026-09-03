@@ -112,8 +112,8 @@ impl BatchConfig {
                     matchup_index: matchup_index as u32,
                     matchup_tag: matchup.tag.clone(),
                     j: j as u32,
-                    bot_a: matchup.a,
-                    bot_b: matchup.b,
+                    bot_a: matchup.a.tag().to_string(),
+                    bot_b: matchup.b.tag().to_string(),
                     bot_a_is_enl,
                     game_seed: self.game_seed(&matchup.tag, j as u32),
                     map_seed: self.map_seed(map_index),
@@ -153,8 +153,12 @@ pub struct MatchDescriptor {
     pub matchup_tag: String,
     /// Match index within the matchup.
     pub j: u32,
-    pub bot_a: BotKind,
-    pub bot_b: BotKind,
+    /// Policy tag of side A (the frozen m6 batches carry `BotKind` tags
+    /// byte-identically; balance cells carry any registered policy tag —
+    /// ADR-0016).
+    pub bot_a: String,
+    /// Policy tag of side B.
+    pub bot_b: String,
     /// The schedule's faction assignment for this match (D55).
     pub bot_a_is_enl: bool,
     pub game_seed: u64,
@@ -169,12 +173,24 @@ pub struct MatchDescriptor {
 }
 
 impl MatchDescriptor {
-    /// `(enl_kind, res_kind)` for this match.
-    pub fn faction_kinds(&self) -> (BotKind, BotKind) {
+    /// `(enl_tag, res_tag)` for this match.
+    pub fn faction_policy_tags(&self) -> (&str, &str) {
         if self.bot_a_is_enl {
-            (self.bot_a, self.bot_b)
+            (&self.bot_a, &self.bot_b)
         } else {
-            (self.bot_b, self.bot_a)
+            (&self.bot_b, &self.bot_a)
         }
+    }
+
+    /// `(enl_kind, res_kind)` for this match — the m6 path, whose tags are
+    /// always `BotKind` tags. Panics on a non-m6 tag (the m6 batch
+    /// constructor only produces `BotKind` tags; balance cells never call
+    /// this).
+    pub fn faction_kinds(&self) -> (BotKind, BotKind) {
+        let (enl, res) = self.faction_policy_tags();
+        (
+            BotKind::from_tag(enl).expect("m6 batch carries BotKind tags"),
+            BotKind::from_tag(res).expect("m6 batch carries BotKind tags"),
+        )
     }
 }

@@ -502,6 +502,21 @@ impl BuilderCore {
         requests
     }
 
+    /// Every legal LINK `(source, target)` SOME own agent could emit this
+    /// round (the blocker overlay's candidate set): for each agent in
+    /// operation range of an own `source` holding a key of an own
+    /// `target`, the full pre-flight legality check. Deterministic:
+    /// ascending agent id, then ascending pairs.
+    pub fn blockable_pairs(&self, obs: &Observation) -> Vec<(PortalId, PortalId, AgentId)> {
+        let mut out = Vec::new();
+        for me in obs.own_agents.iter() {
+            for (source, target) in self.own_pairs_in_range(obs, me) {
+                out.push((source, target, me.id));
+            }
+        }
+        out
+    }
+
     /// Every legal LINK `(source, target)` `me` could emit this round:
     /// standing within operation range of an own `source`, holding a key of
     /// an own `target`, and passing the full pre-flight legality check.
@@ -696,6 +711,11 @@ impl BuilderCore {
     /// The faction this core plays.
     pub fn faction(&self) -> Faction {
         self.faction
+    }
+
+    /// The match's GameConfig (the value-model helpers need it).
+    pub fn cfg(&self) -> &GameConfig {
+        &self.cfg
     }
 
     /// The core's parameters (policies re-serialize them into their spec).

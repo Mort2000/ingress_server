@@ -20,6 +20,7 @@ pub mod rng;
 
 pub use bot::{BOT_VERSION, Bot, BotKind, BotStrategy, make_bot};
 pub use policy::{
-    PolicyFamily, PolicyId, PolicyParameters, PolicySpec, frozen_m6_specs, make_policy_bot,
+    PolicyFamily, PolicyId, PolicyParameters, PolicySpec, frozen_m6_specs, make_policy_player,
+    r2_specs,
 };
 pub use rng::BotRng;

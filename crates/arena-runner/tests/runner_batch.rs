@@ -142,6 +142,24 @@ fn panicking_bot_is_recorded_as_crash_and_batch_completes() {
     assert_eq!(all.iter().filter(|r| r.result == Outcome::Crash).count(), 1);
 }
 
+// B2 (ADR-0016): MatchRecord bot fields are POLICY TAG strings — a record
+// carrying an R2 tag no BotKind maps to round-trips through matches.tsv
+// verbatim, so balance cells are recorded honestly.
+#[test]
+fn a_record_with_a_non_bot_kind_policy_tag_round_trips() {
+    let batch = integration_batch();
+    let run = run_batch(&batch, 2).expect("batch runs");
+    let mut record = run.records[0].clone();
+    record.bot_a = "greedy-coordinated-r2".to_string();
+    record.bot_b = "idle".to_string();
+    let text = records_to_tsv(&[record.clone()]);
+    let parsed = parse_matches_tsv(&text).expect("parse");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].bot_a, "greedy-coordinated-r2");
+    assert_eq!(parsed[0].bot_b, "idle");
+    assert_eq!(parsed[0], record, "full record round-trips");
+}
+
 // Checklist 18: manifest/matches.tsv/summary.txt round-trip — re-parsing
 // matches.tsv reproduces the in-memory MatchRecords exactly.
 #[test]

@@ -12,20 +12,120 @@
 //! - [`tasks`]: the agent-task allocator with per-round target reservation
 //!   and the explicit coordinated-attack exception (plan 6.3);
 //! - [`sample`]: seeded tie-break and near-equal candidate sampling,
-//!   deterministic given `(observation, seed, faction, version)`.
+//!   deterministic given `(observation, seed, faction, version)`;
+//! - [`opponent`]: the limited opponent model from the public event
+//!   history;
+//! - [`build`]: the coordinated builder core every build-side policy
+//!   composes.
 //!
-//! This layer holds no policy identity of its own: identities, families,
-//! versions and the serialized parameter records live in
-//! [`crate::policy`] (ADR-0015). The fixed version tag every B2 policy
-//! carries is [`R2_VERSION`].
+//! The six plan-6.1 policies themselves live in
+//! [`greedy_coordinated`], [`builder_defender`], [`builder_disruptor`],
+//! [`logistics_builder`], [`blocker_builder`], [`adaptive_hybrid_r2`],
+//! plus the DIAGNOSTIC [`idle`] opponent of the plan-10.1 idle gate.
+//! Policy identity does NOT live here: ids, families, versions and the
+//! serialized parameter records are [`crate::policy`] (ADR-0015/0016);
+//! every B2 policy carries the fixed version tag [`R2_VERSION`].
 
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
 /// policies are registered in `crate::policy` with exactly this version).
 pub const R2_VERSION: &str = "r2.0";
 
+pub mod adaptive_hybrid_r2;
+pub mod blocker_builder;
 pub mod build;
+pub mod builder_defender;
+pub mod builder_disruptor;
+pub mod greedy_coordinated;
+pub mod idle;
+pub mod logistics_builder;
 pub mod opponent;
 pub mod rng;
 pub mod sample;
 pub mod tasks;
 pub mod value;
+
+use arena_core::config::GameConfig;
+use arena_core::harness::{AgentSubmission, RoundStrategy};
+use arena_core::map::MapDefinition;
+use arena_core::observe::Observation;
+use arena_core::types::{AgentId, Coord};
+
+use crate::bot::Bot;
+
+/// A B2 R2 policy: the minimal strategy interface WITHOUT the frozen
+/// `Bot` trait's `kind() -> BotKind` (the five-variant `BotKind` registry
+/// is frozen read-only, ADR-0015/0016). A policy's identity — id, family,
+/// version, parameters — lives entirely in its constructing
+/// [`crate::policy::PolicySpec`]; the executable object is just
+/// `choose_spawns` + `submit_round`.
+///
+/// Determinism contract (plan 6.3): identical `(spec, bot_seed, faction,
+/// cfg, map)` plus an identical observation sequence produce identical
+/// submissions; all runtime randomness flows through the policy's own
+/// [`rng::R2Rng`] stream.
+pub trait R2Policy: Send {
+    /// Full-map initial spawn strategy (same contract as `Bot`').
+    fn choose_spawns(
+        &mut self,
+        cfg: &GameConfig,
+        map: &MapDefinition,
+        roster: &[AgentId],
+    ) -> Vec<(AgentId, Coord)>;
+
+    /// One round of submissions for the faction (same contract as `Bot`').
+    fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission>;
+}
+
+/// Adapts an [`R2Policy`] to the arena-core [`RoundStrategy`] (the R2
+/// counterpart of the frozen `BotStrategy`).
+pub struct R2Strategy(pub Box<dyn R2Policy>);
+
+impl RoundStrategy for R2Strategy {
+    fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
+        self.0.submit_round(obs)
+    }
+}
+
+/// One constructed policy of a balance experiment, era-agnostic (ADR-0016):
+/// either a frozen m6.0 baseline (delegated 1:1 to the untouched
+/// `make_bot` — the B1 lockstep pin) or an [`R2Policy`]. The balance
+/// executor addresses both through this one type and never branches on
+/// policy era.
+pub enum PolicyPlayer {
+    /// One of the five frozen m6.0 baselines, byte-identical to
+    /// `make_bot` of the mirrored kind.
+    Frozen(Box<dyn Bot>),
+    /// A B2 R2 policy (the six plan-6.1 policies or the diagnostic idle).
+    R2(Box<dyn R2Policy>),
+}
+
+impl PolicyPlayer {
+    /// Full-map initial spawn strategy.
+    pub fn choose_spawns(
+        &mut self,
+        cfg: &GameConfig,
+        map: &MapDefinition,
+        roster: &[AgentId],
+    ) -> Vec<(AgentId, Coord)> {
+        match self {
+            PolicyPlayer::Frozen(bot) => bot.choose_spawns(cfg, map, roster),
+            PolicyPlayer::R2(policy) => policy.choose_spawns(cfg, map, roster),
+        }
+    }
+
+    /// One round of submissions.
+    pub fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
+        match self {
+            PolicyPlayer::Frozen(bot) => bot.submit_round(obs),
+            PolicyPlayer::R2(policy) => policy.submit_round(obs),
+        }
+    }
+
+    /// Consumes the player into a harness [`RoundStrategy`] adapter.
+    pub fn into_strategy(self) -> Box<dyn RoundStrategy> {
+        match self {
+            PolicyPlayer::Frozen(bot) => Box::new(crate::bot::BotStrategy(bot)),
+            PolicyPlayer::R2(policy) => Box::new(R2Strategy(policy)),
+        }
+    }
+}

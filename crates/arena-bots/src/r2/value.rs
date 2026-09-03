@@ -751,34 +751,76 @@ pub fn block_value(
     source: PortalId,
     target: PortalId,
 ) -> i64 {
-    if view(obs, source).is_none() || view(obs, target).is_none() {
-        return i64::MIN;
+    block_values(obs, faction, cfg, params, &[(source, target)])
+        .into_iter()
+        .next()
+        .unwrap_or(i64::MIN)
+}
+
+/// Batched [`block_value`] over many proposed own links with ONE enemy and
+/// ONE own candidate enumeration shared by every pair (the blocker
+/// overlay's compute bound, plan section 15). Candidate triples are
+/// ranked `area2` descending and truncated to
+/// `params.max_field_candidates` per side — the same recorded compute
+/// bound [`field_candidates`] applies — so the denial estimate weights the
+/// highest-value candidates first. Output order matches `pairs`.
+pub fn block_values(
+    obs: &Observation,
+    faction: Faction,
+    cfg: &GameConfig,
+    params: &ValueParams,
+    pairs: &[(PortalId, PortalId)],
+) -> Vec<i64> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+    if pairs
+        .iter()
+        .any(|&(a, b)| view(obs, a).is_none() || view(obs, b).is_none())
+    {
+        return pairs
+            .iter()
+            .map(|&(a, b)| {
+                if view(obs, a).is_none() || view(obs, b).is_none() {
+                    i64::MIN
+                } else {
+                    0
+                }
+            })
+            .collect();
     }
     let (own, enemy) = owners(faction);
     let horizon = horizon_rounds(cfg, obs.round, params) as u128;
-    let denied: u128 = candidate_triples(&obs.portals, &obs.links, enemy, cfg.max_link_distance_cm)
-        .into_iter()
-        .filter(|&(vertices, _)| {
+    // Crossed-candidate area sums per proposed pair, both sides at once.
+    let mut denied: Vec<u128> = vec![0; pairs.len()];
+    let mut own_loss: Vec<u128> = vec![0; pairs.len()];
+    for (side, sums) in [(enemy, &mut denied), (own, &mut own_loss)] {
+        let mut triples =
+            candidate_triples(&obs.portals, &obs.links, side, cfg.max_link_distance_cm);
+        triples.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        triples.truncate(params.max_field_candidates);
+        for (vertices, area2) in triples {
             let [a, b, c] = vertices;
-            [(a, b), (a, c), (b, c)]
-                .iter()
-                .any(|&(x, y)| link_crosses_pair(obs, source, target, x, y))
+            let pairs_of = [(a, b), (a, c), (b, c)];
+            for (index, &(source, target)) in pairs.iter().enumerate() {
+                if pairs_of
+                    .iter()
+                    .any(|&(x, y)| link_crosses_pair(obs, source, target, x, y))
+                {
+                    sums[index] += area2 as u128;
+                }
+            }
+        }
+    }
+    pairs
+        .iter()
+        .zip(denied.into_iter().zip(own_loss))
+        .map(|(_, (denied, own_loss))| {
+            let denial = denied * horizon * params.deny_share_permille as u128 / 1000;
+            let loss = own_loss * horizon * params.own_loss_share_permille as u128 / 1000;
+            sat_i64(denial as i128 - loss as i128)
         })
-        .map(|(_, area2)| area2 as u128)
-        .sum();
-    let own_loss: u128 = candidate_triples(&obs.portals, &obs.links, own, cfg.max_link_distance_cm)
-        .into_iter()
-        .filter(|&(vertices, _)| {
-            let [a, b, c] = vertices;
-            [(a, b), (a, c), (b, c)]
-                .iter()
-                .any(|&(x, y)| link_crosses_pair(obs, source, target, x, y))
-        })
-        .map(|(_, area2)| area2 as u128)
-        .sum();
-    let denial = denied * horizon * params.deny_share_permille as u128 / 1000;
-    let loss = own_loss * horizon * params.own_loss_share_permille as u128 / 1000;
-    sat_i64(denial as i128 - loss as i128)
+        .collect()
 }
 
 #[cfg(test)]

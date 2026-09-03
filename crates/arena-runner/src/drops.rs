@@ -165,12 +165,25 @@ pub fn reexecute_archived_match(
     }
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Same construction order as run::run_match: one bot per faction
-        // from the shared bot_seed, ENL spawns chosen first.
-        let (enl_kind, res_kind) = if record.bot_a_is_enl {
-            (record.bot_a, record.bot_b)
+        // from the shared bot_seed, ENL spawns chosen first. The frozen m6
+        // archive carries `BotKind` tags (ADR-0016: the tag->enum mapping
+        // lives here, at the m6 consumer).
+        let enl_tag = if record.bot_a_is_enl {
+            &record.bot_a
         } else {
-            (record.bot_b, record.bot_a)
+            &record.bot_b
         };
+        let res_tag = if record.bot_a_is_enl {
+            &record.bot_b
+        } else {
+            &record.bot_a
+        };
+        let (enl_kind, res_kind) = (
+            BotKind::from_tag(enl_tag)
+                .ok_or_else(|| format!("match {}: bot_a tag {enl_tag:?} is not an m6 kind (drops tally runs frozen m6 archives only)", record.index))?,
+            BotKind::from_tag(res_tag)
+                .ok_or_else(|| format!("match {}: bot_b tag {res_tag:?} is not an m6 kind", record.index))?,
+        );
         let mut enl_bot = make_bot(enl_kind, Faction::Enl, record.bot_seed, cfg, map);
         let mut res_bot = make_bot(res_kind, Faction::Res, record.bot_seed, cfg, map);
         let (enl_roster, res_roster) = GameState::initial_roster(cfg);
@@ -207,8 +220,8 @@ pub fn reexecute_archived_match(
         let mut drops = MatchDrops {
             index: record.index,
             matchup_tag: record.matchup_tag.clone(),
-            bot_a: record.bot_a,
-            bot_b: record.bot_b,
+            bot_a: enl_kind,
+            bot_b: res_kind,
             bot_a_is_enl: record.bot_a_is_enl,
             enl: FactionDrops::default(),
             res: FactionDrops::default(),
@@ -340,25 +353,30 @@ pub fn aggregate_drop_reasons(
             matchup.crashes_skipped += 1;
             continue;
         };
-        // Mirror slots of one BotKind pool into a single entry.
+        // Mirror slots of one BotKind pool into a single entry. The m6
+        // archive carries `BotKind` tags (ADR-0016 mapping at the consumer).
+        let enl_kind = BotKind::from_tag(if record.bot_a_is_enl {
+            &record.bot_a
+        } else {
+            &record.bot_b
+        })
+        .ok_or_else(|| format!("match {}: non-m6 policy tag in a drops tally", record.index))?;
+        let res_kind = BotKind::from_tag(if record.bot_a_is_enl {
+            &record.bot_b
+        } else {
+            &record.bot_a
+        })
+        .ok_or_else(|| format!("match {}: non-m6 policy tag in a drops tally", record.index))?;
         let mut kinds_seen: BTreeSet<BotKind> = BTreeSet::new();
         let factions: [(BotKind, &FactionDrops, u64, u64); 2] = [
             (
-                if record.bot_a_is_enl {
-                    record.bot_a
-                } else {
-                    record.bot_b
-                },
+                enl_kind,
                 &tally.enl,
                 record.stats.enl.commands_submitted,
                 record.stats.enl.commands_dropped,
             ),
             (
-                if record.bot_a_is_enl {
-                    record.bot_b
-                } else {
-                    record.bot_a
-                },
+                res_kind,
                 &tally.res,
                 record.stats.res.commands_submitted,
                 record.stats.res.commands_dropped,

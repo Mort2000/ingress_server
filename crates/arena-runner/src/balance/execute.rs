@@ -108,9 +108,11 @@ pub struct CellSetup {
 }
 
 /// Builds a cell's setup from the plan's policy specs (the default
-/// factory): one `make_policy_bot` per side, ENL spawns chosen first, the
-/// bucket policy applied AFTER the bot returns (D56, m6 construction
-/// order).
+/// factory): one era-agnostic `PolicyPlayer` per side (frozen m6.0
+/// baselines delegate 1:1 to the untouched `make_bot`; R2 policies are
+/// built from their own parameters — ADR-0016), ENL spawns chosen first,
+/// the bucket policy applied AFTER the strategy returns (D56, m6
+/// construction order).
 pub fn default_cell_setup(
     cell: &MatchCell,
     spec_enl: &PolicySpec,
@@ -121,14 +123,13 @@ pub fn default_cell_setup(
     use arena_core::spawn::validate_initial_spawn_set;
     use arena_core::state::GameState;
 
-    use arena_bots::bot::BotStrategy;
-    use arena_bots::policy::make_policy_bot;
+    use arena_bots::policy::make_policy_player;
 
-    let mut enl_bot = make_policy_bot(spec_enl, Faction::Enl, cell.bot_seed, cfg, map);
-    let mut res_bot = make_policy_bot(spec_res, Faction::Res, cell.bot_seed, cfg, map);
+    let mut enl_player = make_policy_player(spec_enl, Faction::Enl, cell.bot_seed, cfg, map);
+    let mut res_player = make_policy_player(spec_res, Faction::Res, cell.bot_seed, cfg, map);
     let (enl_roster, res_roster) = GameState::initial_roster(cfg);
-    let enl_entries = enl_bot.choose_spawns(cfg, map, &enl_roster);
-    let res_entries = res_bot.choose_spawns(cfg, map, &res_roster);
+    let enl_entries = enl_player.choose_spawns(cfg, map, &enl_roster);
+    let res_entries = res_player.choose_spawns(cfg, map, &res_roster);
     let enl_spawns =
         validate_initial_spawn_set(&enl_roster, &enl_entries, cfg).expect("bot spawn set");
     let res_spawns =
@@ -137,12 +138,12 @@ pub fn default_cell_setup(
         enl_spawns,
         res_spawns,
         enl: Box::new(PolicyStrategy::new(
-            Box::new(BotStrategy(enl_bot)),
+            enl_player.into_strategy(),
             Faction::Enl,
             cell.bucket_policy,
         )),
         res: Box::new(PolicyStrategy::new(
-            Box::new(BotStrategy(res_bot)),
+            res_player.into_strategy(),
             Faction::Res,
             cell.bucket_policy,
         )),
@@ -174,8 +175,8 @@ fn cell_descriptor(cell: &MatchCell, spec_a: &PolicySpec, spec_b: &PolicySpec) -
         matchup_tag: cell.pair_tag.clone(),
         // Unique inside the pair: `k * 2 + leg`.
         j: cell.map_index * 2 + cell.leg as u32,
-        bot_a: cell.policy_a.bot_kind(),
-        bot_b: cell.policy_b.bot_kind(),
+        bot_a: cell.policy_a.tag().to_string(),
+        bot_b: cell.policy_b.tag().to_string(),
         bot_a_is_enl: cell.policy_a_is_enl,
         game_seed: cell.game_seed,
         map_seed: cell.map_seed,

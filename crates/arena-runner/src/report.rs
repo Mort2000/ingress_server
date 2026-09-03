@@ -161,8 +161,8 @@ pub fn record_to_row(record: &MatchRecord) -> Vec<String> {
         record.matchup_index.to_string(),
         record.matchup_tag.clone(),
         record.j.to_string(),
-        record.bot_a.tag().to_string(),
-        record.bot_b.tag().to_string(),
+        record.bot_a.clone(),
+        record.bot_b.clone(),
         u8::from(record.bot_a_is_enl).to_string(),
         record.bot_a_version.to_string(),
         record.bot_b_version.to_string(),
@@ -385,8 +385,8 @@ fn parse_record(map: &BTreeMap<&str, &str>) -> Result<MatchRecord, String> {
             .unwrap_or("0")
             .parse()
             .map_err(|e| format!("j: {e}"))?,
-        bot_a: BotKind::from_tag(map.get("bot_a").copied().unwrap_or("")).ok_or("bot_a tag")?,
-        bot_b: BotKind::from_tag(map.get("bot_b").copied().unwrap_or("")).ok_or("bot_b tag")?,
+        bot_a: map.get("bot_a").copied().unwrap_or("").to_string(),
+        bot_b: map.get("bot_b").copied().unwrap_or("").to_string(),
         bot_a_is_enl: map.get("bot_a_is_enl").copied().unwrap_or("0") == "1",
         bot_a_version: map.get("bot_a_version").copied().unwrap_or("").to_string(),
         bot_b_version: map.get("bot_b_version").copied().unwrap_or("").to_string(),

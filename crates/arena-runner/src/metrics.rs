@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use arena_bots::bot::{BOT_VERSION, BotKind};
+use arena_bots::bot::BOT_VERSION;
 use arena_core::config::GameConfig;
 use arena_core::event::Event;
 use arena_core::geometry::area2;
@@ -397,8 +397,11 @@ pub struct MatchRecord {
     pub matchup_index: u32,
     pub matchup_tag: String,
     pub j: u32,
-    pub bot_a: BotKind,
-    pub bot_b: BotKind,
+    /// Policy tag of side A (m6 batches carry `BotKind` tags; balance
+    /// cells any registered policy tag — ADR-0016).
+    pub bot_a: String,
+    /// Policy tag of side B.
+    pub bot_b: String,
     pub bot_a_is_enl: bool,
     pub game_seed: u64,
     pub map_seed: u64,
@@ -436,8 +439,8 @@ impl MatchRecord {
             matchup_index: descriptor.matchup_index,
             matchup_tag: descriptor.matchup_tag.clone(),
             j: descriptor.j,
-            bot_a: descriptor.bot_a,
-            bot_b: descriptor.bot_b,
+            bot_a: descriptor.bot_a.clone(),
+            bot_b: descriptor.bot_b.clone(),
             bot_a_is_enl: descriptor.bot_a_is_enl,
             game_seed: descriptor.game_seed,
             map_seed: descriptor.map_seed,
@@ -465,8 +468,8 @@ impl MatchRecord {
             matchup_index: descriptor.matchup_index,
             matchup_tag: descriptor.matchup_tag.clone(),
             j: descriptor.j,
-            bot_a: descriptor.bot_a,
-            bot_b: descriptor.bot_b,
+            bot_a: descriptor.bot_a.clone(),
+            bot_b: descriptor.bot_b.clone(),
             bot_a_is_enl: descriptor.bot_a_is_enl,
             game_seed: descriptor.game_seed,
             map_seed: descriptor.map_seed,
