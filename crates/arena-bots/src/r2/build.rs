@@ -464,28 +464,9 @@ impl BuilderCore {
                 if view_s.owner != self.own || view_t.owner != self.own {
                     continue;
                 }
-                // Can the edge fire this round? Some agent in operation
-                // range of the source holding a key of the target.
-                let in_range_holder = obs.own_agents.iter().any(|other| {
-                    other.keys.get(&target).copied().unwrap_or(0) >= 1
-                        && in_range(
-                            other.position,
-                            view_s.position,
-                            self.cfg.portal_operation_range_cm,
-                        )
-                });
                 if me.keys.get(&target).copied().unwrap_or(0) >= 1 {
                     let pri = self.station_priority(obs, base, per_round, me, source);
                     mine.push(TaskRequest::one_shot(Task::Link { source, target }, pri));
-                } else if !in_range_holder {
-                    // No key-holder is at the source: pre-position at the
-                    // station and wait for the delivery — just below the
-                    // link itself in priority (route awareness without
-                    // preempting key work).
-                    let pri = self
-                        .station_priority(obs, base, per_round, me, source)
-                        .saturating_sub(1);
-                    mine.push(TaskRequest::one_shot(Task::Standby { portal: source }, pri));
                 }
             }
             requests.insert(me.id, mine);

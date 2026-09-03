@@ -299,15 +299,21 @@ impl LogisticsBuilder {
                 self.in_flight
                     .insert((source, target), (station, Some(runner)));
             }
-            // In the DELIVERING state, replace the runner's walking Link
-            // request for this edge with the Transfer rendezvous at the
-            // delivery value: the FULL edge value minus a single unit
-            // (the Key Runner commits to the station — a delivery
-            // outranks every walking task of the same plan and yields
-            // only to work an agent is already standing on; that
-            // commitment is the policy's identity, traded against the
-            // one-round payment delay). The COMPLETING state strips
-            // nothing: the station's core Link request fires the edge.
+            // In the DELIVERING state: (a) the STATION requests its
+            // Standby — walk to the source and hold it (this request
+            // lives HERE, in the runner policy, not in the core: a core-
+            // level standby outranks every walking Link and deadlocks a
+            // faction whose key-holders stand at the wrong sources —
+            // observed as the idle-benchmark stall); (b) the runner's
+            // walking Link request for this edge is replaced by the
+            // Transfer rendezvous at the delivery value: the FULL edge
+            // value minus a single unit (the Key Runner commits to the
+            // station — a delivery outranks every walking task of the
+            // same plan and yields only to work an agent is already
+            // standing on; that commitment is the policy's identity,
+            // traded against the one-round payment delay). The
+            // COMPLETING state strips nothing: the station's core Link
+            // request fires the edge.
             if let Some(&(station, Some(runner))) = self.in_flight.get(&(source, target)) {
                 let value = *base.get_or_insert_with(|| {
                     crate::r2::value::field_value(
@@ -318,6 +324,24 @@ impl LogisticsBuilder {
                         self.core.active().expect("active plan"),
                     )
                 });
+                let per_round = self.core.economy(obs).opportunity_per_round;
+                let view_s = common::portal(obs, source);
+                if let Some(station_me) = obs.own_agents.iter().find(|me| me.id == station) {
+                    if let Some(mine) = requests.get_mut(&station) {
+                        let travel = crate::r2::value::travel_rounds_between(
+                            station_me.position,
+                            view_s.position,
+                            self.core.cfg().move_budget_cm,
+                        );
+                        let priority = value.saturating_sub(1).saturating_sub(
+                            (travel as i128 * per_round as i128).min(i64::MAX as i128) as i64,
+                        );
+                        mine.push(TaskRequest::one_shot(
+                            Task::Standby { portal: source },
+                            priority,
+                        ));
+                    }
+                }
                 if let Some(mine) = requests.get_mut(&runner) {
                     mine.retain(|request| request.task != Task::Link { source, target });
                     mine.push(TaskRequest::one_shot(

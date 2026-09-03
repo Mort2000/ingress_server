@@ -262,15 +262,17 @@ fn factions_of(record: &BalanceMatchRecord) -> (&str, &str) {
     }
 }
 
-/// One policy's score2 and fields_created inside one record.
-fn policy_stats(record: &BalanceMatchRecord, tag: &str) -> (u128, u64) {
+/// One policy's score2 and fields_created inside one record it PLAYED
+/// (`None` when the policy is not one of the record's two sides —
+/// participation is decided by TAG MEMBERSHIP, never by a zero score).
+fn policy_stats(record: &BalanceMatchRecord, tag: &str) -> Option<(u128, u64)> {
     let (enl_tag, res_tag) = factions_of(record);
     if tag == enl_tag {
-        (record.enl_score2 as u128, record.stats.enl.fields_created)
+        Some((record.enl_score2 as u128, record.stats.enl.fields_created))
     } else if tag == res_tag {
-        (record.res_score2 as u128, record.stats.res.fields_created)
+        Some((record.res_score2 as u128, record.stats.res.fields_created))
     } else {
-        (0, 0)
+        None
     }
 }
 
@@ -304,10 +306,9 @@ pub fn sustained_scoring_gate(records: &[BalanceMatchRecord], specs: &[PolicySpe
         let mut scored = 0u64;
         let mut fielded = 0u64;
         for record in records.iter().filter(|r| played(r)) {
-            let (score, fields) = policy_stats(record, tag);
-            if score == 0 && fields == 0 {
-                continue; // not in this match
-            }
+            let Some((score, fields)) = policy_stats(record, tag) else {
+                continue; // did not play this match
+            };
             played_count += 1;
             scored += u64::from(score > 0);
             fielded += u64::from(fields >= 1);
@@ -358,10 +359,9 @@ pub fn idle_gate(records: &[BalanceMatchRecord]) -> GateCount {
         let mut matches = 0u64;
         let mut good = 0u64;
         for record in records.iter().filter(|r| played(r)) {
-            let (score, fields) = policy_stats(record, tag);
-            if score == 0 && fields == 0 {
-                continue;
-            }
+            let Some((score, fields)) = policy_stats(record, tag) else {
+                continue; // did not play this match
+            };
             matches += 1;
             good += u64::from(score > 0 && fields >= 1);
         }
@@ -399,11 +399,10 @@ pub fn transfer_gate(records: &[BalanceMatchRecord]) -> GateCount {
         let mut matches = 0u64;
         let mut used = 0u64;
         for record in records.iter().filter(|r| played(r)) {
-            let transfers = policy_stat(record, tag, |stats| stats.transfers);
-            let (score, fields) = policy_stats(record, tag);
-            if score == 0 && fields == 0 && transfers == 0 {
-                continue;
+            if policy_stats(record, tag).is_none() {
+                continue; // did not play this match
             }
+            let transfers = policy_stat(record, tag, |stats| stats.transfers);
             matches += 1;
             used += u64::from(transfers > 0);
         }
