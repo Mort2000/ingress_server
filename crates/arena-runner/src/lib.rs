@@ -9,6 +9,7 @@
 
 pub mod batch;
 pub mod conflict;
+pub mod drops;
 pub mod metrics;
 pub mod policy;
 pub mod report;

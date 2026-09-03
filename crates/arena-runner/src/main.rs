@@ -290,6 +290,27 @@ fn main() {
                 std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
             std::process::exit(arena_runner::conflict::run_conflict_stats(&output_root));
         }
+        Some("drop-reasons") => {
+            // B0 evidence pass: re-execute every match of a frozen batch
+            // archive (seeds read back from its matches.tsv), verify each
+            // re-execution against the archived row, and tally DropReason
+            // counts per BotKind into a NEW runs/balance/ directory — the
+            // per-reason breakdown behind docs/balance-report-r1.md.
+            let usage =
+                "usage: arena-runner drop-reasons <frozen-run-dir> [output-root] [base-commit]";
+            let Some(frozen) = args.get(2) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            let output_root =
+                std::path::PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or("runs"));
+            let base_commit = args.get(4).map(|s| s.as_str());
+            std::process::exit(arena_runner::drops::run_drop_reasons(
+                std::path::Path::new(frozen),
+                &output_root,
+                base_commit,
+            ));
+        }
         Some(other) if other.starts_with("tournament") => {
             eprintln!(
                 "unknown tournament subcommand {other:?} (tournament-r1 | tournament-inprocess-r1)"
