@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod balance;
 pub mod batch;
 pub mod conflict;
 pub mod drops;

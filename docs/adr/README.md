@@ -15,4 +15,5 @@
 | [0011](./0011-domain-separated-blake3-random-oracle.md) | accepted | 用带域隔离的 BLAKE3 Random Oracle 派生比赛内随机结果 |
 | [0012](./0012-offline-stdlib-only-dependency-closure.md) | superseded | 离线环境使用零第三方依赖的 std-only 闭包（被 0013 撤销） |
 | [0013](./0013-official-crates-via-cargo-mirror.md) | accepted | 经 cargo 镜像使用官方 blake3 与 flatbuffers/planus，其余保持 std-only |
+| [0014](./0014-r2-seed-set-domains-and-paired-scheduling.md) | accepted | 冻结 R2 Seed Set 主种子、推导域与同图换边配对单位 |
 | [0015](./0015-independent-policy-identity.md) | accepted | 策略以独立 policy_id/family/version/parameters 标识；版本只增不改；bot RNG kind-tag 1-5 永属 m6 |
