@@ -311,6 +311,24 @@ fn main() {
                 base_commit,
             ));
         }
+        Some("balance-b2") => {
+            // B2 readiness runs (docs/ai-balance-plan.md section 10.1,
+            // ADR-0016): the frozen round-robin / idle / blocking-probe
+            // validation batches with gate evaluation.
+            let mut rest = args.iter().skip(2).cloned();
+            let output_root = std::path::PathBuf::from(
+                rest.next()
+                    .filter(|s| !s.starts_with("--"))
+                    .unwrap_or_else(|| "runs".to_string()),
+            );
+            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
+            let pilot = rest.any(|s| s == "--pilot");
+            std::process::exit(arena_runner::balance::readiness::run_b2_readiness(
+                &output_root,
+                base_commit.as_deref(),
+                pilot,
+            ));
+        }
         Some("balance-b1") => {
             // B1 smoke run (docs/ai-balance-plan.md section 14 row B1): the
             // frozen two-variant x two-policy same-map faction-swap batch,

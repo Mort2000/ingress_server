@@ -286,11 +286,14 @@ pub fn validate_contrast(variant: &ConfigVariant, base: &ConfigVariant) -> Resul
 
 /// The experiment phase (plan sections 7/8.3). The stage decides which
 /// plan-build-time rules apply (single-variable sensitivity, config-identical
-/// ablation, holdout confirmation).
+/// ablation, readiness validation, holdout confirmation).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Stage {
     /// Tool-shakeout batch proving the layer end to end (B1).
     Smoke,
+    /// Readiness validation of the measurement tooling itself (B2, plan
+    /// section 10.1): default-config only, Development maps only.
+    Readiness,
     /// Default-config policy ablation (plan 7.2): no rule parameter changes.
     Ablation,
     /// Single-variable sensitivity pilot/full (plan 7.3): one declared
@@ -310,6 +313,7 @@ impl Stage {
     pub fn tag(self) -> &'static str {
         match self {
             Stage::Smoke => "smoke",
+            Stage::Readiness => "readiness",
             Stage::Ablation => "ablation",
             Stage::Sensitivity => "sensitivity",
             Stage::Interaction => "interaction",
@@ -322,6 +326,7 @@ impl Stage {
     pub fn from_tag(tag: &str) -> Option<Stage> {
         match tag {
             "smoke" => Some(Stage::Smoke),
+            "readiness" => Some(Stage::Readiness),
             "ablation" => Some(Stage::Ablation),
             "sensitivity" => Some(Stage::Sensitivity),
             "interaction" => Some(Stage::Interaction),
@@ -462,24 +467,29 @@ impl ExperimentPlan {
                         ));
                     }
                 }
-                Stage::Ablation => {
+                Stage::Ablation | Stage::Readiness => {
                     return Err(format!(
-                        "stage ablation may not change rule parameters (variant {} declares {:?})",
-                        variant.variant_id, variant.declared_changed_fields
+                        "stage {} may not change rule parameters (variant {} declares {:?})",
+                        self.stage.tag(),
+                        variant.variant_id,
+                        variant.declared_changed_fields
                     ));
                 }
                 _ => {}
             }
         }
-        if self.stage == Stage::Ablation {
-            // Belt-and-braces: the ablation stage is default-config only,
-            // so no variant may actually differ from the base either.
+        if matches!(self.stage, Stage::Ablation | Stage::Readiness) {
+            // Belt-and-braces: the ablation and readiness stages are
+            // default-config only, so no variant may actually differ from
+            // the base either.
             for variant in &self.variants {
                 let diff = variant.changed_fields_against(base);
                 if !diff.is_empty() {
                     return Err(format!(
-                        "stage ablation: variant {} changes {:?}",
-                        variant.variant_id, diff
+                        "stage {}: variant {} changes {:?}",
+                        self.stage.tag(),
+                        variant.variant_id,
+                        diff
                     ));
                 }
             }

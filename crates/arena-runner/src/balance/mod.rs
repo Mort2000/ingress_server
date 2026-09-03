@@ -11,6 +11,7 @@ pub mod archive;
 pub mod execute;
 pub mod pairs;
 pub mod plan;
+pub mod readiness;
 pub mod record;
 pub mod schedule;
 pub mod smoke;
