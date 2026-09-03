@@ -27,7 +27,8 @@ use crate::r2::value::{attack_value, attacks_needed, travel_rounds_between};
 pub struct BuilderDisruptorParams {
     /// Ceiling (permille of the faction's live agents) on how many agents
     /// one coordinated strike may claim, ON TOP of the attacks-needed
-    /// bound (whichever is smaller wins).
+    /// bound (whichever is smaller wins). The r2.0 default 1000 leaves
+    /// the attacks-needed count operative.
     pub attack_share_permille: u32,
     /// The shared builder-core + value-model parameters.
     pub core: CoreParams,
@@ -36,7 +37,7 @@ pub struct BuilderDisruptorParams {
 impl Default for BuilderDisruptorParams {
     fn default() -> Self {
         BuilderDisruptorParams {
-            attack_share_permille: 600,
+            attack_share_permille: 1000,
             core: CoreParams::default(),
         }
     }

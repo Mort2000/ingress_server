@@ -43,7 +43,8 @@ pub struct AdaptiveHybridParams {
     /// which the mid-game adds the disruptor overlay.
     pub attack_lead_share_permille: u32,
     /// The disruptor overlay's attacker-share ceiling while leading
-    /// (permille of live agents).
+    /// (permille of live agents; r2.0 default leaves attacks-needed
+    /// operative).
     pub attack_share_permille: u32,
     /// The defender overlay's concurrent-recharge cap.
     pub defense_task_cap: u32,
@@ -59,7 +60,7 @@ impl Default for AdaptiveHybridParams {
             opening_permille: 300,
             endgame_permille: 850,
             attack_lead_share_permille: 550,
-            attack_share_permille: 600,
+            attack_share_permille: 1000,
             defense_task_cap: 1,
             opponent: OpponentParams::default(),
             core: CoreParams::default(),
@@ -170,8 +171,11 @@ impl AdaptiveHybridR2 {
 
     /// The role mix this round: a pure function of the round, the public
     /// scores and the opponent model's pressure state (plan 6.1 — map,
-    /// round, score, threats; never AgentId).
-    pub fn role_mix(&self, obs: &Observation) -> RoleMix {
+    /// round, score, threats; never AgentId). Consumes the observation's
+    /// NEW public events into the opponent model first (idempotent by
+    /// seq), so the decision never depends on call order.
+    pub fn role_mix(&mut self, obs: &Observation) -> RoleMix {
+        self.opponent.update(obs);
         let total = self.core.cfg().total_rounds;
         let permille = if total == 0 {
             1000
@@ -221,7 +225,6 @@ impl R2Policy for AdaptiveHybridR2 {
     }
 
     fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
-        self.opponent.update(obs);
         self.core.refresh(obs);
         self.last_mix = self.role_mix(obs);
         let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
