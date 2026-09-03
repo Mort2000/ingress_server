@@ -1,0 +1,6 @@
+[package]
+name = "git-dep-bot"
+version = "0.1.0"
+
+[dependencies]
+blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }

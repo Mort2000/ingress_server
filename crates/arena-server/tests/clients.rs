@@ -166,3 +166,93 @@ fn probe_giant_name_frame_is_processed() {
     let result = std::fs::read_to_string(out_dir.join("giant/result.txt")).expect("result");
     assert!(result.contains("rounds_completed=2"), "{result}");
 }
+
+// ---------------------------------------------------------------------------
+// M8 sandbox integration (P4-GATE): a client that the SANDBOX kills.
+// ---------------------------------------------------------------------------
+
+fn sandbox_runner_bin() -> PathBuf {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_sandbox-runner") {
+        return PathBuf::from(path);
+    }
+    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join("target");
+    for profile in ["debug", "release"] {
+        let candidate = target.join(profile).join("sandbox-runner");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    panic!("sandbox-runner not built (run cargo build --workspace)");
+}
+
+/// P4-GATE / A-RUNTIME: a client killed by the sandbox's resource
+/// isolation — `RLIMIT_AS` of 8 MiB lets the client start, connect,
+/// and authenticate, then its first SHM mapping (the 8 MiB public
+/// region alone exceeds the cap) fails with ENOMEM and the process
+/// exits. The server is untouched: CLIENT_FORFEIT, clean exit (6/7),
+/// journal + abnormal IARP trailer, and the sandbox-runner reports the
+/// exit itself. The peer completes normally on the other side.
+#[test]
+fn sandbox_killed_client_forfeits_and_server_finishes_cleanly() {
+    let (mut server, socket, out_dir) = spawn_server("sbkill", 6);
+    let scratch = socket.parent().expect("scratch dir").to_path_buf();
+
+    // The peer plays normally.
+    let mut peer = spawn_probe(&socket, "valid", 0);
+
+    // The victim runs under the real sandbox binary with an 8 MiB
+    // address space (the deterministic kill point: the SDK's public
+    // region mapping is ~16 MiB of VA by itself).
+    let mut victim = Command::new(sandbox_runner_bin())
+        .arg("--as")
+        .arg("8MiB")
+        .arg("--rw")
+        .arg(&scratch)
+        .arg("--wall-ms")
+        .arg("20000")
+        .arg("--")
+        .arg(target_bin("probe-client"))
+        .arg(&socket)
+        .env("PROBE_MODE", "valid")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("sandboxed victim spawns");
+
+    let victim_out = victim.wait_with_output().expect("victim exits");
+    let report = String::from_utf8_lossy(&victim_out.stdout).into_owned();
+    assert!(
+        report.contains("\"classification\": \"completed(2)\""),
+        "the victim died of the AS cap at its first SHM mapping: {report}"
+    );
+    assert!(
+        report.contains("Cannot allocate memory"),
+        "the ENOMEM kill point is visible in the runner's capture: {report}"
+    );
+
+    let _ = peer.wait().expect("peer exits");
+    let status = server.wait().expect("server exits");
+    let code = status.code().expect("exit code");
+    assert!(
+        code == 6 || code == 7,
+        "client-forfeit exit code, got {code}"
+    );
+
+    let journal = std::fs::read_to_string(out_dir.join("sbkill/journal.txt")).expect("journal");
+    assert!(journal.contains("client_forfeit"), "{journal}");
+
+    // The interrupted match still wrote a replay with the D46 abnormal
+    // trailer naming the client forfeit.
+    let bytes = std::fs::read(out_dir.join("sbkill/replay.iarp")).expect("replay written");
+    let file = decode_replay(&bytes).expect("replay decodes");
+    match file.trailer() {
+        Some(EndOfMatch::Abnormal { outcome_tag, .. }) => {
+            assert_eq!(*outcome_tag, arena_replay::format::OUTCOME_CLIENT_FORFEIT);
+        }
+        other => panic!("expected abnormal trailer, got {other:?}"),
+    }
+}

@@ -103,6 +103,67 @@ fn sdk_reader_reads_server_published_regions() {
     drop((public, enl, res));
 }
 
+/// D78 (M8): an SHM-DERIVED `payload_len` beyond the immutable
+/// capacity — written into the live region from OUTSIDE the mapping,
+/// exactly as non-compliant same-UID code could — is refused by the
+/// SDK reader as `Corrupt` and never turned into a lent slice. The
+/// bound check runs before the confirming seq load; the read path
+/// also carries the D78 read-side Acquire fence.
+#[test]
+fn sdk_reader_refuses_oversize_shm_derived_payload_len() {
+    use std::os::unix::fs::FileExt;
+
+    let match_id = format!("twin-corrupt-{}", std::process::id());
+    let (public_name, _enl_name, _res_name) = region_names(&match_id);
+    let capacity = 64 * 1024usize;
+    let mut publisher = ShmPublisher::create(
+        &public_name,
+        REGION_KIND_PUBLIC,
+        PUBLIC_SNAPSHOT_VERSION,
+        capacity,
+    )
+    .expect("region");
+    publisher.publish(&[9u8; 32], 1, 0, 0).expect("publish");
+
+    let reader = ShmReader::open(
+        &public_name,
+        RegionHeader {
+            magic: arena_client_sdk::shm::MAGIC,
+            layout_version: arena_protocol::LAYOUT_VERSION,
+            region_kind: arena_client_sdk::shm::REGION_KIND_PUBLIC,
+            schema_version: PUBLIC_SNAPSHOT_VERSION,
+            capacity: capacity as u32,
+        },
+    )
+    .expect("open");
+    let first = reader.read().expect("healthy read");
+    assert_eq!(first.payload.len(), 32);
+
+    // Corrupt the ACTIVE buffer's length field (after one publish the
+    // active buffer is B; the field offset is pinned by the twin
+    // layout's compile-time assertions).
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(format!("/dev/shm{public_name}"))
+        .expect("raw region file");
+    use std::mem::offset_of;
+    let offset = offset_of!(arena_server::shm::MetadataBlock, payload_len_b);
+    file.write_all_at(&((capacity as u32 + 1).to_le_bytes()), offset as u64)
+        .expect("corrupt payload_len_b");
+    match reader.read() {
+        Err(arena_client_sdk::shm::ShmError::Corrupt {
+            field: "payload_len",
+        }) => {}
+        Err(other) => panic!("expected Corrupt, got {other:?}"),
+        Ok(_) => panic!("expected Corrupt, got a snapshot"),
+    }
+    // Repair: the reader serves the healthy generation again.
+    file.write_all_at(&(32u32.to_le_bytes()), offset as u64)
+        .expect("repair");
+    let repaired = reader.read().expect("repaired read");
+    assert_eq!(repaired.payload.len(), 32);
+}
+
 // A session harness on real (server-published) regions plus a dummy
 // connected socket, for the context/phase refusals.
 struct Fixture {

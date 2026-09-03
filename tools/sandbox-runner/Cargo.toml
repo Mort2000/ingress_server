@@ -1,0 +1,10 @@
+[package]
+name = "sandbox-runner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Resource isolation for audited client processes (P4, D74-D76).
+# std-only: the rlimit/prctl/landlock syscalls are declared via
+# `extern "C"` in the single sanctioned `sys` module (same shape as the
+# M7 `shm.rs` twins — no libc crate, ADR-0013).

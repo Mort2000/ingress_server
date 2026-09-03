@@ -1,0 +1,8 @@
+[package]
+name = "unsafe-block-bot"
+version = "0.1.0"
+
+[dependencies]
+arena-client-sdk = { path = "../crates/arena-client-sdk" }
+arena-core = { path = "../crates/arena-core" }
+blake3 = "1.8"

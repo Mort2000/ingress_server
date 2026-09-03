@@ -1,0 +1,8 @@
+[package]
+name = "audit"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# std-only white-box audit of participant crates (P4-CAPABILITY, D73).
+# No dependencies: the audit itself must not enter the audited closure.

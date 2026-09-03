@@ -21,7 +21,7 @@
 //! races a publication at all.
 
 use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_void};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering, fence};
 
 use arena_protocol::LAYOUT_VERSION;
 
@@ -96,6 +96,12 @@ pub enum ShmError {
     },
     /// The seqlock never settled.
     SeqlockBusy,
+    /// A seqlock-consistent metadata block still carried an impossible
+    /// value (D78: `payload_len` beyond the region capacity — never
+    /// trusted, never used to build a slice).
+    Corrupt {
+        field: &'static str,
+    },
     /// `snapshot_version` moved backwards.
     StaleGeneration {
         seen: u64,
@@ -112,6 +118,9 @@ impl core::fmt::Display for ShmError {
                 write!(f, "shared memory header mismatch: {field}")
             }
             ShmError::SeqlockBusy => write!(f, "seqlock never settled"),
+            ShmError::Corrupt { field } => {
+                write!(f, "region metadata corrupt: {field}")
+            }
             ShmError::StaleGeneration { seen, offered } => {
                 write!(f, "snapshot_version moved backwards: {offered} < {seen}")
             }
@@ -284,7 +293,22 @@ impl ShmReader {
             } else {
                 metadata.payload_len_b
             } as usize;
+            // D78: the length is SHM-DERIVED — bound it against the
+            // immutable capacity BEFORE the confirming load and before
+            // any slice is lent from it (defense in depth on top of the
+            // single-writer invariant).
+            if payload_len > self.capacity {
+                return Err(ShmError::Corrupt {
+                    field: "payload_len",
+                });
+            }
             let offset = METADATA_PAGE_BYTES + active as usize * self.capacity;
+            // D78: read-side Acquire fence between the metadata/payload
+            // snapshot and the confirming seq load (the publisher's
+            // publish is Release-ordered; x86-TSO made the fence
+            // unobservable — it closes the formal gap and pins the
+            // snapshot against compiler reordering).
+            fence(Ordering::Acquire);
             let second = metadata.seq.load(Ordering::Acquire);
             if second != first {
                 continue;

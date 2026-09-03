@@ -167,6 +167,12 @@ pub enum ShmError {
     /// The reader retried the seqlock more than [`MAX_SEQLOCK_RETRIES`]
     /// times without seeing a stable generation.
     SeqlockBusy,
+    /// A seqlock-consistent metadata block still carried an impossible
+    /// value (D78: `payload_len` beyond the region capacity — never
+    /// trusted, never used to build a slice).
+    Corrupt {
+        field: &'static str,
+    },
     /// `snapshot_version` went backwards or the payload failed decode.
     InvalidSnapshot,
 }
@@ -184,6 +190,9 @@ impl core::fmt::Display for ShmError {
                 "snapshot of {len} bytes exceeds region capacity {capacity}"
             ),
             ShmError::SeqlockBusy => write!(f, "seqlock never settled"),
+            ShmError::Corrupt { field } => {
+                write!(f, "region metadata corrupt: {field}")
+            }
             ShmError::InvalidSnapshot => write!(f, "snapshot payload failed validation"),
         }
     }
@@ -527,11 +536,27 @@ pub fn read_snapshot(
             } else {
                 metadata.payload_len_b
             } as usize;
+            // D78: the length is SHM-DERIVED — bound it against the
+            // immutable capacity before any slice is built from it
+            // (defense in depth on top of the single-writer invariant;
+            // an impossible length is reported, never trusted).
+            if payload_len > capacity {
+                return Err(ShmError::Corrupt {
+                    field: "payload_len",
+                });
+            }
             let offset = METADATA_PAGE_BYTES + active as usize * capacity;
             // SAFETY: offset + payload_len <= region end by construction
-            // (the writer only publishes in-capacity payloads).
+            // (capacity-checked above; the writer only publishes
+            // in-capacity payloads).
             let payload =
                 unsafe { std::slice::from_raw_parts(base.add(offset), payload_len) }.to_vec();
+            // D78: read-side Acquire fence between the payload snapshot
+            // and the confirming seq load — the publisher's publish
+            // protocol is Release-ordered, and x86-TSO made the missing
+            // fence unobservable; this closes the formal gap for
+            // weaker orderings and against compiler reordering.
+            fence(Ordering::Acquire);
             if metadata.seq.load(Ordering::Acquire) != first {
                 continue; // spanned a publication: retry
             }
@@ -708,6 +733,46 @@ mod tests {
             read_snapshot("/ingress-test-does-not-exist-xyz", good, &|_| true),
             Err(ShmError::Io(_))
         ));
+    }
+
+    /// D78 (M8): an SHM-DERIVED `payload_len` beyond the immutable
+    /// capacity — written into the live region from OUTSIDE the
+    /// mapping — is refused as `Corrupt`, never trusted for a slice;
+    /// repairing the field restores service. The read path also
+    /// carries the D78 read-side Acquire fence (see read_snapshot).
+    #[test]
+    fn oversize_shm_derived_payload_len_is_refused_as_corrupt() {
+        use std::os::unix::fs::FileExt;
+        let name = unique_name("corrupt");
+        let capacity = 512usize;
+        let mut publisher =
+            ShmPublisher::create(&name, REGION_KIND_PUBLIC, PUBLIC_SNAPSHOT_VERSION, capacity)
+                .expect("create");
+        publisher.publish(&[7u8; 16], 1, 0, 0).expect("publish");
+        let header = public_header(capacity as u32);
+        assert!(read_snapshot(&name, header, &|_| true).is_ok());
+
+        // One publish => active buffer is B; corrupt its length field
+        // through the raw region file (the mapping is MAP_SHARED, so
+        // the write is immediately visible).
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("/dev/shm{name}"))
+            .expect("raw region file");
+        let offset = std::mem::offset_of!(MetadataBlock, payload_len_b);
+        file.write_all_at(&((capacity as u32 + 1).to_le_bytes()), offset as u64)
+            .expect("corrupt");
+        match read_snapshot(&name, header, &|_| true) {
+            Err(ShmError::Corrupt {
+                field: "payload_len",
+            }) => {}
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+        // Repair: the healthy generation serves again.
+        file.write_all_at(&(16u32.to_le_bytes()), offset as u64)
+            .expect("repair");
+        let read = read_snapshot(&name, header, &|_| true).expect("repaired");
+        assert_eq!(read.payload.len(), 16);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+[package]
+name = "sb-fixtures"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Sandbox enforcement fixtures (P4): four tiny std-only binaries the
+# sandbox-runner tests execute under real limits. Every fixture is
+# `#![forbid(unsafe_code)]` — they model audited participant behavior.
+
+[dependencies]

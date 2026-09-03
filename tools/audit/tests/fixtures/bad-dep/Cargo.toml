@@ -1,0 +1,6 @@
+[package]
+name = "bad-dep-bot"
+version = "0.1.0"
+
+[dependencies]
+serde = "1"

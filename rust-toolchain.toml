@@ -1,0 +1,7 @@
+# P4-BUILD: the frozen toolchain of the audited offline closure
+# (D72). The rustup proxy at /usr/bin/cargo honors this file, so every
+# cargo command in this repository resolves 1.98.0. Provisioning is
+# the one out-of-band step (rustup network): see docs/build-provenance.md.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt"]
