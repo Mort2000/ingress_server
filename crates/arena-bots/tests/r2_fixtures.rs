@@ -976,3 +976,99 @@ fn allocation_is_a_pure_deterministic_function_of_its_inputs() {
     assert_eq!(first, reordered);
 }
 
+// ---------------------------------------------------------------------
+// Seeded tie-break and near-equal candidate sampling (plan 5.1/6.3):
+// deterministic given the stream, seed-sensitive across streams
+// ---------------------------------------------------------------------
+
+use arena_bots::r2::sample::{pick_near_equal, pick_uniform};
+
+#[test]
+fn sampling_is_deterministic_given_the_stream_position() {
+    let items = [10i64, 10, 10, 9];
+    let mut rng = R2Rng::new(0x5EED_0000_00B2, Faction::Enl, R2Stream::BlockerBuilder);
+    let first = pick_near_equal(&items, |v| *v, 1000, &mut rng);
+    // Rewinding is impossible, so determinism is pinned by re-keying the
+    // identical stream: same key, same draw sequence, same pick.
+    let mut replay = R2Rng::new(0x5EED_0000_00B2, Faction::Enl, R2Stream::BlockerBuilder);
+    let second = pick_near_equal(&items, |v| *v, 1000, &mut replay);
+    assert_eq!(first, second);
+    // Uniform pick over the same stream state is deterministic too.
+    let mut a = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
+    let mut b = R2Rng::new(1, Faction::Enl, R2Stream::Idle);
+    assert_eq!(pick_uniform(&[7, 8, 9], &mut a), pick_uniform(&[7, 8, 9], &mut b));
+    assert_eq!(pick_uniform::<i64>(&[], &mut a), None);
+    assert_eq!(pick_near_equal(&[], |v: &i64| *v, 1000, &mut a), None);
+}
+
+#[test]
+fn near_equal_permille_bounds_the_eligible_band_exactly() {
+    // Best value 1000; permille 50 admits 950 (floor = 1000 - 50), so both
+    // items are eligible; permille 49 truncates to a floor of 951 and
+    // excludes 950.
+    let mut rng = R2Rng::new(2, Faction::Res, R2Stream::GreedyCoordinated);
+    for _ in 0..64 {
+        let pick = pick_near_equal(&[1000i64, 950], |v| *v, 50, &mut rng);
+        assert!(
+            pick == Some(&1000) || pick == Some(&950),
+            "both band members are eligible at permille 50"
+        );
+    }
+    let mut strict = R2Rng::new(2, Faction::Res, R2Stream::GreedyCoordinated);
+    for _ in 0..64 {
+        assert_eq!(
+            pick_near_equal(&[1000i64, 950], |v| *v, 49, &mut strict),
+            Some(&1000),
+            "950 must be outside a 49-permille band of 1000"
+        );
+    }
+    // permille 0 keeps only exact ties with the best.
+    let mut exact = R2Rng::new(3, Faction::Enl, R2Stream::Idle);
+    for _ in 0..64 {
+        let pick = pick_near_equal(&[1000i64, 1000, 999], |v| *v, 0, &mut exact);
+        assert!(pick == Some(&1000));
+    }
+    // A non-positive best value has no proportional band: only exact ties.
+    let mut negative = R2Rng::new(4, Faction::Enl, R2Stream::Idle);
+    for _ in 0..64 {
+        let pick = pick_near_equal(&[-10i64, -10, -11], |v| *v, 1000, &mut negative);
+        assert_ne!(pick, Some(&-11));
+    }
+}
+
+#[test]
+fn near_equal_sampling_is_seed_sensitive_across_streams() {
+    // Two exactly equal candidates: across many streams and seeds both
+    // must be picked sometimes — a single fixed pick would mean the draw
+    // ignored its key. The candidates are equal by value, so the picked
+    // ITEM is identified by address, not by value.
+    let items = [100i64, 100];
+    let mut picks_of_first = 0u32;
+    let mut total = 0u32;
+    for stream in R2Stream::ALL {
+        for seed in 0..16u64 {
+            let mut rng = R2Rng::new(seed, Faction::Enl, stream);
+            let pick = pick_near_equal(&items, |v| *v, 1000, &mut rng).expect("non-empty");
+            if std::ptr::eq(pick, &items[0]) {
+                picks_of_first += 1;
+            }
+            total += 1;
+        }
+    }
+    assert_eq!(total, 112);
+    assert!(
+        picks_of_first > 0 && picks_of_first < total,
+        "both near-equal candidates must be reachable (first picked {picks_of_first}/{total})"
+    );
+    // A strictly better candidate dominates every stream when alone in
+    // its band.
+    for stream in R2Stream::ALL {
+        for seed in 0..8u64 {
+            let mut rng = R2Rng::new(seed, Faction::Res, stream);
+            assert_eq!(
+                pick_near_equal(&[100i64, 10], |v| *v, 100, &mut rng),
+                Some(&100)
+            );
+        }
+    }
+}
