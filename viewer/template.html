@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingress Arena Replay Viewer</title>
+<style>
+/*__VIEWER_CSS__*/
+</style>
+</head>
+<body>
+<header id="hdr"></header>
+<main id="layout">
+  <section id="stage">
+    <canvas id="map" width="920" height="660"></canvas>
+    <div id="controls">
+      <div id="controls-row">
+        <button id="btn-play" type="button">Play</button>
+        <button id="btn-back" type="button" title="step one round back (Left)">&#9664; step</button>
+        <button id="btn-fwd" type="button" title="step one round forward (Right)">step &#9654;</button>
+        <button id="btn-home" type="button" title="jump to round 0 (Home)">|&lt; 0</button>
+        <button id="btn-end" type="button" title="jump to the last round (End)">end &gt;|</button>
+        <label id="speed-label">speed
+          <select id="speed">
+            <option value="1000">1x (1000ms)</option>
+            <option value="500" selected>2x (500ms)</option>
+            <option value="250">4x (250ms)</option>
+            <option value="125">8x (125ms)</option>
+          </select>
+        </label>
+        <span id="round-readout">round 0</span>
+      </div>
+      <div id="slider-wrap">
+        <div id="ticks"></div>
+        <input id="slider" type="range" min="0" max="100" value="0" step="1"
+               title="jump: any round is direct O(1) array access; ticks mark IARP checkpoint rounds">
+      </div>
+    </div>
+    <nav id="views">
+      <button type="button" data-view="enl">Faction View ENL</button>
+      <button type="button" data-view="res">Faction View RES</button>
+      <button type="button" data-view="public">Public View</button>
+      <button type="button" data-view="god">God View</button>
+      <span id="view-note"></span>
+    </nav>
+  </section>
+  <aside id="side">
+    <section id="score-panel">
+      <h2>Score (cumulative score2)</h2>
+      <canvas id="curve" width="560" height="210"></canvas>
+      <div id="score-readout"></div>
+    </section>
+    <section id="event-panel">
+      <h2>Events</h2>
+      <div id="event-filters"></div>
+      <ol id="events"></ol>
+    </section>
+  </aside>
+</main>
+<footer id="selftest-result"></footer>
+<script>
+/*__VIEWER_DATA__*/
+</script>
+<script>
+"use strict";
+/*__VIEWER_JS__*/
+</script>
+</body>
+</html>

@@ -209,6 +209,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "replay-export"
+version = "0.1.0"
+dependencies = [
+ "arena-bots",
+ "arena-core",
+ "arena-replay",
+]
+
+[[package]]
 name = "sandbox-runner"
 version = "0.1.0"
 

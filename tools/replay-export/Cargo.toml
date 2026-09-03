@@ -1,0 +1,19 @@
+[package]
+name = "replay-export"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# M10 replay viewer export tool (D87): decodes + VERIFIES an IARP replay
+# (arena_replay::replay, the P6-GATE reference), materializes per-round
+# faction observations, and emits ONE self-contained HTML file (inline
+# CSS/JS, embedded data, zero external requests, opens from file://).
+# Dependencies: arena-core + arena-replay workspace path deps only
+# (lockfile unchanged, D79 precedent); arena-bots is a dev-dep for the
+# fixture matches of the integration tests.
+[dependencies]
+arena-core = { path = "../../crates/arena-core" }
+arena-replay = { path = "../../crates/arena-replay" }
+
+[dev-dependencies]
+arena-bots = { path = "../../crates/arena-bots" }
