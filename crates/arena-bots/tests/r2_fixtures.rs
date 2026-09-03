@@ -1163,11 +1163,13 @@ fn builder_core_assigns_distinct_stations_to_distinct_agents() {
     by_agent.sort_by_key(|(agent, _)| agent.0);
     assert_eq!(by_agent.len(), 3);
     for (_, coord) in &by_agent {
+        // The station is a plan vertex, within the recorded jitter.
         assert!(
-            triangle
-                .iter()
-                .any(|v| map.portal(*v).expect("map portal").position == *coord),
-            "every spawn stands on a plan vertex"
+            triangle.iter().any(|v| {
+                let position = map.portal(*v).expect("map portal").position;
+                arena_core::geometry::dist2(position, *coord) <= 1_000i64 * 1_000
+            }),
+            "every spawn stands within the jitter of a plan vertex"
         );
     }
     // Round 1 observation: everyone at their spawn, everything neutral.
@@ -1218,14 +1220,17 @@ fn builder_core_assigns_distinct_stations_to_distinct_agents() {
         assert!(built.len() <= 10);
         built_by_agent.insert(agent, built);
     }
-    // An agent standing on its own neutral station emits exactly one
+    // An agent standing at its own neutral station emits exactly one
     // Capture (a Major Action) and no Move.
     let me0 = &obs.own_agents[0];
     let station = obs
         .portals
         .iter()
-        .find(|p| p.position == me0.position)
-        .expect("spawned on a portal")
+        .find(|p| {
+            arena_core::geometry::dist2(p.position, me0.position)
+                <= 5_000i64 * 5_000
+        })
+        .expect("spawned within operation range of a portal")
         .id;
     assert_eq!(
         built_by_agent.get(&me0.id).expect("agent 0 has commands"),

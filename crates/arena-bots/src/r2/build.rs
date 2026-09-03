@@ -63,6 +63,16 @@ pub struct CoreParams {
     /// positive value means "better than walking", while staying far below
     /// every real build value so fallback work never preempts a live plan.
     pub fallback_priority: i64,
+    /// Seeded spawn jitter (cm): each roster agent spawns at its plan
+    /// vertex plus a faction-keyed random offset in
+    /// `[-jitter..=jitter] x [-jitter..=jitter]` (clamped in bounds).
+    /// The station assignment is unchanged — every agent stays inside the
+    /// portal operation range — but two mirror factions of one policy can
+    /// never collide on the identical Initial Spawn Set when the map's
+    /// best triangle strictly dominates the near-equal band (plan section
+    /// 10.1 mirror gate; the seeded tie-break alone cannot diverge a
+    /// singleton band).
+    pub spawn_jitter_cm: i32,
     /// The shared value model's thresholds (inlined into the record).
     pub value: ValueParams,
 }
@@ -73,20 +83,23 @@ impl Default for CoreParams {
             near_equal_permille: 100,
             replan_retry_rounds: 25,
             fallback_priority: 1,
+            spawn_jitter_cm: 1_000,
             value: ValueParams::default(),
         }
     }
 }
 
-const CORE_PARAM_KEYS: [&str; 3] = ["nearequal", "retry", "fbpri"];
+const CORE_PARAM_KEYS: [&str; 4] = ["nearequal", "retry", "fbpri", "jit"];
 
 impl CoreParams {
-    /// Canonical serialization: `nearequal=..;retry=..;fbpri=..|value=<ValueParams::tag>`.
+    /// Canonical serialization:
+    /// `nearequal=..;retry=..;fbpri=..;jit=..|value=<ValueParams::tag>`.
     pub fn tag(&self) -> String {
         let values = [
             self.near_equal_permille.to_string(),
             self.replan_retry_rounds.to_string(),
             self.fallback_priority.to_string(),
+            self.spawn_jitter_cm.to_string(),
         ];
         let mut tag = String::new();
         for (key, value) in CORE_PARAM_KEYS.iter().zip(values) {
@@ -110,7 +123,7 @@ impl CoreParams {
         if parts.len() != CORE_PARAM_KEYS.len() {
             return None;
         }
-        let mut values = [0u64; 3];
+        let mut values = [0i64; 4];
         for (index, part) in parts.iter().enumerate() {
             let (key, raw) = part.split_once('=')?;
             if key != CORE_PARAM_KEYS[index] {
@@ -119,9 +132,10 @@ impl CoreParams {
             values[index] = raw.parse().ok()?;
         }
         Some(CoreParams {
-            near_equal_permille: u32::try_from(values[0]).ok()?,
-            replan_retry_rounds: u32::try_from(values[1]).ok()?,
-            fallback_priority: i64::try_from(values[2]).ok()?,
+            near_equal_permille: u32::try_from(values[0].max(0) as u64).ok()?,
+            replan_retry_rounds: u32::try_from(values[1].max(0) as u64).ok()?,
+            fallback_priority: values[2],
+            spawn_jitter_cm: i32::try_from(values[3].clamp(0, 100_000)).ok()?,
             value: ValueParams::from_tag(value)?,
         })
     }
@@ -226,6 +240,11 @@ impl BuilderCore {
         .copied();
         self.plan = picked;
         self.active = picked;
+        let jitter = self.params.spawn_jitter_cm.max(0);
+        let (width, height) = (cfg.map_width_cm, cfg.map_height_cm);
+        let bounds = |position: Coord| -> Coord {
+            Coord::new(position.x.clamp(0, width), position.y.clamp(0, height))
+        };
         self.last_spawns = match picked {
             Some(candidate) => roster
                 .iter()
@@ -234,7 +253,20 @@ impl BuilderCore {
                     let portal = map
                         .portal(candidate.vertices[index % 3])
                         .expect("search only returns map portals");
-                    (agent, portal.position)
+                    // Seeded faction-keyed jitter: the station is the
+                    // vertex; the coordinates differ per faction stream.
+                    let (dx, dy) = if jitter == 0 {
+                        (0, 0)
+                    } else {
+                        (
+                            self.rng.uniform(2 * jitter as u32 + 1) as i32 - jitter,
+                            self.rng.uniform(2 * jitter as u32 + 1) as i32 - jitter,
+                        )
+                    };
+                    (
+                        agent,
+                        bounds(Coord::new(portal.position.x + dx, portal.position.y + dy)),
+                    )
                 })
                 .collect(),
             None => {
