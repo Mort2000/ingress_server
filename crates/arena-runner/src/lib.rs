@@ -18,11 +18,13 @@ pub mod run;
 pub mod schedule;
 pub mod tournament;
 
+pub use balance::execute::{BalanceRunResult, run_balance_batch};
+pub use balance::plan::{ExperimentPlan, SeedSet};
 pub use batch::{BatchConfig, MatchDescriptor, Matchup};
 pub use metrics::{FactionMatchStats, MatchRecord, MatchStats, Outcome};
 pub use policy::BucketPolicy;
 pub use report::{BatchSummary, MatchupSummary, SnowballCheckpoint};
-pub use run::{BatchError, BatchRun, run_batch, run_match};
+pub use run::{BatchError, BatchRun, RecordedMatch, run_batch, run_match, run_match_recorded};
 
 /// `LE-u64(blake3(label || payload))` — the frozen seed-derivation helper
 /// (D58, the M5 gate pattern): one distinct stream per domain label.
