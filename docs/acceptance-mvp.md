@@ -219,12 +219,14 @@ scheduled; the tuning round has NOT been run)
   baselines at >90% win rate on most random maps. The 10,000-match
   frozen batch (`runs/m6-r1/`, `GameConfig::default()`, master seed
   `0x006d360000000031`, arena-bots `m6.0`) found one violation candidate:
-  **Hybrid beats GreedyField 1750/1750 (100%)**; Nearest beats Random
-  (97.8%) but Random is not a "reasonable baseline" — it is the
-  legality-weighted random controller. Everything else sits at or below
+  **Hybrid beats GreedyField 1750/1750 (100%)**; GreedyField beats
+  NearestPortal (97.8%, 1711/1750) but NearestPortal is not a
+  "reasonable baseline" — it is the pure nearest-expansion probe that
+  structurally never LINKs and so cannot out-score any builder (balance
+  report §5, root cause A). Everything else sits at or below
   50% with the mirror exactly balanced (H×H 1126/1124).
 - The finding is RECORDED, root-caused, and scheduled (M6 milestone
-  log + `docs/balance-report-r1.md` §4): the plan's balance loop expects
+  log + `docs/balance-report-r1.md` §5): the plan's balance loop expects
   the first analysis round to surface exactly such dominances and to
   answer them with rule/parameter tuning in a later round — which has
   not happened yet. Related recorded biases: the Hybrid-mirror ENL bias

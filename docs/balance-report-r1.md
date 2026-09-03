@@ -5,6 +5,18 @@ All numbers come from the actual run artifacts in `runs/m6-r1/`
 (`manifest.txt`, `matches.tsv`, `summary.txt`) and the explicit
 cross-bucket batch in `runs/m6-r1-crossbucket/`.
 
+> **Scope (B0 evidence pass, 2026-09):** `arena-bots m6.0` and this batch
+> are a FROZEN DIAGNOSTIC BASELINE — a rules/state-machine smoke test and a
+> default-`GameConfig` diagnostic run, nothing more. No parameter tuning
+> has been performed and no `GameConfig` value has been changed; section 6
+> is an ordered list of investigation hypotheses, not evidence-based
+> tuning conclusions. Per `docs/ai-balance-plan.md`, default-value changes
+> require isolating bot-implementation defects first (ablation), then
+> single-variable sensitivity with faction-swapped pairing and holdout
+> confirmation. Every matchup, win-rate and snowball number below was
+> re-verified against `runs/m6-r1/matches.tsv` in this pass; the cells
+> corrected by it are listed in the B0 commit.
+
 ## 1. Methodology
 
 | Item | Value |
@@ -47,7 +59,7 @@ Mean per-match metrics by bot inside each matchup (per match, 500 rounds):
 
 | Matchup / bot | cmds | drop rate | hacks | attacks | recharges | captures | links | fields | first field | mean field area2 (cm^2 x2) | layering | supply left |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| RR random | 2581 | 0.004% | 42.9 | 21.9 | 27.2 | 9.6 | 7.7 | 2.41 | 246.8 | 8.93e8 | 1.32 | 155.7 |
+| RR random | 2581 | 0.006% | 42.9 | 21.9 | 27.2 | 9.6 | 7.7 | 2.41 | 246.8 | 8.93e8 | 1.32 | 155.7 |
 | NN nearest | 2500 | 4.5% | 71.4 | 1509.5 | 0 | 328.2 | 0 | 0 | — | — | 0 | 211.4 |
 | NG greedy | 2500 | 12.7% | 153.1 | 251.8 | 0 | 66.3 | 23.6 | 5.41 | 133.1 | 1.00e10 | 2.04 | 293.1 |
 | NG nearest | 2500 | 6.0% | 568.1 | 313.5 | 0 | 165.0 | 0 | 0 | — | — | 0 | 602.9 |
@@ -75,29 +87,36 @@ Resource and control metrics (per match, pooled factions):
 
 | Matchup | anchor-attack share | key utilization | reinforcement link share | portal turnover (captures/portal/match) |
 |---|---:|---:|---:|---:|
-| Random x Random | 31.6% | 8.9% | 28.0% | 0.16 |
+| Random x Random | 31.6% | 8.9% | 28.2% | 0.16 |
 | Nearest x Nearest | 0.0% | 0% | — (no links) | 5.47 |
-| Nearest x Greedy | 3.6% | 1.6% | 12.9% | 1.93 |
-| Greedy x DestroyAnchor | 0.1% | 5.9% | 5.6% | 2.22 |
+| Nearest x Greedy | 3.7% | 1.6% | 13.0% | 1.93 |
+| Greedy x DestroyAnchor | 0.1% | 6.0% | 5.7% | 2.22 |
 | Greedy x Hybrid | 4.6% | 11.2% | 1.5% | 1.37 |
-| Hybrid x Hybrid | 4.8% | 28.9% | 0.0% | 1.53 |
+| Hybrid x Hybrid | 4.9% | 28.9% | 0.0% | 1.53 |
 
-(Turnover is both factions' captures per portal per match — it can exceed
-1 because recaptures count: under Nearest x Nearest every portal changes
-hands ~5.5 times per match, while Random x Random settles at ~0.16. The
-per-faction values in `summary.txt` sum to these, e.g. NN 2.811 + 2.658.)
+(Share columns pool both factions' numerators and denominators across the
+matchup, e.g. HH anchor share 74,843/1,521,674 attack hits. Turnover is
+both factions' captures per portal per match — it can exceed 1 because
+recaptures count: under Nearest x Nearest every portal changes hands ~5.5
+times per match, while Random x Random settles at ~0.16. The per-faction
+values in `summary.txt` sum to these, e.g. NN 2.811 + 2.658.)
 
 Drop-rate note (illegal-action rate): the aggregate drop rate is 0–7% for
-every bot except `greedy-field` under active disruption (19.6% vs
-DestroyAnchor). A sampled Greedy x DestroyAnchor match (4,496 commands,
-490 drops) breaks down as 353 `CaptureTargetNotNeutral` (internal capture
-races — all GreedyField agents walk the same station in the same order),
-60 `LinkPortalNotOwned` (vertex neutralized between observation and
-execution), 40 `LinkAlreadyExists` (two own agents link the same pair in
-one round), 36 `AttackNoEnemyPortalsInRange` (expansion attack raced by a
-teammate). Against a passive opponent the same bot drops < 5% (pinned by
-the arena-bots legality gate), so these are same-round races under
-pressure, not illegal-by-design commands.
+every bot except `greedy-field` whenever the opponent actively contests
+portals (12.7% vs NearestPortal, 19.6% vs DestroyAnchor). Recomputed over
+the whole Greedy x DestroyAnchor matchup — `matches.tsv` stores drop
+totals only, so reasons come from deterministically re-executing the
+frozen matches — GreedyField's 856,473 dropped commands break down as
+630,271 `CaptureTargetNotNeutral` (73.6%; internal capture races — all
+GreedyField agents walk the same station in the same order), 57,455
+`LinkPortalNotOwned` (6.7%; vertex neutralized between observation and
+execution), 74,865 `LinkAlreadyExists` (8.7%; two own agents link the
+same pair in one round) and 93,882 `AttackNoEnemyPortalsInRange` (11.0%;
+expansion attack raced by a teammate). (DestroyAnchor's own 35,744 drops
+are almost entirely the same race, 33,658
+`CaptureTargetNotNeutral`.) Against a passive opponent the same bot drops
+< 5% (pinned by the arena-bots legality gate), so these are same-round
+races under pressure, not illegal-by-design commands.
 
 ## 3. Faction-bias check (ENL vs RES)
 
@@ -163,9 +182,11 @@ weighting — concretely ordered in section 6.
 **Not clean on the first round; recorded and scheduled (the gate's own
 condition is met via the documented-and-scheduled clause).**
 
-- Two rows exceed 90% win rate over other reasonable baselines:
-  `Hybrid > Greedy 100%` (1750/1750) and `Greedy > NearestPortal 97.8%`
-  (1711/1750, 39 draws).
+- Two rows exceed 90% win rate: `Hybrid > GreedyField 100%` (1750/1750 —
+  over a reasonable baseline, the genuine violation candidate) and
+  `GreedyField > NearestPortal 97.8%` (1711/1750, 39 draws — over a
+  diagnostic probe that structurally cannot score, so not a
+  reasonable-baseline row; see root cause A).
 - Root cause A (role asymmetry, not tuning): `nearest-portal` and
   `destroy-anchor` structurally never LINK, so they can never out-score
   any builder; their matchups can only end in builder-wins or draws.
@@ -173,16 +194,18 @@ condition is met via the documented-and-scheduled clause).**
   pure expansion / pure disruption beat any scorer?", answered "no"
   (0 wins) and "almost never" (87.1% draws vs Greedy: the Disruptor role
   hard-counters the pure Field Builder, holding it to 0.22 fields/match
-  vs 5.41 when unopposed).
+  vs 5.41 against NearestPortal — which, despite never LINKing, recaptures
+  enough to destroy 96.8% of GreedyField's fields in that matchup).
 - Root cause B (genuine balance signal): `Hybrid` dominates `Greedy`
   100%. Mechanism, from the per-bot metrics: Hybrid's offset-staggered
   trio fields 5.6x more often (9.45 vs 1.69 fields/match), first field
-  53 vs 87, 3.1x layered depth, 5x field area, while its four
+  53 vs 87, 3.2x layered depth, 5x field area, while its four
   reinforcement attackers simultaneously suppress Greedy (Greedy's
   fields/match drop from 5.41 vs Nearest to 1.69 vs Hybrid). Part of the
   gap is bot-quality (GreedyField's all-agents-one-order tour bunches —
-  353 internal capture-race drops in the sampled GD match — so the pure
-  builder is weaker than its plan deserves), but a fixed-version simple
+  internal capture races cause 630,271 of its 856,473 dropped commands in
+  the GD matchup — so the pure builder is weaker than its plan deserves),
+  but a fixed-version simple
   strategy beating every other reasonable baseline 100% is exactly the
   pattern A-BALANCE looks for, and it compounds with the R100 snowball
   threshold above.
@@ -196,6 +219,12 @@ bot-definition round (re-version GreedyField to `m6.1` with per-agent
 station offsets — a measuring-tool fix, explicitly not a rules change).
 
 ## 6. Tuning recommendations (P2.5-TUNING order, one variable per round)
+
+(None of the below has been run. This ordering predates
+`docs/ai-balance-plan.md`; treat it as the hypothesis list that the
+plan's ablation-first stages (bot-defect isolation before any parameter
+change, faction-swapped pairing, holdout confirmation) are designed to
+test, not as a committed schedule.)
 
 1. **`MOVE_BUDGET` (200 m)** — first, cheapest lever on snowball pacing.
    Builder tour time is the dominant term of first-field round (53–133
@@ -212,12 +241,14 @@ station offsets — a measuring-tool fix, explicitly not a rules change).
    GD). Lower damage weakens single-point collapse; higher makes
    disruption (and Hybrid's attackers) even stronger.
 4. **`RECHARGE_AMOUNT` / `RECHARGE_COST` (15 / 1)** — defense is nearly
-   unused (0.1–3 recharges/match except DestroyAnchor's in-passing 8.4);
-   cheaper/stronger recharge is the counter-lever to attack-heavy
-   strategies before touching supply.
-5. **`INITIAL_SUPPLY` (20)** — only after the above; NN shows hack-farmed
-   supply piles to 600+ per match, so the binding constraint is not
-   supply today.
+   unused by the deliberate bots (0–3 recharges/match; DestroyAnchor's
+   8.4 are in-passing, and the random controller's undirected mix
+   recharges 27.2); cheaper/stronger recharge is the counter-lever to
+   attack-heavy strategies before touching supply.
+5. **`INITIAL_SUPPLY` (20)** — only after the above; NG shows hack-farmed
+   supply piles to 600+ per match (the NearestPortal bot banks 602.9
+   supply on average against Greedy; in NN it reaches 211.4), so the
+   binding constraint is not supply today.
 6. **Portal density (`PORTAL_COUNT` 120)** — last; reshapes the map
    geometry all of the above act on.
 
@@ -236,6 +267,7 @@ do not add mechanics to mask balance problems.
 - Draw incidence: NN is 100% draws by construction and GD 87.1% —
   expected for non-scoring baselines, but the draw rate is the metric
   that should drop if attack/retake dynamics get more decisive.
-- Key utilization is low everywhere (1.6%–28.9%): keys are abundant
-  relative to link opportunities; revisit only after link distance
-  changes.
+- Key utilization is low everywhere (0%–28.9%, and only 1.6%–28.9% in the
+  matchups where LINKs happen — Nearest x Nearest gains 428,200 keys and
+  never spends one): keys are abundant relative to link opportunities;
+  revisit only after link distance changes.
