@@ -13,8 +13,12 @@ pub mod destroy_anchor;
 pub mod greedy_field;
 pub mod hybrid;
 pub mod nearest;
+pub mod policy;
 pub mod random;
 pub mod rng;
 
 pub use bot::{BOT_VERSION, Bot, BotKind, BotStrategy, make_bot};
+pub use policy::{
+    PolicyFamily, PolicyId, PolicyParameters, PolicySpec, frozen_m6_specs, make_policy_bot,
+};
 pub use rng::BotRng;
