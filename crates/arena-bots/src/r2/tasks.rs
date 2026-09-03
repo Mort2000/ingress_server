@@ -31,8 +31,15 @@ pub enum Task {
     Attack { portal: PortalId },
     /// Recharge an own anchor (Major Action, consumes Supply).
     Recharge { portal: PortalId },
-    /// Rendezvous with `receiver` for a Transfer of keys and Supply.
-    Transfer { receiver: AgentId },
+    /// Hold station at `portal` — walk there and wait (the link-source
+    /// pre-positioning task: the stationed agent receives a key by
+    /// Transfer and fires the edge, instead of the distant key-holder
+    /// walking the whole way itself).
+    Standby { portal: PortalId },
+    /// Rendezvous with `receiver` to deliver one key of `key` (the runner
+    /// task: approach the station; the owning policy pays the payload
+    /// once the receiver is inside TRANSFER_RANGE).
+    Transfer { receiver: AgentId, key: PortalId },
 }
 
 impl Task {
@@ -44,6 +51,7 @@ impl Task {
             Task::Link { .. } => "link",
             Task::Attack { .. } => "attack",
             Task::Recharge { .. } => "recharge",
+            Task::Standby { .. } => "standby",
             Task::Transfer { .. } => "transfer",
         }
     }
@@ -55,7 +63,8 @@ impl Task {
             Task::Capture { portal }
             | Task::KeyFarm { portal }
             | Task::Attack { portal }
-            | Task::Recharge { portal } => Some(*portal),
+            | Task::Recharge { portal }
+            | Task::Standby { portal } => Some(*portal),
             Task::Link { source, .. } => Some(*source),
             Task::Transfer { .. } => None,
         }
@@ -241,16 +250,21 @@ mod tests {
             Task::Recharge {
                 portal: PortalId(4),
             },
+            Task::Standby {
+                portal: PortalId(5),
+            },
             Task::Transfer {
                 receiver: AgentId(7),
+                key: PortalId(2),
             },
         ];
         let mut tags: Vec<&str> = tasks.iter().map(|t| t.kind_tag()).collect();
         tags.sort_unstable();
         tags.dedup();
-        assert_eq!(tags.len(), 6, "distinct tags per variant");
+        assert_eq!(tags.len(), 7, "distinct tags per variant");
         assert_eq!(tasks[0].target_portal(), Some(PortalId(0)));
         assert_eq!(tasks[2].target_portal(), Some(PortalId(1)));
-        assert_eq!(tasks[5].target_portal(), None);
+        assert_eq!(tasks[5].target_portal(), Some(PortalId(5)));
+        assert_eq!(tasks[6].target_portal(), None);
     }
 }

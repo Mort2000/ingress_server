@@ -432,17 +432,29 @@ impl BuilderCore {
                 if view_s.owner != self.own || view_t.owner != self.own {
                     continue;
                 }
-                if me.keys.get(&target).copied().unwrap_or(0) < 1 {
-                    continue;
+                // Can the edge fire this round? Some agent in operation
+                // range of the source holding a key of the target.
+                let in_range_holder = obs.own_agents.iter().any(|other| {
+                    other.keys.get(&target).copied().unwrap_or(0) >= 1
+                        && in_range(
+                            other.position,
+                            view_s.position,
+                            self.cfg.portal_operation_range_cm,
+                        )
+                });
+                if me.keys.get(&target).copied().unwrap_or(0) >= 1 {
+                    let pri = self.station_priority(obs, base, per_round, me, source);
+                    mine.push(TaskRequest::one_shot(Task::Link { source, target }, pri));
+                } else if !in_range_holder {
+                    // No key-holder is at the source: pre-position at the
+                    // station and wait for the delivery — just below the
+                    // link itself in priority (route awareness without
+                    // preempting key work).
+                    let pri = self
+                        .station_priority(obs, base, per_round, me, source)
+                        .saturating_sub(1);
+                    mine.push(TaskRequest::one_shot(Task::Standby { portal: source }, pri));
                 }
-                let pri = self.station_priority(obs, base, per_round, me, source);
-                mine.push(TaskRequest::one_shot(
-                    Task::Link {
-                        source,
-                        target: target,
-                    },
-                    pri,
-                ));
             }
             requests.insert(me.id, mine);
         }
@@ -680,10 +692,37 @@ impl BuilderCore {
                         });
                     }
                 }
-                // Transfer rendezvous commands are emitted by the policy
-                // overlay that owns the payload (the core reserves the
-                // one-shot task only).
-                Task::Transfer { .. } => {}
+                // Hold station at the portal: approach, then wait for the
+                // key delivery (the logistics overlay's rendezvous).
+                Task::Standby { portal } => {
+                    let target = common::portal(obs, portal);
+                    if !in_range(me.position, target.position, cfg.portal_operation_range_cm) {
+                        commands.mv(arena_core::types::Command::Move {
+                            destination: step_toward(
+                                me.position,
+                                target.position,
+                                cfg.move_budget_cm,
+                            ),
+                        });
+                    }
+                }
+                // Transfer rendezvous: approach the receiver; the owning
+                // policy's payment step emits the payload once the
+                // receiver is inside TRANSFER_RANGE.
+                Task::Transfer { receiver, .. } => {
+                    let Some(target) = obs.own_agents.iter().find(|me| me.id == receiver) else {
+                        continue;
+                    };
+                    if !in_range(me.position, target.position, cfg.transfer_range_cm) {
+                        commands.mv(arena_core::types::Command::Move {
+                            destination: step_toward(
+                                me.position,
+                                target.position,
+                                cfg.move_budget_cm,
+                            ),
+                        });
+                    }
+                }
             }
             if !commands.is_empty() {
                 out.insert(me.id, commands);

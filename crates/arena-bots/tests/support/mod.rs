@@ -152,6 +152,57 @@ pub fn run_bot_match(
     (reports, state)
 }
 
+/// The era-agnostic counterpart of [`run_bot_match`] for POLICY specs (B2):
+/// one `PolicyPlayer` (frozen m6.0 or R2) as ENL against a scripted RES
+/// strategy. The SAME player instance chooses spawns and then plays.
+pub fn run_policy_match(
+    cfg: &GameConfig,
+    map: &MapDefinition,
+    spec: &arena_bots::policy::PolicySpec,
+    res: Box<dyn RoundStrategy>,
+    res_spawns: InitialSpawns,
+    game_seed: u64,
+    bot_seed: u64,
+    rounds: u32,
+) -> (Vec<arena_core::resolve::RoundReport>, GameState) {
+    let mut player = arena_bots::policy::make_policy_player(spec, Faction::Enl, bot_seed, cfg, map);
+    let enl_roster = roster(cfg, Faction::Enl);
+    let entries = player.choose_spawns(cfg, map, &enl_roster);
+    let enl_spawns = validate_bot_spawns(cfg, Faction::Enl, map, &entries);
+    let mut harness = MatchHarness::new(
+        game_seed,
+        *cfg,
+        map,
+        &enl_spawns,
+        &res_spawns,
+        player.into_strategy(),
+        res,
+    )
+    .expect("fixture match builds");
+    let reports = harness.run_rounds(rounds);
+    let state = harness.into_state();
+    (reports, state)
+}
+
+/// A trivial legal spawn set for a scripted opponent: roster agent `i` on
+/// map portal `i % portal_count`.
+pub fn portal_spawns(cfg: &GameConfig, map: &MapDefinition, faction: Faction) -> InitialSpawns {
+    let count = map.len().max(1) as u32;
+    let entries: Vec<(AgentId, Coord)> = roster(cfg, faction)
+        .iter()
+        .enumerate()
+        .map(|(index, &agent)| {
+            (
+                agent,
+                map.portal(PortalId(index as u32 % count))
+                    .expect("dense portal ids")
+                    .position,
+            )
+        })
+        .collect();
+    validate_bot_spawns(cfg, faction, map, &entries)
+}
+
 /// Hand-builds an `Observation` (unit fixtures inspect single decisions).
 #[derive(Clone)]
 pub struct ObsBuilder {
