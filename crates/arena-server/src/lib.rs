@@ -7,11 +7,12 @@
 //! one persistent ordered UDS stream per client (ADR-0008).
 //!
 //! Unsafe policy: the crate root uses `deny(unsafe_code)` (not `forbid`)
-//! solely so the ONE sanctioned module — `shm.rs`, the POSIX SHM syscalls
-//! via `extern "C"` with no libc crate — can carry a scoped, loudly
-//! documented `allow` (P4-CAPABILITY). Every other module is unsafe-free;
-//! a stray `unsafe` anywhere else still fails the build, and any new
-//! `allow(unsafe_code)` is review-visible.
+//! solely so the ONE sanctioned module — `shm.rs`, the POSIX syscalls
+//! (`shm_open`/`mmap`/... plus `getsockopt(SO_PEERCRED)` for accepted-peer
+//! identity) via `extern "C"` with no libc crate — can carry a scoped,
+//! loudly documented `allow` (P4-CAPABILITY). Every other module is
+//! unsafe-free; a stray `unsafe` anywhere else still fails the build, and
+//! any new `allow(unsafe_code)` is review-visible.
 
 #![deny(unsafe_code)]
 // The sole sanctioned unsafe module in this crate (see above).

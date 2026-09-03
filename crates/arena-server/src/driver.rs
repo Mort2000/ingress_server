@@ -65,6 +65,13 @@ pub struct MatchReport {
     pub result: String,
     pub metrics: [FactionMetrics; 2],
     pub rounds_completed: u32,
+    /// `SO_PEERCRED` pid of each accepted connection IN ACCEPT ORDER
+    /// (slot 0 = first accept = the ENL side, D61; `None` when the
+    /// credential probe failed or the connection never happened). This
+    /// is what lets a supervisor PROVE which client process connected
+    /// first — and therefore that the served faction assignment matches
+    /// its schedule (M9/D81; also journaled per `connected` event).
+    pub accept_peer_pids: [Option<u32>; 2],
 }
 
 /// The accept thread's share of the channel work.
@@ -84,6 +91,11 @@ struct Driver {
     conns: [Option<UnixStream>; 2],
     /// Faction assigned per connection slot (after both HELLOs).
     conn_faction: [Option<Faction>; 2],
+    /// `SO_PEERCRED` pid per connection slot (`shm::peer_pid`), i.e. the
+    /// identity of the process behind each accepted connection, in
+    /// ACCEPT ORDER — reported through `MatchReport::accept_peer_pids`
+    /// so a supervisor can prove the served faction assignment.
+    conn_peer_pid: [Option<u32>; 2],
     journal: Journal,
     metrics: [FactionMetrics; 2],
     /// SHM publishers: public, ENL private, RES private.
@@ -277,6 +289,7 @@ pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
         rx,
         conns: [None, None],
         conn_faction: [None, None],
+        conn_peer_pid: [None, None],
         journal: Journal::new(),
         metrics: [FactionMetrics::default(), FactionMetrics::default()],
         publishers: None,
@@ -329,6 +342,7 @@ pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
         result,
         metrics: driver.metrics,
         rounds_completed,
+        accept_peer_pids: driver.conn_peer_pid,
     })
 }
 
@@ -473,8 +487,18 @@ impl Driver {
             };
             match event {
                 ConnEvent::Connected { conn, stream } => {
+                    let peer_pid = crate::shm::peer_pid(&stream);
+                    self.conn_peer_pid[conn as usize] = peer_pid;
                     self.conns[conn as usize] = Some(stream);
-                    self.journal.event("connected", &format!("conn={conn}"));
+                    self.journal.event(
+                        "connected",
+                        &format!(
+                            "conn={conn} peer_pid={}",
+                            peer_pid
+                                .map(|pid| pid.to_string())
+                                .unwrap_or_else(|| "-".into())
+                        ),
+                    );
                 }
                 ConnEvent::Frame {
                     conn,

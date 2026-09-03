@@ -1,9 +1,10 @@
 //! POSIX shared-memory regions for the zero-copy observation path
 //! (P3-SHM, D63). THE ONLY MODULE WITH `unsafe` IN arena-server
 //! (P4-CAPABILITY): the syscalls (`shm_open`/`shm_unlink`/`ftruncate`/
-//! `mmap`/`munmap`/`close`) are declared via `extern "C"` — no libc crate
-//! (ADR-0013) — and wrapped in safe types with the invariants written
-//! below. Everything else in this crate stays safe.
+//! `mmap`/`munmap`/`close`, plus `getsockopt(SO_PEERCRED)` for the
+//! connection-identity probe below) are declared via `extern "C"` — no
+//! libc crate (ADR-0013) — and wrapped in safe types with the
+//! invariants written below. Everything else in this crate stays safe.
 //!
 //! # Region layout
 //!
@@ -76,6 +77,13 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn munmap(addr: *mut c_void, length: usize) -> c_int;
     fn close(fd: c_int) -> c_int;
+    fn getsockopt(
+        sockfd: c_int,
+        level: c_int,
+        optname: c_int,
+        optval: *mut c_void,
+        optlen: *mut u32,
+    ) -> c_int;
 }
 
 // Linux x86_64 constants (this milestone targets Linux only; values are
@@ -87,6 +95,60 @@ const O_RDONLY: c_int = 0o0;
 const PROT_READ: c_int = 0x1;
 const PROT_WRITE: c_int = 0x2;
 const MAP_SHARED: c_int = 0x01;
+
+// ---------------------------------------------------------------------------
+// Connection identity (SO_PEERCRED)
+// ---------------------------------------------------------------------------
+
+const SOL_SOCKET: c_int = 1;
+const SO_PEERCRED: c_int = 17;
+/// `sizeof(struct ucred)` = pid_t + uid_t + gid_t on Linux x86_64.
+const UCRED_SIZE: usize = 12;
+
+/// The pid of the process that CONNECTED this accepted stream socket to
+/// the listener (`getsockopt(SOL_SOCKET, SO_PEERCRED)`; credentials are
+/// latched at connect time, so the answer survives the peer's later
+/// disconnect). `None` when the syscall fails (not a stream socket, fd
+/// closed, ...) — callers treat that as "identity unknown", never as a
+/// guess.
+///
+/// WHY THIS EXISTS (D81 review fix): the tournament runner must PROVE
+/// that the server's first ACCEPT (assigned ENL, D61) was the
+/// ENL-scheduled client process. The kernel's `ucred.pid` is the only
+/// std-adjacent way to identify the accepted peer — `/proc/<pid>/fd`
+/// socket links expose SOCKFS inodes, which can never be matched
+/// against the socket PATH's filesystem inode (two disjoint kernel
+/// inode spaces; the pre-fix verification compared them and could
+/// never succeed).
+pub fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    #[repr(C)]
+    struct Ucred {
+        pid: i32,
+        uid: u32,
+        gid: u32,
+    }
+    const _: () = assert!(std::mem::size_of::<Ucred>() == UCRED_SIZE);
+    let mut cred = Ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = UCRED_SIZE as u32;
+    // SAFETY: `cred` is a valid, fully initialized repr(C) value of the
+    // advertised `optlen` for the duration of the call; getsockopt only
+    // writes into it. The fd is borrowed from the live `stream`.
+    let result = unsafe {
+        getsockopt(
+            stream.as_raw_fd(),
+            SOL_SOCKET,
+            SO_PEERCRED,
+            &mut cred as *mut Ucred as *mut c_void,
+            &mut length,
+        )
+    };
+    (result == 0 && length as usize == UCRED_SIZE && cred.pid > 0).then_some(cred.pid as u32)
+}
 
 /// Bytes of the metadata page preceding buffer A.
 pub const METADATA_PAGE_BYTES: usize = 4096;

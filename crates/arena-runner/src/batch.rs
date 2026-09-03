@@ -87,16 +87,11 @@ impl BatchConfig {
     }
 
     /// blake3 identity of the config's canonical 31-word encoding
-    /// (`arena_core::codec`, the D44 config identity) as LE-u64.
+    /// (`arena_core::codec`, the D44 config identity) as LE-u64 — now the
+    /// shared `config_identity` helper (extracted in M9; the value is
+    /// unchanged and pinned by the tests).
     pub fn config_hash(&self) -> u64 {
-        let mut bytes = Vec::with_capacity(arena_core::codec::CONFIG_BYTES);
-        arena_core::codec::push_config(&self.config, &mut bytes);
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&bytes);
-        let hash = hasher.finalize();
-        let mut words = [0u8; 8];
-        words.copy_from_slice(&hash.as_bytes()[0..8]);
-        u64::from_le_bytes(words)
+        crate::tournament::config::config_identity(&self.config)
     }
 
     /// Expands the whole batch into per-match descriptors, in

@@ -6,7 +6,14 @@
 //!                [--nofile N] [--wall-ms MS] [--ro PATH]... [--rw PATH]
 //!                [--env-prefix P]... [--no-landlock] [--no-cgroup]
 //!                -- <program> [args...]
+//! sandbox-runner --kill-group PGID     # SIGKILL one process group, exit
 //! ```
+//!
+//! `--kill-group` is the containment helper for supervisors (M9): the
+//! tournament runner must be able to kill a sandboxed client's process
+//! GROUP after SIGKILLing this runner (the group's own watchdog dies
+//! with it), and `arena-runner` is `#![forbid(unsafe_code)]` — the
+//! sanctioned `kill(2)` lives HERE, in `sys` (D74).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -49,6 +56,22 @@ fn main() {
     while let Some(flag) = args.next() {
         let mut value = || args.next().unwrap_or_default();
         match flag.as_str() {
+            "--kill-group" => {
+                // Containment helper (M9, D74): SIGKILL one process group
+                // (the sandboxed client's — pgid == its pid because the
+                // supervised child is spawned with process_group(0)) and
+                // exit. Nothing to supervise, no JSON, exit 0 whether or
+                // not the group still existed (ESRCH is success).
+                let pgid: u32 = match value().parse() {
+                    Ok(pgid) if pgid > 0 => pgid,
+                    _ => {
+                        eprintln!("--kill-group needs a positive pgid");
+                        std::process::exit(1);
+                    }
+                };
+                sandbox_runner::sys::kill_process_group(pgid, 9);
+                return;
+            }
             "--as" => address_space = parse_bytes(&value()).unwrap_or(address_space),
             "--cpu" => cpu_secs = value().parse().ok(),
             "--nproc" => nproc = value().parse().ok(),

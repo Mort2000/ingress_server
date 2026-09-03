@@ -13,6 +13,7 @@ pub mod policy;
 pub mod report;
 pub mod run;
 pub mod schedule;
+pub mod tournament;
 
 pub use batch::{BatchConfig, MatchDescriptor, Matchup};
 pub use metrics::{FactionMatchStats, MatchRecord, MatchStats, Outcome};
