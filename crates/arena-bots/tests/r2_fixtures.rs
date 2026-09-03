@@ -776,3 +776,203 @@ fn value_params_tag_round_trips_and_rejects_malformed_records() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// Role/task allocator with per-round target reservation (plan 6.3):
+// one-shot uniqueness, the explicit coordinated-attack exception, and
+// reinforcement through the same allocation path
+// ---------------------------------------------------------------------
+
+use arena_bots::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
+use std::collections::BTreeMap;
+
+fn request(task: Task, priority: i64) -> TaskRequest {
+    TaskRequest {
+        task,
+        priority,
+        assignee_capacity: 1,
+    }
+}
+
+fn coordinated(task: Task, priority: i64, capacity: u32) -> TaskRequest {
+    TaskRequest {
+        task,
+        priority,
+        assignee_capacity: capacity,
+    }
+}
+
+#[test]
+fn one_shot_tasks_admit_exactly_one_assignee_per_round() {
+    let capture = Task::Capture {
+        portal: PortalId(4),
+    };
+    let mut board = TaskBoard::new(7);
+    assert!(board.claim(AgentId(0), capture, 1));
+    assert!(
+        !board.claim(AgentId(1), capture, 1),
+        "a one-shot reservation blocks a second claim within the round"
+    );
+    assert_eq!(board.assignees(&capture), &[AgentId(0)]);
+    assert_eq!(board.remaining_capacity(&capture), 0);
+    // A fresh board of the next round starts clean (reservations are
+    // per-round).
+    assert_eq!(TaskBoard::new(8).remaining_capacity(&capture), 0);
+    assert!(!TaskBoard::new(8).is_assigned(&capture));
+    assert_eq!(TaskBoard::new(8).round(), 8);
+}
+
+#[test]
+fn coordinated_attacks_are_the_explicit_multi_assignee_exception() {
+    let strike = Task::Attack {
+        portal: PortalId(2),
+    };
+    let mut board = TaskBoard::new(1);
+    assert!(board.claim(AgentId(0), strike, 2));
+    assert!(
+        board.claim(AgentId(1), strike, 2),
+        "a coordinated attack admits its declared capacity"
+    );
+    assert!(
+        !board.claim(AgentId(2), strike, 2),
+        "but no agent beyond the capacity"
+    );
+    assert_eq!(board.assignees(&strike), &[AgentId(0), AgentId(1)]);
+}
+
+#[test]
+fn allocate_grants_each_agent_one_task_by_priority_then_agent_id() {
+    let capture_a = Task::Capture {
+        portal: PortalId(0),
+    };
+    let capture_b = Task::Capture {
+        portal: PortalId(1),
+    };
+    let mut requests = BTreeMap::new();
+    requests.insert(
+        AgentId(0),
+        vec![request(capture_a, 10), request(capture_b, 5)],
+    );
+    requests.insert(
+        AgentId(1),
+        vec![request(capture_a, 10), request(capture_b, 9)],
+    );
+    let mut board = TaskBoard::new(1);
+    let granted = allocate(&mut board, &[AgentId(0), AgentId(1)], &requests);
+    // Agent 0 wins the contended capture (equal priority, lower id) and
+    // agent 1 falls through to its next-ranked request — never a duplicate.
+    assert_eq!(granted.get(&AgentId(0)), Some(&capture_a));
+    assert_eq!(granted.get(&AgentId(1)), Some(&capture_b));
+    assert_eq!(board.assignees(&capture_a), &[AgentId(0)]);
+    // Priority dominates agent id: agent 1's higher-priority request wins
+    // the contested task even though agent 0 asked too.
+    let mut requests = BTreeMap::new();
+    requests.insert(AgentId(0), vec![request(capture_a, 5)]);
+    requests.insert(AgentId(1), vec![request(capture_a, 9)]);
+    let granted = allocate(&mut TaskBoard::new(1), &[AgentId(0), AgentId(1)], &requests);
+    assert_eq!(granted.get(&AgentId(1)), Some(&capture_a));
+    assert!(granted.get(&AgentId(0)).is_none());
+    // Coordinated capacity flows through allocate as well.
+    let strike = Task::Attack {
+        portal: PortalId(3),
+    };
+    let mut requests = BTreeMap::new();
+    requests.insert(AgentId(0), vec![coordinated(strike, 10, 2)]);
+    requests.insert(AgentId(1), vec![coordinated(strike, 9, 2)]);
+    let mut board = TaskBoard::new(1);
+    let granted = allocate(&mut board, &[AgentId(0), AgentId(1)], &requests);
+    assert_eq!(granted.get(&AgentId(0)), Some(&strike));
+    assert_eq!(granted.get(&AgentId(1)), Some(&strike));
+}
+
+#[test]
+fn reinforcements_allocate_through_the_same_path_with_no_fixed_roles() {
+    // Three initial agents with settled requests; a reinforcement agent
+    // (higher id, appended by the engine) joins with its own requests.
+    // The initial trio's grants are unchanged — allocation has no
+    // "first three build" special case keyed on AgentId.
+    let build = (0..3)
+        .map(|portal| {
+            request(
+                Task::Capture {
+                    portal: PortalId(portal),
+                },
+                10,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut trio_requests = BTreeMap::new();
+    for (agent, requests) in [
+        (AgentId(0), vec![build[0]]),
+        (AgentId(1), vec![build[1]]),
+        (AgentId(2), vec![build[2]]),
+    ] {
+        trio_requests.insert(agent, requests);
+    }
+    let trio_agents = vec![AgentId(0), AgentId(1), AgentId(2)];
+    let trio_grants = allocate(&mut TaskBoard::new(1), &trio_agents, &trio_requests);
+
+    let mut with_reinforcement = trio_requests.clone();
+    with_reinforcement.insert(
+        AgentId(3),
+        vec![request(
+            Task::KeyFarm {
+                portal: PortalId(9),
+            },
+            8,
+        )],
+    );
+    let mut agents = trio_agents.clone();
+    agents.push(AgentId(3));
+    let grants = allocate(&mut TaskBoard::new(1), &agents, &with_reinforcement);
+    for (agent, task) in trio_grants.iter() {
+        assert_eq!(
+            grants.get(agent),
+            Some(task),
+            "reinforcement joining must not change the existing grants"
+        );
+    }
+    assert_eq!(
+        grants.get(&AgentId(3)),
+        Some(&Task::KeyFarm {
+            portal: PortalId(9)
+        })
+    );
+    // And a reinforcement CAN take a build task when it is the best
+    // request — roles are dynamic, not id-keyed.
+    let mut requests = BTreeMap::new();
+    requests.insert(
+        AgentId(3),
+        vec![request(
+            Task::Capture {
+                portal: PortalId(7),
+            },
+            10,
+        )],
+    );
+    let grants = allocate(&mut TaskBoard::new(1), &[AgentId(3)], &requests);
+    assert_eq!(
+        grants.get(&AgentId(3)),
+        Some(&Task::Capture {
+            portal: PortalId(7)
+        })
+    );
+}
+
+#[test]
+fn allocation_is_a_pure_deterministic_function_of_its_inputs() {
+    let capture = Task::Capture {
+        portal: PortalId(0),
+    };
+    let mut requests = BTreeMap::new();
+    requests.insert(AgentId(1), vec![request(capture, 7)]);
+    requests.insert(AgentId(0), vec![request(capture, 7)]);
+    let first = allocate(&mut TaskBoard::new(3), &[AgentId(0), AgentId(1)], &requests);
+    let second = allocate(&mut TaskBoard::new(3), &[AgentId(0), AgentId(1)], &requests);
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 1, "exactly one assignee for one-shot work");
+    // Agent order in the slice never matters (requests carry the ids).
+    let reordered = allocate(&mut TaskBoard::new(3), &[AgentId(1), AgentId(0)], &requests);
+    assert_eq!(first, reordered);
+}
+
