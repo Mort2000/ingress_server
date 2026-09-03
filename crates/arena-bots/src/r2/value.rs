@@ -151,7 +151,7 @@ impl ValueParams {
     }
 }
 
-/// The shared exchange rate every opportunity-cost deduction converts
+/// The shared conversion terms every opportunity-cost deduction goes
 /// through: how many rounds of income the model still credits, and how
 /// much score2 one round of an agent's time is worth against its best
 /// forgone alternative.
