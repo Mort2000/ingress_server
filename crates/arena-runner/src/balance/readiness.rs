@@ -28,11 +28,14 @@ use crate::policy::BucketPolicy;
 // The frozen readiness experiment plans (ADR-0016)
 // ---------------------------------------------------------------------
 
-/// The frozen experiment ids (archive directory names). The pilot runs
-/// append `-pilot-r0` and are exploratory only — never gate evidence.
-pub const B2_RR_EXPERIMENT_ID: &str = "b2-readiness-rr-r1";
-pub const B2_IDLE_EXPERIMENT_ID: &str = "b2-readiness-idle-r1";
-pub const B2_BLOCK_EXPERIMENT_ID: &str = "b2-readiness-block-r1";
+/// The frozen experiment ids (archive directory names). `-r1` is the
+/// first official attempt, superseded by the standby-deadlock fix (kept
+/// on disk as history, never overwritten); `-r2` is the current official
+/// run of the same frozen plans. The pilot runs append `-pilot-r0` and
+/// are exploratory only — never gate evidence.
+pub const B2_RR_EXPERIMENT_ID: &str = "b2-readiness-rr-r2";
+pub const B2_IDLE_EXPERIMENT_ID: &str = "b2-readiness-idle-r2";
+pub const B2_BLOCK_EXPERIMENT_ID: &str = "b2-readiness-block-r2";
 
 /// The official map counts (frozen before the official run; plan section
 /// 8.3 never reduces swap legs — every unit runs both legs).

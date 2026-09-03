@@ -212,7 +212,11 @@ pub fn manifest_text(
         &mut text,
         "reproduce",
         format!(
-            "cargo run --release -p arena-runner -- balance-b1 runs <base_commit> (experiment {})",
+            "cargo run --release -p arena-runner -- {} runs <base_commit> (experiment {})",
+            match plan.stage {
+                crate::balance::plan::Stage::Readiness => "balance-b2",
+                _ => "balance-b1",
+            },
             plan.experiment_id
         ),
     );
