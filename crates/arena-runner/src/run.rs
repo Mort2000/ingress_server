@@ -17,6 +17,7 @@ use arena_core::map::MapDefinition;
 use arena_core::spawn::validate_initial_spawn_set;
 use arena_core::state::GameState;
 use arena_core::types::Faction;
+use arena_replay::recorder::ReplayWriter;
 
 use crate::batch::{BatchConfig, MatchDescriptor};
 use crate::metrics::{MatchFold, MatchRecord};
@@ -91,7 +92,7 @@ pub fn run_match(
             Faction::Res,
             descriptor.bucket_policy,
         );
-        play(
+        let (record, _state) = play(
             descriptor,
             cfg,
             map,
@@ -99,7 +100,9 @@ pub fn run_match(
             &res_spawns,
             Box::new(enl),
             Box::new(res),
-        )
+            None,
+        );
+        record
     }));
     match outcome {
         Ok(record) => record,
@@ -124,7 +127,8 @@ pub fn run_match_with(
 ) -> MatchRecord {
     let start = Instant::now();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        play(descriptor, cfg, map, enl_spawns, res_spawns, enl, res)
+        let (record, _state) = play(descriptor, cfg, map, enl_spawns, res_spawns, enl, res, None);
+        record
     }));
     match outcome {
         Ok(record) => record,
@@ -132,8 +136,67 @@ pub fn run_match_with(
     }
 }
 
+/// One played match plus (when recording was requested) its finished IARP
+/// bytes — the balance executor's path (plan section 12). The m6 batch
+/// path never records.
+pub struct RecordedMatch {
+    pub record: MatchRecord,
+    pub replay: Option<Vec<u8>>,
+}
+
+/// The recorded variant of [`run_match_with`]: drives the SAME shared
+/// `play` path with an optional `ReplayWriter` hooked into the round loop.
+/// A panic anywhere (bot, harness, recorder misuse) is caught and recorded
+/// as `Outcome::Crash`; the partially recorded replay is lost with the
+/// unwind (crashed cells appear in the archive's replay index as
+/// unavailable — a crashed match has no settled state to trailer).
+pub fn run_match_recorded(
+    descriptor: &MatchDescriptor,
+    cfg: &GameConfig,
+    map: &MapDefinition,
+    enl_spawns: &arena_core::spawn::InitialSpawns,
+    res_spawns: &arena_core::spawn::InitialSpawns,
+    enl: Box<dyn arena_core::harness::RoundStrategy>,
+    res: Box<dyn arena_core::harness::RoundStrategy>,
+    record_replay: bool,
+) -> RecordedMatch {
+    let start = Instant::now();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let mut replay = record_replay
+            .then(|| ReplayWriter::new(descriptor.game_seed, cfg, map, enl_spawns, res_spawns));
+        let (record, state) = play(
+            descriptor,
+            cfg,
+            map,
+            enl_spawns,
+            res_spawns,
+            enl,
+            res,
+            replay.as_mut(),
+        );
+        let replay = match (replay, state) {
+            (Some(writer), Some(state)) => {
+                Some(writer.finish(&state).expect("replay writer finish"))
+            }
+            _ => None,
+        };
+        (record, replay)
+    }));
+    match outcome {
+        Ok((record, replay)) => RecordedMatch { record, replay },
+        Err(_panic) => RecordedMatch {
+            record: MatchRecord::crashed(descriptor, start.elapsed().as_millis() as u64),
+            replay: None,
+        },
+    }
+}
+
 /// The shared match driver: runs every round, folding stats incrementally
-/// (reports are never retained).
+/// (reports are never retained). `replay`, when supplied, records every
+/// settled round (the balance archive's sampled replays); the m6 callers
+/// pass `None` and the loop is byte-for-byte the previous one. Returns the
+/// final state alongside the record iff a recorder was passed (the caller
+/// needs it to trailer the replay).
 fn play(
     descriptor: &MatchDescriptor,
     cfg: &GameConfig,
@@ -142,7 +205,8 @@ fn play(
     res_spawns: &arena_core::spawn::InitialSpawns,
     enl: Box<dyn arena_core::harness::RoundStrategy>,
     res: Box<dyn arena_core::harness::RoundStrategy>,
-) -> MatchRecord {
+    mut replay: Option<&mut ReplayWriter>,
+) -> (MatchRecord, Option<GameState>) {
     let start = Instant::now();
     let mut harness = MatchHarness::new(
         descriptor.game_seed,
@@ -162,15 +226,21 @@ fn play(
         let new_events = &state.events()[events_written..];
         fold.round(state.round() - 1, &report, new_events, map, cfg);
         events_written = state.events().len();
+        if let Some(writer) = replay.as_deref_mut() {
+            writer
+                .record_round(&report, state)
+                .expect("replay recorder round");
+        }
     }
-    let state = harness.state();
-    fold.finish(state, cfg);
-    MatchRecord::from_match(
+    let state = harness.into_state();
+    fold.finish(&state, cfg);
+    let record = MatchRecord::from_match(
         descriptor,
-        state,
+        &state,
         fold.stats,
         start.elapsed().as_millis() as u64,
-    )
+    );
+    (record, replay.is_some().then_some(state))
 }
 
 /// Runs the whole batch on `workers` scoped threads (stride partition over

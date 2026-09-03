@@ -296,3 +296,193 @@ fn pair_ids_and_map_ids_are_stable() {
     assert_eq!(first.pair_id, "greedy-hybrid#m000");
     let _: Score2 = 0;
 }
+
+// ---------------------------------------------------------------------
+// Executor gates: worker independence, reproducibility, the crash seam,
+// and sampled-replay capture (plan sections 12/13.2/13.3).
+// ---------------------------------------------------------------------
+mod executor_gates {
+    use arena_bots::policy::PolicyId;
+    use arena_core::config::GameConfig;
+    use arena_core::harness::{AgentSubmission, RoundStrategy};
+    use arena_core::map::MapDefinition;
+    use arena_core::observe::Observation;
+    use arena_runner::balance::execute::{
+        CellSetup, default_cell_setup, run_balance_batch, run_balance_batch_with,
+    };
+    use arena_runner::balance::plan::{ConfigVariant, ExperimentPlan, SeedSet, Stage};
+    use arena_runner::balance::record::BalanceOutcome;
+    use arena_runner::balance::schedule::expand;
+    use arena_runner::metrics::Outcome;
+    use arena_runner::policy::BucketPolicy;
+
+    fn tiny_plan() -> ExperimentPlan {
+        ExperimentPlan {
+            experiment_id: "exec-test".to_string(),
+            stage: Stage::Sensitivity,
+            seed_set: SeedSet::Development,
+            map_count: 2,
+            base_variant: "default".to_string(),
+            variants: vec![
+                ConfigVariant::new("default", GameConfig::default(), Vec::new()),
+                {
+                    let mut cfg = GameConfig::default();
+                    cfg.move_budget_cm = 24_000;
+                    ConfigVariant::new("move-budget-240m", cfg, vec!["move_budget_cm"])
+                },
+            ],
+            policies: vec![
+                PolicyId::GreedyField.frozen_m6_spec(),
+                PolicyId::Hybrid.frozen_m6_spec(),
+            ],
+            matchups: vec![arena_runner::balance::plan::PolicyMatchup::new(
+                "greedy-hybrid",
+                PolicyId::GreedyField,
+                PolicyId::Hybrid,
+            )],
+            bucket_policy: BucketPolicy::Flat(0),
+            gates: Vec::new(),
+        }
+    }
+
+    /// A strategy that panics on its first round (the crash seam).
+    struct PanicStrategy;
+    impl RoundStrategy for PanicStrategy {
+        fn submit_round(&mut self, _obs: &Observation) -> Vec<AgentSubmission> {
+            panic!("crash seam: strategy panicked");
+        }
+    }
+
+    fn setup_with_panicking_enl(
+        cell: &arena_runner::balance::schedule::MatchCell,
+        spec_enl: &arena_bots::policy::PolicySpec,
+        spec_res: &arena_bots::policy::PolicySpec,
+        cfg: &GameConfig,
+        map: &MapDefinition,
+    ) -> CellSetup {
+        let mut setup = default_cell_setup(cell, spec_enl, spec_res, cfg, map);
+        setup.enl = Box::new(PanicStrategy);
+        setup
+    }
+
+    // The completion condition in miniature: identical records at 1 and 3
+    // workers, and a second run reproduces the first (modulo elapsed_ms).
+    #[test]
+    fn executor_is_worker_independent_and_reproducible() {
+        let plan = tiny_plan();
+        let cells = expand(&plan).expect("expands");
+        assert_eq!(cells.len(), 8, "2 variants x 1 pair x 2 maps x 2 legs");
+
+        let one = run_balance_batch(&plan, 1).expect("runs at 1 worker");
+        let three = run_balance_batch(&plan, 3).expect("runs at 3 workers");
+        let again = run_balance_batch(&plan, 3).expect("runs again");
+        assert_eq!(one.workers, 1);
+        assert_eq!(three.workers, 3);
+        assert_eq!(one.records.len(), 8);
+        assert_eq!(three.records.len(), 8);
+        assert_eq!(one.crashes(), 0);
+        assert_eq!(one.config_failures, 0);
+        for (a, b) in one.records.iter().zip(three.records.iter()) {
+            assert!(
+                a.same_ignoring_elapsed(b),
+                "worker count moved record {}",
+                a.index
+            );
+        }
+        for (a, b) in three.records.iter().zip(again.records.iter()) {
+            assert!(
+                a.same_ignoring_elapsed(b),
+                "record {} not reproducible",
+                a.index
+            );
+        }
+        // Both variants played, with swapped legs on shared seeds.
+        for variant in ["default", "move-budget-240m"] {
+            let rows: Vec<&arena_runner::balance::record::BalanceMatchRecord> = one
+                .records
+                .iter()
+                .filter(|r| r.variant_id == variant)
+                .collect();
+            assert_eq!(rows.len(), 4);
+            for k in 0..2u32 {
+                let unit: Vec<&&arena_runner::balance::record::BalanceMatchRecord> =
+                    rows.iter().filter(|r| r.map_index == k).collect();
+                assert_eq!(unit.len(), 2);
+                assert_ne!(unit[0].policy_a_is_enl, unit[1].policy_a_is_enl);
+                assert_eq!(unit[0].game_seed, unit[1].game_seed);
+                assert_eq!(unit[0].bot_seed, unit[1].bot_seed);
+            }
+        }
+        // The two variants' rows for one map share seeds (common random
+        // numbers) and identical map seeds.
+        let default_row = one
+            .records
+            .iter()
+            .find(|r| r.variant_id == "default" && r.map_index == 0)
+            .expect("row");
+        let variant_row = one
+            .records
+            .iter()
+            .find(|r| r.variant_id == "move-budget-240m" && r.map_index == 0)
+            .expect("row");
+        assert_eq!(default_row.game_seed, variant_row.game_seed);
+        assert_eq!(default_row.bot_seed, variant_row.bot_seed);
+        assert_eq!(default_row.map_seed, variant_row.map_seed);
+        assert_ne!(default_row.config_hash, variant_row.config_hash);
+    }
+
+    // A panicking policy is recorded as Crash and STAYS in the result set.
+    #[test]
+    fn a_panicking_policy_is_recorded_as_crash() {
+        let plan = tiny_plan();
+        let run =
+            run_balance_batch_with(&plan, 3, &setup_with_panicking_enl, &|_| false).expect("runs");
+        assert_eq!(run.records.len(), 8, "nothing dropped");
+        for record in &run.records {
+            assert_eq!(record.result, BalanceOutcome::Played(Outcome::Crash));
+            assert_eq!(record.stats.enl.commands_submitted, 0);
+        }
+        assert_eq!(run.crashes(), 8);
+        assert!(run.replays.is_empty(), "no sampling requested");
+    }
+
+    // Sampled replays decode, replay and match their records (IARP capture
+    // through the shared m6 play path).
+    #[test]
+    fn sampled_replays_decode_and_match_their_records() {
+        let plan = tiny_plan();
+        let run = run_balance_batch(&plan, 2).expect("runs");
+        // Default sampling: leg 0 of every pair -> one per (variant, map).
+        assert_eq!(run.replays.len(), 4);
+        for replay in &run.replays {
+            let record = run
+                .records
+                .iter()
+                .find(|r| r.index == replay.cell_index)
+                .expect("replay maps to a record");
+            assert_eq!(record.leg, 0);
+            let outcome = arena_replay::replay::replay_bytes(&replay.bytes).expect("replays");
+            assert_eq!(outcome.final_state_hash, record.final_state_hash);
+            assert_eq!(outcome.final_scores.0, record.enl_score2);
+            assert_eq!(outcome.final_scores.1, record.res_score2);
+            assert_eq!(outcome.rounds_completed as u64, 500);
+            // Cross-variant shared map: same map -> same replay header map.
+            let _ = arena_replay::replay::decode_log(&replay.bytes).expect("decodes");
+        }
+        // Both variants sampled the SAME map ids (the shared Map
+        // Definition across a config contrast; the archive test pins the
+        // map CONTENT hash below).
+        let map_ids_of = |variant: &str| -> Vec<String> {
+            let mut ids: Vec<String> = run
+                .replays
+                .iter()
+                .filter(|r| r.variant_id == variant)
+                .map(|r| r.map_id.clone())
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(map_ids_of("default"), map_ids_of("move-budget-240m"));
+        assert_eq!(map_ids_of("default").len(), 2);
+    }
+}

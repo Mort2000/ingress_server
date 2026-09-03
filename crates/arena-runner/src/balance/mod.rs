@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod execute;
+pub mod pairs;
 pub mod plan;
 pub mod record;
 pub mod schedule;
