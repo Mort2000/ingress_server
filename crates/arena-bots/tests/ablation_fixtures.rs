@@ -33,10 +33,8 @@ use support::{fixture_map, generated_map, roster, validate_bot_spawns};
 fn ablation_arm_specs_round_trip_and_validate() {
     let specs = ablation_specs();
     assert_eq!(specs.len(), 3, "the three B3 arms");
-    let by_tag: BTreeMap<&str, &PolicySpec> = specs
-        .iter()
-        .map(|s| (s.policy_id.tag(), s))
-        .collect();
+    let by_tag: BTreeMap<&str, &PolicySpec> =
+        specs.iter().map(|s| (s.policy_id.tag(), s)).collect();
     for tag in [
         "hybrid-builder-only",
         "hybrid-builder-attack",
@@ -45,7 +43,12 @@ fn ablation_arm_specs_round_trip_and_validate() {
         assert!(by_tag.contains_key(tag), "{tag} registered");
     }
     for spec in &specs {
-        assert_eq!(spec.validate(), Ok(()), "{} validates", spec.policy_id.tag());
+        assert_eq!(
+            spec.validate(),
+            Ok(()),
+            "{} validates",
+            spec.policy_id.tag()
+        );
         assert_eq!(spec.family, PolicyFamily::Ablation);
         assert!(spec.family.is_diagnostic(), "ablation arms are diagnostic");
         assert_eq!(
@@ -53,7 +56,10 @@ fn ablation_arm_specs_round_trip_and_validate() {
             None,
             "ablation arms are not BotKinds"
         );
-        assert_eq!(PolicyId::from_tag(spec.policy_id.tag()), Some(spec.policy_id));
+        assert_eq!(
+            PolicyId::from_tag(spec.policy_id.tag()),
+            Some(spec.policy_id)
+        );
         // Full-value parameter records round-trip exactly.
         let tag = spec.parameters.tag();
         assert_eq!(
@@ -64,8 +70,7 @@ fn ablation_arm_specs_round_trip_and_validate() {
     }
     // Versions: the Hybrid arms are b3.0, the canonical arm IS the r2 core.
     assert_eq!(
-        by_tag["hybrid-builder-only"].version,
-        B3_VERSION,
+        by_tag["hybrid-builder-only"].version, B3_VERSION,
         "hybrid arms carry b3.0"
     );
     assert_eq!(by_tag["hybrid-builder-attack"].version, B3_VERSION);
@@ -86,10 +91,13 @@ fn ablation_arm_specs_round_trip_and_validate() {
     // Identity sensitivity: an edited parameter record parses to a
     // DIFFERENT parameter set (or not at all), never back to the original.
     let builder_only = by_tag["hybrid-builder-only"].parameters;
-    let edited = PolicyParameters::from_tag(&builder_only.tag().replace("builders=3", "builders=4"));
+    let edited =
+        PolicyParameters::from_tag(&builder_only.tag().replace("builders=3", "builders=4"));
     assert_ne!(edited, Some(builder_only));
     let switched = PolicyParameters::from_tag(
-        &builder_only.tag().replace("roles=builder-only", "roles=builder-attack"),
+        &builder_only
+            .tag()
+            .replace("roles=builder-only", "roles=builder-attack"),
     );
     assert_eq!(
         switched,
@@ -143,8 +151,11 @@ fn arm_spawn_sets_equal_frozen_hybrid_spawns() {
     for map in [generated_map(), fixture_map()] {
         for faction in [Faction::Enl, Faction::Res] {
             let roster_ids = roster(&cfg, faction);
-            let frozen = make_bot(BotKind::Hybrid, faction, 0x5E_ED_00, &cfg, &map)
-                .choose_spawns(&cfg, &map, &roster_ids);
+            let frozen = make_bot(BotKind::Hybrid, faction, 0x5E_ED_00, &cfg, &map).choose_spawns(
+                &cfg,
+                &map,
+                &roster_ids,
+            );
             for spec in [
                 PolicyId::HybridBuilderOnly.ablation_spec(),
                 PolicyId::HybridBuilderAttack.ablation_spec(),
@@ -152,7 +163,8 @@ fn arm_spawn_sets_equal_frozen_hybrid_spawns() {
                 let spawns = make_policy_player(&spec, faction, 0x5E_ED_00, &cfg, &map)
                     .choose_spawns(&cfg, &map, &roster_ids);
                 assert_eq!(
-                    spawns, frozen,
+                    spawns,
+                    frozen,
                     "{} spawns equal the frozen Hybrid's ({:?} / {:?})",
                     spec.policy_id.tag(),
                     faction,
@@ -193,7 +205,10 @@ fn drive_arm_vs_greedy_field(
         EnlSide::Frozen(kind) => {
             let mut bot = make_bot(*kind, Faction::Enl, bot_seed, &cfg, &map);
             let entries = bot.choose_spawns(&cfg, &map, &enl_roster);
-            (Box::new(BotStrategy(bot)) as Box<dyn arena_core::harness::RoundStrategy>, entries)
+            (
+                Box::new(BotStrategy(bot)) as Box<dyn arena_core::harness::RoundStrategy>,
+                entries,
+            )
         }
         EnlSide::Spec(spec) => {
             let mut player = make_policy_player(spec, Faction::Enl, bot_seed, &cfg, &map);
@@ -221,7 +236,10 @@ fn drive_arm_vs_greedy_field(
         rounds.push(report.submissions.clone());
     }
     let state = harness.state();
-    (rounds, (state.score(Faction::Enl), state.score(Faction::Res)))
+    (
+        rounds,
+        (state.score(Faction::Enl), state.score(Faction::Res)),
+    )
 }
 
 // GreedyField never attacks, so no PortalAttacked event ever exists and
@@ -238,7 +256,8 @@ fn hybrid_builder_attack_is_byte_identical_to_frozen_hybrid_when_defense_never_d
     assert_eq!(frozen_rounds.len(), arm_rounds.len());
     for (round, (frozen, arm)) in frozen_rounds.iter().zip(arm_rounds.iter()).enumerate() {
         assert_eq!(
-            frozen, arm,
+            frozen,
+            arm,
             "hybrid-builder-attack diverged from the frozen Hybrid at round {}",
             round + 1
         );
@@ -259,9 +278,8 @@ fn hybrid_builder_attack_is_byte_identical_to_frozen_hybrid_when_defense_never_d
 
 #[test]
 fn hybrid_builder_only_never_attacks_and_builds() {
-    let (rounds, scores) = drive_arm_vs_greedy_field(&EnlSide::Spec(
-        PolicyId::HybridBuilderOnly.ablation_spec(),
-    ));
+    let (rounds, scores) =
+        drive_arm_vs_greedy_field(&EnlSide::Spec(PolicyId::HybridBuilderOnly.ablation_spec()));
     let mut attacks_or_recharges = 0u64;
     for round in &rounds {
         for submission in round {
@@ -284,7 +302,11 @@ fn hybrid_builder_only_never_attacks_and_builds() {
     // Reinforcements stayed builders too: by round 150 a fourth agent has
     // joined (one every 100 rounds) and none of them attacked (already
     // asserted globally).
-    let late_agents = rounds[149].iter().map(|s| s.agent_id).collect::<Vec<_>>().len();
+    let late_agents = rounds[149]
+        .iter()
+        .map(|s| s.agent_id)
+        .collect::<Vec<_>>()
+        .len();
     assert!(late_agents >= 4, "reinforcements joined as builders");
 }
 
@@ -312,18 +334,27 @@ fn canonical_arm_mirror_factions_choose_identical_spawn_sets() {
     for seed in 0u64..6 {
         let map = arena_core::map::generate_map(seed, &cfg).expect("map generates");
         maps_checked += 1;
-        let enl = make_policy_player(&spec, Faction::Enl, 0xCA0, &cfg, &map)
-            .choose_spawns(&cfg, &map, &roster(&cfg, Faction::Enl));
-        let res = make_policy_player(&spec, Faction::Res, 0xCA0, &cfg, &map)
-            .choose_spawns(&cfg, &map, &roster(&cfg, Faction::Res));
+        let enl = make_policy_player(&spec, Faction::Enl, 0xCA0, &cfg, &map).choose_spawns(
+            &cfg,
+            &map,
+            &roster(&cfg, Faction::Enl),
+        );
+        let res = make_policy_player(&spec, Faction::Res, 0xCA0, &cfg, &map).choose_spawns(
+            &cfg,
+            &map,
+            &roster(&cfg, Faction::Res),
+        );
         assert_eq!(
             sorted_spawns(&enl),
             sorted_spawns(&res),
             "canonical mirror factions collide on map seed {seed} (the measured artifact)"
         );
         // Determinism: same inputs, same spawns, every run.
-        let enl_again = make_policy_player(&spec, Faction::Enl, 0xCA0, &cfg, &map)
-            .choose_spawns(&cfg, &map, &roster(&cfg, Faction::Enl));
+        let enl_again = make_policy_player(&spec, Faction::Enl, 0xCA0, &cfg, &map).choose_spawns(
+            &cfg,
+            &map,
+            &roster(&cfg, Faction::Enl),
+        );
         assert_eq!(enl, enl_again, "canonical spawns are deterministic");
         // The seeded top-K arm (r2 defaults) does NOT collide.
         let seeded_enl = make_policy_player(&seeded, Faction::Enl, 0xCA0, &cfg, &map)

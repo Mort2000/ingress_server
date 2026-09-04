@@ -225,9 +225,7 @@ impl R2Policy for HybridAblation {
         let round = obs.round;
         let enemy = self.faction.opposite();
         let builders: Vec<AgentId> = match self.params.roles {
-            HybridAblationRoles::BuilderOnly => {
-                obs.own_agents.iter().map(|a| a.id).collect()
-            }
+            HybridAblationRoles::BuilderOnly => obs.own_agents.iter().map(|a| a.id).collect(),
             HybridAblationRoles::BuilderAttack => obs
                 .own_agents
                 .iter()
@@ -351,7 +349,10 @@ mod tests {
 
     #[test]
     fn hybrid_ablation_params_round_trip_strictly() {
-        for params in [HybridAblationParams::builder_only(), HybridAblationParams::builder_attack()] {
+        for params in [
+            HybridAblationParams::builder_only(),
+            HybridAblationParams::builder_attack(),
+        ] {
             assert_eq!(
                 HybridAblationParams::from_tag(&params.tag()),
                 Some(params),

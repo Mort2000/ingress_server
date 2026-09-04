@@ -311,6 +311,46 @@ fn main() {
                 base_commit,
             ));
         }
+        Some("balance-b3") => {
+            // B3 default-config ablation (docs/ai-balance-plan.md section
+            // 7.2, ADR-0017): the frozen 8-policy same-map faction-swap
+            // matrix + the idle benchmark of the three arms, archived with
+            // the plan-section-9 analysis.txt.
+            let mut rest = args.iter().skip(2).cloned();
+            let output_root = std::path::PathBuf::from(
+                rest.next()
+                    .filter(|s| !s.starts_with("--"))
+                    .unwrap_or_else(|| "runs".to_string()),
+            );
+            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
+            let pilot = rest.any(|s| s == "--pilot");
+            std::process::exit(arena_runner::balance::ablation::run_b3_ablation(
+                &output_root,
+                base_commit.as_deref(),
+                pilot,
+            ));
+        }
+        Some("balance-drop-reasons") => {
+            // B3 per-reason Drop breakdown over a balance archive: verified
+            // offline re-execution of every in-scope row (plan section 16
+            // step 5). Positional args after the run dir are policy-tag
+            // filters (empty = all rows).
+            let usage = "usage: arena-runner balance-drop-reasons <balance-run-dir> [output-root] [base-commit] [policy tags...]";
+            let Some(run_dir) = args.get(2) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            let output_root =
+                std::path::PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or("runs"));
+            let base_commit = args.get(4).map(|s| s.as_str());
+            let filters: Vec<String> = args.iter().skip(5).cloned().collect();
+            std::process::exit(arena_runner::drops::run_balance_drop_reasons(
+                std::path::Path::new(run_dir),
+                &output_root,
+                base_commit,
+                &filters,
+            ));
+        }
         Some("balance-b2") => {
             // B2 readiness runs (docs/ai-balance-plan.md section 10.1,
             // ADR-0016): the frozen round-robin / idle / blocking-probe

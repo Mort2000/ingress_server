@@ -1,12 +1,15 @@
 //! The balance experiment layer (B1, `docs/ai-balance-plan.md` section
 //! 5.2): plan -> schedule -> execute -> pairs -> archive over the existing
 //! in-process match runner. The frozen m6 `BatchConfig` path is untouched
-//! and keeps serving the frozen M6 batches; statistical analysis is B3/B4
-//! and is deliberately absent here — `pairs.tsv` carries integer pair
-//! deltas only.
+//! and keeps serving the frozen M6 batches. `pairs.tsv` carries integer
+//! pair deltas only; the plan-section-9 offline statistics live in
+//! `analysis` (B3, ADR-0017) and never feed back into any match, Game
+//! Result, Replay Hash or settlement.
 
 #![forbid(unsafe_code)]
 
+pub mod ablation;
+pub mod analysis;
 pub mod archive;
 pub mod execute;
 pub mod pairs;

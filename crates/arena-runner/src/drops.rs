@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arena_bots::bot::{BotKind, BotStrategy, make_bot};
+use arena_bots::policy::{PolicyId, PolicyParameters, PolicySpec};
 use arena_core::config::GameConfig;
 use arena_core::harness::MatchHarness;
 use arena_core::map::{MapDefinition, generate_map};
@@ -37,6 +38,7 @@ use arena_core::spawn::validate_initial_spawn_set;
 use arena_core::state::GameState;
 use arena_core::types::Faction;
 
+use crate::balance::record::{BalanceMatchRecord, BalanceOutcome, parse_balance_tsv};
 use crate::metrics::{MatchRecord, Outcome};
 use crate::policy::PolicyStrategy;
 use crate::report::parse_matches_tsv;
@@ -840,6 +842,741 @@ pub fn run_drop_reasons(
         println!("drop-reasons: {line}");
     }
     0
+}
+
+// ---------------------------------------------------------------------
+// Verified re-execution of BALANCE cells (B3, plan section 16 step 5:
+// the per-reason Drop breakdown over a balance archive)
+// ---------------------------------------------------------------------
+
+/// The recomputed drop tally of one archived balance cell (descriptor
+/// echo plus both factions' counts and the final State Hash for
+/// verification).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BalanceCellDrops {
+    pub index: u64,
+    pub pair_tag: String,
+    pub policy_a: PolicyId,
+    pub policy_b: PolicyId,
+    pub policy_a_is_enl: bool,
+    pub enl: FactionDrops,
+    pub res: FactionDrops,
+    pub final_state_hash: [u8; 32],
+}
+
+/// Maps a record's version string onto the registry's static version
+/// constants (`PolicySpec::version` is `&'static str` and `validate()`
+/// compares against exactly these; an unknown version is refused here).
+fn static_version(version: &str) -> Result<&'static str, String> {
+    match version {
+        arena_bots::bot::BOT_VERSION => Ok(arena_bots::bot::BOT_VERSION),
+        arena_bots::ablation::B3_VERSION => Ok(arena_bots::ablation::B3_VERSION),
+        arena_bots::r2::R2_VERSION => Ok(arena_bots::r2::R2_VERSION),
+        other => Err(format!("unknown policy version {other:?}")),
+    }
+}
+
+/// Rebuilds one side's `PolicySpec` from the record's OWN identity
+/// columns (policy tag, family, version and the full-value parameters —
+/// the drops re-execution never trusts a current registry default).
+fn spec_of(
+    policy: PolicyId,
+    family: arena_bots::policy::PolicyFamily,
+    version: &str,
+    parameters: &PolicyParameters,
+    index: u64,
+) -> Result<PolicySpec, String> {
+    let spec = PolicySpec {
+        policy_id: policy,
+        family,
+        version: static_version(version)?,
+        parameters: *parameters,
+    };
+    spec.validate()
+        .map_err(|e| format!("cell {index}: policy {}: {e}", policy.tag()))?;
+    Ok(spec)
+}
+
+/// Deterministically re-executes the balance match described by `record`
+/// — both `PolicyPlayer`s constructed from the row's own policy tag and
+/// parameters via `make_policy_player`, per-record seeds, same
+/// construction order as the balance executor (ENL spawns chosen first)
+/// — and folds every executed command outcome. Crash and config-failure
+/// rows cannot be re-verified and are refused.
+pub fn reexecute_balance_cell(
+    record: &BalanceMatchRecord,
+    cfg: &GameConfig,
+    map: &MapDefinition,
+) -> Result<BalanceCellDrops, String> {
+    if matches!(
+        record.result,
+        BalanceOutcome::ConfigFailure | BalanceOutcome::Played(Outcome::Crash)
+    ) {
+        return Err(format!(
+            "cell {}: archived {:?} — not re-executable",
+            record.index, record.result
+        ));
+    }
+    if crate::tournament::config::config_identity(cfg) != record.config_hash {
+        return Err(format!(
+            "cell {}: config identity mismatch — the archive was not produced with this GameConfig",
+            record.index
+        ));
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let spec_a = spec_of(
+            record.policy_a,
+            record.policy_a_family,
+            &record.policy_a_version,
+            &record.policy_a_parameters,
+            record.index,
+        )?;
+        let spec_b = spec_of(
+            record.policy_b,
+            record.policy_b_family,
+            &record.policy_b_version,
+            &record.policy_b_parameters,
+            record.index,
+        )?;
+        let (enl_spec, res_spec) = if record.policy_a_is_enl {
+            (spec_a, spec_b)
+        } else {
+            (spec_b, spec_a)
+        };
+        // Same construction order as the balance executor's
+        // default_cell_setup: one PolicyPlayer per side from the shared
+        // bot_seed, ENL spawns chosen first.
+        let mut enl_player = arena_bots::policy::make_policy_player(
+            &enl_spec,
+            Faction::Enl,
+            record.bot_seed,
+            cfg,
+            map,
+        );
+        let mut res_player = arena_bots::policy::make_policy_player(
+            &res_spec,
+            Faction::Res,
+            record.bot_seed,
+            cfg,
+            map,
+        );
+        let (enl_roster, res_roster) = GameState::initial_roster(cfg);
+        let enl_spawns = validate_initial_spawn_set(
+            &enl_roster,
+            &enl_player.choose_spawns(cfg, map, &enl_roster),
+            cfg,
+        )
+        .map_err(|e| format!("cell {}: ENL spawn set: {e:?}", record.index))?;
+        let res_spawns = validate_initial_spawn_set(
+            &res_roster,
+            &res_player.choose_spawns(cfg, map, &res_roster),
+            cfg,
+        )
+        .map_err(|e| format!("cell {}: RES spawn set: {e:?}", record.index))?;
+        let mut harness = MatchHarness::new(
+            record.game_seed,
+            *cfg,
+            map,
+            &enl_spawns,
+            &res_spawns,
+            Box::new(PolicyStrategy::new(
+                enl_player.into_strategy(),
+                Faction::Enl,
+                record.bucket_policy,
+            )),
+            Box::new(PolicyStrategy::new(
+                res_player.into_strategy(),
+                Faction::Res,
+                record.bucket_policy,
+            )),
+        )
+        .map_err(|e| format!("cell {}: harness: {e:?}", record.index))?;
+        let mut drops = BalanceCellDrops {
+            index: record.index,
+            pair_tag: record.pair_tag.clone(),
+            policy_a: record.policy_a,
+            policy_b: record.policy_b,
+            policy_a_is_enl: record.policy_a_is_enl,
+            enl: FactionDrops::default(),
+            res: FactionDrops::default(),
+            final_state_hash: [0u8; 32],
+        };
+        for _ in 0..cfg.total_rounds {
+            let report = harness.run_round();
+            for stream in &report.execution_order {
+                let faction_drops = match stream.faction {
+                    Faction::Enl => &mut drops.enl,
+                    Faction::Res => &mut drops.res,
+                };
+                for outcome in &stream.outcomes {
+                    faction_drops.observe(outcome);
+                }
+            }
+        }
+        drops.final_state_hash = arena_replay::canon::state_hash(harness.state());
+        Ok(drops)
+    }));
+    match outcome {
+        Ok(Ok(drops)) => Ok(drops),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(format!(
+            "cell {}: re-execution panicked (archived result was {:?})",
+            record.index, record.result
+        )),
+    }
+}
+
+/// Compares a balance re-execution against its archived row: identical
+/// final State Hash and identical per-faction submitted/ok/dropped
+/// counts. The per-reason tally is only trusted once this passes.
+pub fn verify_balance_cell_drops(
+    record: &BalanceMatchRecord,
+    drops: &BalanceCellDrops,
+) -> Result<(), String> {
+    if drops.final_state_hash != record.final_state_hash {
+        return Err(format!(
+            "cell {}: final State Hash mismatch (re-executed {}, archived {})",
+            record.index,
+            arena_replay::canon::hex(&drops.final_state_hash),
+            arena_replay::canon::hex(&record.final_state_hash)
+        ));
+    }
+    for (label, got, want) in [
+        ("enl", &drops.enl, &record.stats.enl),
+        ("res", &drops.res, &record.stats.res),
+    ] {
+        if (got.submitted, got.ok, got.dropped)
+            != (
+                want.commands_submitted,
+                want.commands_ok,
+                want.commands_dropped,
+            )
+        {
+            return Err(format!(
+                "cell {}: {label} command counts mismatch (re-executed submitted/ok/dropped {}/{}/{}, archived {}/{}/{})",
+                record.index,
+                got.submitted,
+                got.ok,
+                got.dropped,
+                want.commands_submitted,
+                want.commands_ok,
+                want.commands_dropped
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// One policy's pooled tally inside one balance pair.
+#[derive(Clone, Debug)]
+pub struct PolicyDropSummary {
+    pub policy: PolicyId,
+    /// Matches this policy participated in (a mirror match counts once).
+    pub matches: u64,
+    pub archived_submitted: u64,
+    pub archived_dropped: u64,
+    pub reasons: BTreeMap<&'static str, u64>,
+}
+
+impl PolicyDropSummary {
+    /// Sum of the re-executed per-reason counts.
+    pub fn reason_sum(&self) -> u64 {
+        self.reasons.values().sum()
+    }
+}
+
+/// One balance pair's pooled tally.
+#[derive(Clone, Debug)]
+pub struct BalanceDropSummary {
+    pub pair_tag: String,
+    pub matches: u64,
+    /// Rows skipped (crash/config-failure records are not re-executable).
+    pub skipped: u64,
+    pub policies: Vec<PolicyDropSummary>,
+}
+
+/// Aggregates verified per-cell tallies into per-pair, per-policy
+/// summaries in record order, with the same belt-and-braces cross-check
+/// as the m6 path: per-reason sums must equal the archived drop totals.
+pub fn aggregate_balance_drop_reasons(
+    records: &[BalanceMatchRecord],
+    drops: &[Option<BalanceCellDrops>],
+) -> Result<Vec<BalanceDropSummary>, String> {
+    if records.len() != drops.len() {
+        return Err(format!(
+            "aggregate: {} records but {} tallies",
+            records.len(),
+            drops.len()
+        ));
+    }
+    let mut pairs: Vec<BalanceDropSummary> = Vec::new();
+    let mut by_tag: BTreeMap<String, usize> = BTreeMap::new();
+    for (record, tally) in records.iter().zip(drops.iter()) {
+        let index = *by_tag.entry(record.pair_tag.clone()).or_insert_with(|| {
+            pairs.push(BalanceDropSummary {
+                pair_tag: record.pair_tag.clone(),
+                matches: 0,
+                skipped: 0,
+                policies: Vec::new(),
+            });
+            pairs.len() - 1
+        });
+        let pair = &mut pairs[index];
+        pair.matches += 1;
+        let Some(tally) = tally else {
+            pair.skipped += 1;
+            continue;
+        };
+        let mut seen: BTreeSet<PolicyId> = BTreeSet::new();
+        let sides: [(PolicyId, &FactionDrops, u64, u64); 2] = [
+            (
+                record.policy_a,
+                &tally.enl,
+                record.stats.enl.commands_submitted,
+                record.stats.enl.commands_dropped,
+            ),
+            (
+                record.policy_b,
+                &tally.res,
+                record.stats.res.commands_submitted,
+                record.stats.res.commands_dropped,
+            ),
+        ];
+        // The tally's factions are the EXECUTION factions; map them onto
+        // the record's policy columns by the row's own faction assignment.
+        let sides = if record.policy_a_is_enl {
+            sides
+        } else {
+            [
+                (
+                    record.policy_a,
+                    &tally.res,
+                    record.stats.enl.commands_submitted,
+                    record.stats.enl.commands_dropped,
+                ),
+                (
+                    record.policy_b,
+                    &tally.enl,
+                    record.stats.res.commands_submitted,
+                    record.stats.res.commands_dropped,
+                ),
+            ]
+        };
+        for (policy, faction_drops, archived_submitted, archived_dropped) in sides {
+            if !pair.policies.iter().any(|p| p.policy == policy) {
+                pair.policies.push(PolicyDropSummary {
+                    policy,
+                    matches: 0,
+                    archived_submitted: 0,
+                    archived_dropped: 0,
+                    reasons: BTreeMap::new(),
+                });
+            }
+            let entry = pair
+                .policies
+                .iter_mut()
+                .find(|p| p.policy == policy)
+                .expect("just pushed");
+            if seen.insert(policy) {
+                entry.matches += 1;
+            }
+            entry.archived_submitted += archived_submitted;
+            entry.archived_dropped += archived_dropped;
+            for (tag, count) in &faction_drops.reasons {
+                *entry.reasons.entry(tag).or_insert(0) += count;
+            }
+        }
+    }
+    for pair in &pairs {
+        for policy in &pair.policies {
+            let sum = policy.reason_sum();
+            if sum != policy.archived_dropped {
+                return Err(format!(
+                    "pair {} policy {}: per-reason sum {} != archived commands_dropped {}",
+                    pair.pair_tag,
+                    policy.policy.tag(),
+                    sum,
+                    policy.archived_dropped
+                ));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+/// The balance `drop-reasons.tsv` body: one row per (pair, policy,
+/// reason) in canonical tag order (zeros explicit) plus one TOTAL row per
+/// (pair, policy).
+pub fn balance_drop_reasons_tsv(pairs: &[BalanceDropSummary]) -> String {
+    let mut text = String::from("pair_tag\tpolicy\tdrop_reason\tcount\n");
+    for pair in pairs {
+        for policy in &pair.policies {
+            for tag in DROP_REASON_TAGS {
+                let count = policy.reasons.get(tag).copied().unwrap_or(0);
+                text.push_str(&format!(
+                    "{}\t{}\t{}\t{}\n",
+                    pair.pair_tag,
+                    policy.policy.tag(),
+                    tag,
+                    count
+                ));
+            }
+            text.push_str(&format!(
+                "{}\t{}\tTOTAL\t{}\n",
+                pair.pair_tag,
+                policy.policy.tag(),
+                policy.reason_sum()
+            ));
+        }
+    }
+    text
+}
+
+/// The balance `summary.txt` body (raw counts with permille shares NEXT
+/// TO them, never instead of them).
+pub fn balance_drop_reasons_summary(pairs: &[BalanceDropSummary], source_rows: usize) -> String {
+    let mut out = String::new();
+    out.push_str("# arena-runner balance drop-reason tally (B3, offline analysis)\n");
+    out.push_str(&format!(
+        "# source rows: {source_rows}; integer counts; permille shares are derived, the counts are the record\n\n"
+    ));
+    for pair in pairs {
+        out.push_str(&format!("## {} ({} rows", pair.pair_tag, pair.matches));
+        if pair.skipped > 0 {
+            out.push_str(&format!(", {} skipped (not re-executable)", pair.skipped));
+        }
+        out.push_str(")\n");
+        for policy in &pair.policies {
+            let drop_rate_permille = if policy.archived_submitted == 0 {
+                0
+            } else {
+                policy.archived_dropped * 1000 / policy.archived_submitted
+            };
+            out.push_str(&format!(
+                "### {} ({} matches)\n  submitted={} dropped={} ({} permille)\n",
+                policy.policy.tag(),
+                policy.matches,
+                policy.archived_submitted,
+                policy.archived_dropped,
+                drop_rate_permille
+            ));
+            for tag in DROP_REASON_TAGS {
+                let count = policy.reasons.get(tag).copied().unwrap_or(0);
+                if count == 0 {
+                    continue;
+                }
+                let share_permille = if policy.archived_dropped == 0 {
+                    0
+                } else {
+                    count * 1000 / policy.archived_dropped
+                };
+                out.push_str(&format!(
+                    "  {tag}: {count} ({share_permille} permille of this policy's drops)\n"
+                ));
+            }
+            let sum = policy.reason_sum();
+            out.push_str(&format!(
+                "  TOTAL per-reason sum: {sum} (archived commands_dropped: {}; reconciliation {})\n",
+                policy.archived_dropped,
+                if sum == policy.archived_dropped {
+                    "OK"
+                } else {
+                    "MISMATCH"
+                }
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Operator entry behind the `arena-runner balance-drop-reasons`
+/// subcommand: reads a balance run's `matches.tsv`, re-executes and
+/// verifies every in-scope row (all rows, or only rows where a side's
+/// policy tag is in `policy_filter`), and writes the tally artifacts into
+/// a NEW `runs/balance/<experiment-id>/` directory. The experiment id is
+/// `b3-drop-reasons-<name>` where `<name>` is the source run's directory
+/// name minus any `b3-ablation-` prefix (ADR-0017). Returns the process
+/// exit code.
+pub fn run_balance_drop_reasons(
+    run_dir: &Path,
+    output_root: &Path,
+    base_commit: Option<&str>,
+    policy_filter: &[String],
+) -> i32 {
+    let start = Instant::now();
+    let tsv_path = run_dir.join("matches.tsv");
+    let text = match fs::read_to_string(&tsv_path) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!(
+                "balance-drop-reasons: cannot read {}: {error}",
+                tsv_path.display()
+            );
+            return 1;
+        }
+    };
+    let all_records = match parse_balance_tsv(&text) {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!(
+                "balance-drop-reasons: parse {}: {error}",
+                tsv_path.display()
+            );
+            return 1;
+        }
+    };
+    let rows_total = all_records.len();
+    let in_scope = |record: &BalanceMatchRecord| -> bool {
+        policy_filter.is_empty()
+            || policy_filter
+                .iter()
+                .any(|tag| tag == record.policy_a.tag() || tag == record.policy_b.tag())
+    };
+    let records: Vec<BalanceMatchRecord> =
+        all_records.into_iter().filter(|r| in_scope(r)).collect();
+    if records.is_empty() {
+        eprintln!("balance-drop-reasons: no rows in scope (filter {policy_filter:?})");
+        return 1;
+    }
+    let cfg = GameConfig::default();
+    if crate::tournament::config::config_identity(&cfg)
+        != records.first().map(|r| r.config_hash).unwrap_or_default()
+    {
+        eprintln!(
+            "balance-drop-reasons: {} was not produced with GameConfig::default() — this tally only reconstructs default-config runs",
+            run_dir.display()
+        );
+        return 1;
+    }
+    // Map pool from the rows' own map seeds (worker count cannot move a match).
+    let map_seeds: Vec<u64> = records
+        .iter()
+        .map(|record| record.map_seed)
+        .collect::<BTreeSet<u64>>()
+        .into_iter()
+        .collect();
+    let mut map_index_of: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut maps: Vec<Arc<MapDefinition>> = Vec::with_capacity(map_seeds.len());
+    for (index, seed) in map_seeds.iter().enumerate() {
+        match generate_map(*seed, &cfg) {
+            Ok(map) => {
+                map_index_of.insert(*seed, index);
+                maps.push(Arc::new(map));
+            }
+            Err(error) => {
+                eprintln!(
+                    "balance-drop-reasons: archived map seed {seed:#x} does not regenerate: {error:?}"
+                );
+                return 1;
+            }
+        }
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(MAX_WORKERS)
+        .clamp(1, records.len().max(1));
+    let mut slots: Vec<Option<Result<Option<BalanceCellDrops>, String>>> =
+        records.iter().map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let records = &records;
+            let maps = &maps;
+            let map_index_of = &map_index_of;
+            handles.push(scope.spawn(move || {
+                let mut ours: Vec<(usize, Result<Option<BalanceCellDrops>, String>)> = Vec::new();
+                let mut index = worker;
+                while index < records.len() {
+                    let record = &records[index];
+                    let result = if matches!(
+                        record.result,
+                        BalanceOutcome::ConfigFailure | BalanceOutcome::Played(Outcome::Crash)
+                    ) {
+                        Ok(None)
+                    } else {
+                        let map =
+                            maps[*map_index_of.get(&record.map_seed).expect("seed pooled")].clone();
+                        reexecute_balance_cell(record, &cfg, &map)
+                            .and_then(|drops| {
+                                verify_balance_cell_drops(record, &drops).map(|_| drops)
+                            })
+                            .map(Some)
+                    };
+                    ours.push((index, result));
+                    index += workers;
+                }
+                ours
+            }));
+        }
+        for handle in handles {
+            for (slot, result) in handle.join().expect("balance-drop-reasons worker panicked") {
+                slots[slot] = Some(result);
+            }
+        }
+    });
+    let mut errors: Vec<String> = Vec::new();
+    let mut tallies: Vec<Option<BalanceCellDrops>> = Vec::with_capacity(records.len());
+    for slot in slots {
+        match slot.expect("every row tallied exactly once") {
+            Ok(drops) => tallies.push(drops),
+            Err(error) => errors.push(error),
+        }
+    }
+    if !errors.is_empty() {
+        for error in errors.iter().take(10) {
+            eprintln!("balance-drop-reasons: verification failed: {error}");
+        }
+        eprintln!(
+            "balance-drop-reasons: {} of {} rows failed re-execution verification — nothing written",
+            errors.len(),
+            records.len()
+        );
+        return 1;
+    }
+    let skipped = tallies.iter().filter(|t| t.is_none()).count() as u64;
+    let pairs = match aggregate_balance_drop_reasons(&records, &tallies) {
+        Ok(pairs) => pairs,
+        Err(error) => {
+            eprintln!("balance-drop-reasons: aggregation cross-check failed: {error}");
+            return 1;
+        }
+    };
+
+    // New artifacts only: refuse an existing experiment directory.
+    let source_name = run_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "archive".to_string());
+    let suffix = source_name
+        .strip_prefix("b3-ablation-")
+        .unwrap_or(&source_name)
+        .to_string();
+    let experiment_id = format!("b3-drop-reasons-{suffix}");
+    let dir = output_root.join("balance").join(&experiment_id);
+    if dir.exists() {
+        eprintln!(
+            "balance-drop-reasons: {} already exists — historical runs are never overwritten",
+            dir.display()
+        );
+        return 1;
+    }
+    if let Err(error) = fs::create_dir_all(&dir) {
+        eprintln!(
+            "balance-drop-reasons: cannot create {}: {error}",
+            dir.display()
+        );
+        return 1;
+    }
+    let mut manifest = String::new();
+    let line = |text: &mut String, key: &str, value: String| {
+        text.push_str(key);
+        text.push_str("=");
+        text.push_str(&value);
+        text.push('\n');
+    };
+    line(&mut manifest, "experiment_id", experiment_id.clone());
+    line(&mut manifest, "stage", "B3-ablation-analysis".to_string());
+    line(
+        &mut manifest,
+        "purpose",
+        "per-DropReason command counts over a balance archive (matches.tsv stores drop totals only)".to_string(),
+    );
+    line(&mut manifest, "source_dir", run_dir.display().to_string());
+    line(&mut manifest, "source_rows", records.len().to_string());
+    line(&mut manifest, "source_rows_total", rows_total.to_string());
+    line(
+        &mut manifest,
+        "policy_filter",
+        if policy_filter.is_empty() {
+            "all".to_string()
+        } else {
+            policy_filter.join(",")
+        },
+    );
+    line(
+        &mut manifest,
+        "reexecute_mode",
+        "in-process MatchHarness, PolicyPlayers built from each row's own policy tag + full-value parameters via make_policy_player, per-row game_seed/bot_seed/map_seed and bucket policy read back from matches.tsv".to_string(),
+    );
+    line(&mut manifest, "config", "GameConfig::default()".to_string());
+    line(
+        &mut manifest,
+        "verification",
+        "every row: recomputed final State Hash and per-faction submitted/ok/dropped compared against the archived row; any mismatch aborts".to_string(),
+    );
+    line(
+        &mut manifest,
+        "base_commit",
+        base_commit.unwrap_or("unrecorded").to_string(),
+    );
+    line(
+        &mut manifest,
+        "reproduce",
+        format!(
+            "cargo run --release -p arena-runner -- balance-drop-reasons {} runs <base_commit>{}",
+            run_dir.display(),
+            if policy_filter.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", policy_filter.join(" "))
+            }
+        ),
+    );
+    line(&mut manifest, "workers", workers.to_string());
+    line(&mut manifest, "rows_skipped", skipped.to_string());
+    line(
+        &mut manifest,
+        "elapsed_ms",
+        start.elapsed().as_millis().to_string(),
+    );
+    line(
+        &mut manifest,
+        "note",
+        "offline analysis only; integer raw counts are the record; nothing here enters any Game Result, Replay Hash or rule settlement".to_string(),
+    );
+    let tsv = balance_drop_reasons_tsv(&pairs);
+    let summary = balance_drop_reasons_summary(&pairs, records.len());
+    let files = [
+        ("manifest.txt", manifest),
+        ("drop-reasons.tsv", tsv),
+        ("summary.txt", summary.clone()),
+    ];
+    for (name, body) in &files {
+        if let Err(error) = fs::write(dir.join(name), body) {
+            eprintln!(
+                "balance-drop-reasons: cannot write {}: {error}",
+                dir.join(name).display()
+            );
+            return 1;
+        }
+    }
+    let mut hashes = String::new();
+    for (name, _) in &files {
+        match fs::read(dir.join(name)) {
+            Ok(bytes) => hashes.push_str(&format!(
+                "blake3:{}  {name}\n",
+                arena_replay::canon::hex(blake3::hash(&bytes).as_bytes())
+            )),
+            Err(error) => {
+                eprintln!("balance-drop-reasons: cannot hash {name}: {error}");
+                return 1;
+            }
+        }
+    }
+    if let Err(error) = fs::write(dir.join("hashes.txt"), &hashes) {
+        eprintln!("balance-drop-reasons: cannot write hashes.txt: {error}");
+        return 1;
+    }
+    println!(
+        "balance-drop-reasons: {} rows re-executed and verified ({} skipped) in {:?}",
+        records.len(),
+        skipped,
+        start.elapsed()
+    );
+    println!("balance-drop-reasons: artifacts in {}", dir.display());
+    i32::from(skipped > 0)
 }
 
 #[cfg(test)]

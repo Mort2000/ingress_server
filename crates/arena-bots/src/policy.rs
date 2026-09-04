@@ -530,10 +530,7 @@ impl PolicySpec {
         // arms).
         let matches_id = match (self.policy_id, &self.parameters) {
             (PolicyId::GreedyCoordinatedR2, PolicyParameters::GreedyCoordinated(_))
-            | (
-                PolicyId::GreedyCoordinatedCanonical,
-                PolicyParameters::GreedyCoordinated(_),
-            )
+            | (PolicyId::GreedyCoordinatedCanonical, PolicyParameters::GreedyCoordinated(_))
             | (PolicyId::BuilderDefenderR2, PolicyParameters::BuilderDefender(_))
             | (PolicyId::BuilderDisruptorR2, PolicyParameters::BuilderDisruptor(_))
             | (PolicyId::LogisticsBuilderR2, PolicyParameters::LogisticsBuilder(_))
@@ -591,7 +588,10 @@ pub fn r2_specs() -> Vec<PolicySpec> {
 
 /// The three B3 ablation-arm specs (ADR-0017), declaration order.
 pub fn ablation_specs() -> Vec<PolicySpec> {
-    PolicyId::ABLATION.iter().map(|id| id.ablation_spec()).collect()
+    PolicyId::ABLATION
+        .iter()
+        .map(|id| id.ablation_spec())
+        .collect()
 }
 
 /// Constructs one faction's player for a policy spec: a frozen m6.0
@@ -624,15 +624,11 @@ pub fn make_policy_player(
         // The canonical ablation arm shares the r2 core's parameter
         // variant, so its (more specific) arm must precede the general
         // r2 construction arm.
-        (
-            PolicyId::GreedyCoordinatedCanonical,
-            PolicyParameters::GreedyCoordinated(params),
-        ) => crate::r2::PolicyPlayer::R2(Box::new(GreedyCoordinatedCanonical::new(
-            faction,
-            bot_seed,
-            cfg,
-            *params,
-        ))),
+        (PolicyId::GreedyCoordinatedCanonical, PolicyParameters::GreedyCoordinated(params)) => {
+            crate::r2::PolicyPlayer::R2(Box::new(GreedyCoordinatedCanonical::new(
+                faction, bot_seed, cfg, *params,
+            )))
+        }
         (_, PolicyParameters::GreedyCoordinated(params)) => crate::r2::PolicyPlayer::R2(Box::new(
             GreedyCoordinated::new(faction, bot_seed, cfg, *params),
         )),
@@ -651,15 +647,9 @@ pub fn make_policy_player(
         (_, PolicyParameters::AdaptiveHybridR2(params)) => crate::r2::PolicyPlayer::R2(Box::new(
             AdaptiveHybridR2::new(faction, bot_seed, cfg, *params),
         )),
-        (_, PolicyParameters::HybridAblation(params)) => {
-            crate::r2::PolicyPlayer::R2(Box::new(HybridAblation::new(
-                faction,
-                bot_seed,
-                cfg,
-                map,
-                *params,
-            )))
-        }
+        (_, PolicyParameters::HybridAblation(params)) => crate::r2::PolicyPlayer::R2(Box::new(
+            HybridAblation::new(faction, bot_seed, cfg, map, *params),
+        )),
         (_, PolicyParameters::Idle) => crate::r2::PolicyPlayer::R2(Box::new(IdlePolicy)),
     }
 }
@@ -730,8 +720,16 @@ mod tests {
     #[test]
     fn tags_round_trip_for_every_id_family_and_parameters() {
         assert_eq!(PolicyId::ALL.len(), 15, "5 m6 mirrors + 7 R2 + 3 ablation");
-        assert_eq!(PolicyId::MIRRORED.len(), 5, "the m6 mirror registry is untouched");
-        assert_eq!(PolicyId::R2_COMPETITIVE.len(), 6, "the B2 registry is untouched");
+        assert_eq!(
+            PolicyId::MIRRORED.len(),
+            5,
+            "the m6 mirror registry is untouched"
+        );
+        assert_eq!(
+            PolicyId::R2_COMPETITIVE.len(),
+            6,
+            "the B2 registry is untouched"
+        );
         assert_eq!(PolicyId::ABLATION.len(), 3);
         assert_eq!(PolicyFamily::ALL.len(), 11);
         for id in PolicyId::ALL {
@@ -874,7 +872,10 @@ mod tests {
             PolicyId::GreedyCoordinatedCanonical.tag(),
             crate::r2::rng::R2Stream::GreedyCoordinatedCanonical.tag()
         );
-        assert_eq!(crate::r2::rng::R2Stream::GreedyCoordinatedCanonical.kind_tag(), 13);
+        assert_eq!(
+            crate::r2::rng::R2Stream::GreedyCoordinatedCanonical.kind_tag(),
+            13
+        );
     }
 
     // A spec with the frozen-m6 parameters but a non-m6 version (or a

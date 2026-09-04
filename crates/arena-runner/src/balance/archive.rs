@@ -215,6 +215,7 @@ pub fn manifest_text(
             "cargo run --release -p arena-runner -- {} runs <base_commit> (experiment {})",
             match plan.stage {
                 crate::balance::plan::Stage::Readiness => "balance-b2",
+                crate::balance::plan::Stage::Ablation => "balance-b3",
                 _ => "balance-b1",
             },
             plan.experiment_id
@@ -449,7 +450,8 @@ pub fn report_text(
         plan.stage.tag()
     ));
     out.push_str(&format!(
-        "B1 smoke of the balance layer: {} config variants x {} policies x {} maps x 2 swap legs = {} matches on the {} seed set.\n\n",
+        "Balance experiment ({} stage): {} config variants x {} policies x {} maps x 2 swap legs = {} matches on the {} seed set.\n\n",
+        plan.stage.tag(),
         plan.variants.len(),
         plan.policies.len(),
         plan.map_count,
