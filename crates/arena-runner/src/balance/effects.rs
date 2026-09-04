@@ -1182,7 +1182,12 @@ pub fn effects_text(
 
         out.push_str("  pair units played excl_crash excl_cfg excl_base m_up m_down m_zero o_up o_down o_zero m_delta_sum o_delta_sum wilson_low wilson_high quartiles(p25/p50/p75 min max)\n");
         for effect in effects.iter().filter(|e| e.variant_id == id) {
-            let (low, high) = effect.wilson.unwrap_or((0, 0));
+            // `None` (no decisive unit) renders as "-"; a fabricated 0/0
+            // would read as a fully one-sided-down interval.
+            let (low_text, high_text) = match effect.wilson {
+                Some((low, high)) => (low.to_string(), high.to_string()),
+                None => ("-".to_string(), "-".to_string()),
+            };
             let quartiles = match &effect.margin_quartiles {
                 Some(q) => format!("{}/{}/{} {} {}", q.p25, q.median, q.p75, q.min, q.max),
                 None => "-".to_string(),
@@ -1203,8 +1208,8 @@ pub fn effects_text(
                 effect.outcome_zero,
                 effect.margin_delta_sum,
                 effect.outcome_delta_sum,
-                low,
-                high
+                low_text,
+                high_text
             ));
             out.push_str(&format!("    quartiles {quartiles}\n"));
         }
