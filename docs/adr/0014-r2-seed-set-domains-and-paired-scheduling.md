@@ -14,4 +14,4 @@ status: accepted
 
 **Holdout 纪律**：Holdout 地图在 B5 Confirm 阶段之前**绝不生成、绝不运行**；种子值可在测试中比较（仅值，不生成地图）。`ExperimentPlan::validate` 拒绝 Holdout + 非 Confirm 的组合。查看 Holdout 结果后若需继续调策略或参数，当前 Holdout 降级为 Validation，并须另建新的域分离 Holdout。
 
-**配对的地图共享边界（已知限制）**：跨变体共享同一 Map Definition 仅当变体不改 `generate_map` 读取的字段（维度与 portal 族字段）。`move_budget_cm` 类变体可共享（执行器逐一断言两变体从同一 map_seed 生成字节相同的地图）；`PORTAL_COUNT` 类变体（B4）无法共享，属配置失败，按 7.3 记录为 `config-failure`，不得静默跳过。
+**配对的地图共享边界（已知限制；地图定义字段部分被 [ADR-0018](./0018-b4-parameter-sensitivity.md) 修订）**：跨变体共享同一 Map Definition 仅当变体不改 `generate_map` 读取的字段（维度与 portal 族字段）。`move_budget_cm` 类变体可共享（执行器逐一断言两变体从同一 map_seed 生成字节相同的地图）；`PORTAL_COUNT` 类变体（B4）无法共享——ADR-0014 原文将其归为配置失败；自 ADR-0018 起此类**地图机制变体**改为从同一 map_seed 在自身 config 下生成自己的地图（配对键不变，配对差含地图机制变化），不可行生成仍记 `config-failure`。本 ADR 的种子推导不受影响：map_seed 永不依赖 variant。
