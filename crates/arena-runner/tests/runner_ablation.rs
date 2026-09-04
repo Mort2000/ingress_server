@@ -1095,6 +1095,18 @@ fn b3_scratch_run_archives_analysis_and_refuses_existing_dirs() {
     // The manifest carries the balance-b3 reproduce line.
     let manifest = std::fs::read_to_string(dir.join("manifest.txt")).expect("manifest");
     assert!(manifest.contains("balance-b3"));
+    // The report is stage-aware too (regression pin: the archived official
+    // B3 runs carried the B1 smoke boilerplate — balance-b1 reproduce line,
+    // "None registered" gates and the B1 doc note; the historical runs stay
+    // frozen, this pins every FUTURE archive).
+    let report = std::fs::read_to_string(dir.join("report.md")).expect("report");
+    assert!(report.contains(
+        "Reproduce: `cargo run --release -p arena-runner -- balance-b3 runs <base_commit>`"
+    ));
+    assert!(!report.contains("balance-b1"));
+    assert!(!report.contains("None registered — B1"));
+    assert!(report.contains("None registered for this experiment."));
+    assert!(manifest.contains("docs/balance-b3-ablation.md carries"));
     // An existing experiment directory is refused — nothing overwritten.
     let again = run_b3_plan(&root, &plan, &|_| false, Some("test-commit"));
     assert!(again.is_err(), "existing dir refused");

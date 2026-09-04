@@ -1,4 +1,5 @@
-//! Balance artifact archive (B1, plan section 12): writes the complete
+//! Balance artifact archive (plan section 12, built in B1, shared by
+//! every stage): writes the complete
 //! artifact set of one experiment into a NEW
 //! `runs/balance/<experiment-id>/` directory — an existing directory is
 //! REFUSED (historical runs are never overwritten). Everything the raw
@@ -20,7 +21,7 @@ use arena_core::types::PortalId;
 use crate::balance::execute::BalanceRunResult;
 use crate::balance::pairs::{PairedResult, VariantSummary, paired_results_to_tsv};
 use crate::balance::plan::{
-    CONFIG_FIELD_NAMES, ExperimentPlan, bot_seed_derivation, game_seed_derivation,
+    CONFIG_FIELD_NAMES, ExperimentPlan, Gate, Stage, bot_seed_derivation, game_seed_derivation,
     map_seed_derivation, schedule_seed_derivation,
 };
 use crate::balance::record::balance_records_to_tsv;
@@ -90,6 +91,41 @@ pub fn decode_map(bytes: &[u8]) -> Option<MapDefinition> {
 
 fn blake3_hex(bytes: &[u8]) -> String {
     arena_replay::canon::hex(blake3::hash(bytes).as_bytes())
+}
+
+/// The CLI subcommand that re-runs this stage's frozen experiments — the
+/// reproduce line of BOTH `manifest.txt` and `report.md` (Smoke=B1,
+/// Readiness=B2, Ablation=B3). A later stage registers its subcommand
+/// here when its operator entry lands; the explicit marker keeps an
+/// unwired stage visibly wrong instead of silently re-issuing the B1
+/// batch (the archived `-r1`/`-r2`/`-r3` B2/B3 reports carried a stale
+/// `balance-b1` reproduce line for exactly that reason).
+fn stage_subcommand(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Smoke => "balance-b1",
+        Stage::Readiness => "balance-b2",
+        Stage::Ablation => "balance-b3",
+        Stage::Sensitivity | Stage::Interaction | Stage::Retune | Stage::Confirm => {
+            "balance-<unwired-stage>"
+        }
+    }
+}
+
+/// The committed doc that carries this stage's report and artifact
+/// content hashes while `runs/` stays untracked (plan section 12).
+/// `None` for stages whose report doc is not frozen yet (Sensitivity/
+/// Interaction/Retune); the manifest note then states the plan-section-12
+/// duty without naming a wrong file.
+fn stage_report_doc(stage: Stage) -> Option<&'static str> {
+    match stage {
+        Stage::Smoke => Some("docs/balance-b1-smoke.md"),
+        Stage::Readiness => Some("docs/balance-b2-readiness.md"),
+        Stage::Ablation => Some("docs/balance-b3-ablation.md"),
+        // Plan section 12: the final confirmation report syncs to
+        // docs/balance-report-r2.md.
+        Stage::Confirm => Some("docs/balance-report-r2.md"),
+        Stage::Sensitivity | Stage::Interaction | Stage::Retune => None,
+    }
 }
 
 /// The `manifest.txt` body: full experiment provenance.
@@ -213,11 +249,7 @@ pub fn manifest_text(
         "reproduce",
         format!(
             "cargo run --release -p arena-runner -- {} runs <base_commit> (experiment {})",
-            match plan.stage {
-                crate::balance::plan::Stage::Readiness => "balance-b2",
-                crate::balance::plan::Stage::Ablation => "balance-b3",
-                _ => "balance-b1",
-            },
+            stage_subcommand(plan.stage),
             plan.experiment_id
         ),
     );
@@ -226,7 +258,12 @@ pub fn manifest_text(
     line(
         &mut text,
         "note",
-        "runs/ is untracked; docs/balance-b1-smoke.md carries the report and these content hashes (plan section 12)".to_string(),
+        match stage_report_doc(plan.stage) {
+            Some(doc) => format!(
+                "runs/ is untracked; {doc} carries the report and these content hashes (plan section 12)"
+            ),
+            None => "runs/ is untracked; no committed report doc is frozen for this stage yet — commit the report and these content hashes per plan section 12".to_string(),
+        },
     );
     text
 }
@@ -503,7 +540,31 @@ pub fn report_text(
         ));
     }
     out.push_str("\nPer-map paired rows are in `pairs.tsv` (one row per variant per unit, integer deltas only).\n\n");
-    out.push_str("## Gates\n\nNone registered — B1 is the experiment-infrastructure milestone; gate evaluation arrives with the B3/B4 analysis layer.\n\n");
+    out.push_str("## Gates\n\n");
+    if plan.gates.is_empty() {
+        if plan.stage == Stage::Smoke {
+            out.push_str("None registered — B1 is the experiment-infrastructure milestone; gate evaluation arrives with the B3/B4 analysis layer.\n\n");
+        } else {
+            out.push_str("None registered for this experiment.\n\n");
+        }
+    } else {
+        // The report is written before the evaluation artifact exists;
+        // name where the evaluation lands in this same archive.
+        out.push_str(&format!(
+            "{} registered (declared at plan-build time; the evaluation is appended to this archive as {}):\n\n",
+            plan.gates.len(),
+            match plan.stage {
+                Stage::Readiness => "gates.txt",
+                Stage::Ablation => "analysis.txt",
+                _ => "the stage's analysis artifact",
+            }
+        ));
+        for gate in &plan.gates {
+            let Gate::Pending { gate_id, statement } = gate;
+            out.push_str(&format!("- `{gate_id}` — {statement}\n"));
+        }
+        out.push('\n');
+    }
     out.push_str("## Archive\n\n");
     out.push_str(&format!(
         "- {} content-addressed map file(s) under `maps/` (one file per distinct Map Definition; cross-variant units share the same file by construction and by executor verification)\n",
@@ -515,7 +576,8 @@ pub fn report_text(
     ));
     out.push_str("- `hashes.txt` carries the blake3 of every artifact (runs/ is untracked; the committed doc cites these)\n\n");
     out.push_str(&format!(
-        "Reproduce: `cargo run --release -p arena-runner -- balance-b1 runs <base_commit>` (base_commit recorded: {}).\n",
+        "Reproduce: `cargo run --release -p arena-runner -- {} runs <base_commit>` (base_commit recorded: {}).\n",
+        stage_subcommand(plan.stage),
         base_commit.unwrap_or("unrecorded")
     ));
     out
@@ -622,5 +684,121 @@ mod tests {
         assert_eq!(decode_map(&tampered), None, "invalid owner refused");
         // Identical content -> identical content hash (content addressing).
         assert_eq!(blake3_hex(&bytes), blake3_hex(&encode_map(&map)));
+    }
+
+    /// The manifest and report are STAGE-AWARE: the reproduce subcommand,
+    /// the gates section and the committed-doc note all follow the plan's
+    /// stage. Regression pin for the archived-B3/B2 defect: report.md
+    /// carried the B1 smoke boilerplate (a `balance-b1` reproduce line,
+    /// "None registered" gates contradicting the manifest's gate count,
+    /// and a note naming docs/balance-b1-smoke.md).
+    #[test]
+    fn manifest_and_report_are_stage_aware() {
+        let run = BalanceRunResult {
+            records: Vec::new(),
+            replays: Vec::new(),
+            config_failures: 0,
+            elapsed_ms: 0,
+            workers: 1,
+        };
+        let cases: Vec<(
+            &str,
+            ExperimentPlan,
+            &'static str,
+            &'static str,
+            usize,
+            Vec<&str>,
+        )> = vec![
+            (
+                "smoke",
+                crate::balance::smoke::b1_smoke_plan(1),
+                "balance-b1",
+                "docs/balance-b1-smoke.md",
+                0,
+                vec![],
+            ),
+            (
+                "readiness",
+                crate::balance::readiness::b2_idle_plan(1, "stage-aware-pin"),
+                "balance-b2",
+                "docs/balance-b2-readiness.md",
+                1,
+                vec!["idle-scoring"],
+            ),
+            (
+                "ablation-matrix",
+                crate::balance::ablation::b3_matrix_plan(1, "stage-aware-pin"),
+                "balance-b3",
+                "docs/balance-b3-ablation.md",
+                2,
+                vec!["records-integrity", "no-crashes"],
+            ),
+            (
+                "ablation-idle",
+                crate::balance::ablation::b3_idle_plan(1, "stage-aware-pin"),
+                "balance-b3",
+                "docs/balance-b3-ablation.md",
+                1,
+                vec!["idle-scoring"],
+            ),
+        ];
+        for (name, plan, subcommand, doc, gate_count, gate_ids) in cases {
+            let manifest = manifest_text(&plan, &run, Some("pin-commit"));
+            assert!(
+                manifest.contains(&format!(
+                    "reproduce=cargo run --release -p arena-runner -- {subcommand} runs <base_commit>"
+                )),
+                "{name}: manifest reproduce line names {subcommand}"
+            );
+            assert!(
+                manifest.contains(&format!("note=runs/ is untracked; {doc} carries")),
+                "{name}: manifest note names {doc}"
+            );
+
+            let report = report_text(&plan, &run, &[], &[], &[], Some("pin-commit"));
+            assert!(
+                report.contains(&format!(
+                    "Reproduce: `cargo run --release -p arena-runner -- {subcommand} runs <base_commit>`"
+                )),
+                "{name}: report reproduce line names {subcommand}"
+            );
+            if gate_count == 0 {
+                assert!(
+                    report.contains("None registered"),
+                    "{name}: zero-gates report says none registered"
+                );
+            } else {
+                assert!(
+                    report.contains(&format!(
+                        "\n{gate_count} registered (declared at plan-build time"
+                    )),
+                    "{name}: report gates count matches the plan ({gate_count})"
+                );
+                assert!(
+                    !report.contains("None registered"),
+                    "{name}: registered gates are listed, not the B1 boilerplate"
+                );
+                for gate_id in gate_ids {
+                    assert!(
+                        report.contains(&format!("`{gate_id}`")),
+                        "{name}: gate {gate_id} rendered"
+                    );
+                }
+                assert!(
+                    report.contains(match plan.stage {
+                        Stage::Readiness => "appended to this archive as gates.txt",
+                        Stage::Ablation => "appended to this archive as analysis.txt",
+                        _ => "appended to this archive as",
+                    }),
+                    "{name}: gates section names the stage's evaluation artifact"
+                );
+            }
+            if plan.stage != Stage::Smoke {
+                assert!(
+                    !manifest.contains("balance-b1") && !report.contains("balance-b1"),
+                    "{name}: no stale B1 boilerplate in manifest or report"
+                );
+            }
+        }
     }
 }
