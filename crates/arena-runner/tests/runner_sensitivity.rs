@@ -187,3 +187,155 @@ fn an_infeasible_map_regime_map_becomes_config_failure_cells() {
         "the infeasible variant never ran a cell"
     );
 }
+
+// ---------------------------------------------------------------------
+// The B4 completion condition in miniature: a tiny B4-shaped plan run
+// end to end through the same library entry the CLI uses archives an
+// effects document with a paired-effect AND side-effect block for EVERY
+// candidate, folds its hash into hashes.txt, agrees across worker counts
+// and refuses an existing archive directory (plan sections 10.2/12).
+// ---------------------------------------------------------------------
+mod b4_end_to_end {
+    use arena_bots::policy::PolicyId;
+    use arena_core::config::GameConfig;
+    use arena_runner::balance::plan::{
+        ConfigVariant, ExperimentPlan, PolicyMatchup, SeedSet, Stage,
+    };
+    use arena_runner::balance::record::{balance_records_to_tsv, parse_balance_tsv};
+    use arena_runner::balance::sensitivity::{B4_CANDIDATES, candidate_variant, run_b4_plan};
+    use arena_runner::policy::BucketPolicy;
+
+    fn tiny_b4_plan(experiment_id: &str) -> ExperimentPlan {
+        ExperimentPlan {
+            experiment_id: experiment_id.to_string(),
+            stage: Stage::Sensitivity,
+            seed_set: SeedSet::Development,
+            map_count: 1,
+            base_variant: "default".to_string(),
+            variants: vec![
+                ConfigVariant::new("default", GameConfig::default(), Vec::new()),
+                candidate_variant(
+                    B4_CANDIDATES
+                        .iter()
+                        .find(|c| c.variant_id == "attack-damage-25")
+                        .unwrap(),
+                ),
+                candidate_variant(
+                    B4_CANDIDATES
+                        .iter()
+                        .find(|c| c.variant_id == "portal-count-80")
+                        .unwrap(),
+                ),
+            ],
+            policies: vec![
+                PolicyId::GreedyCoordinatedR2.r2_spec(),
+                PolicyId::BuilderDefenderR2.r2_spec(),
+                PolicyId::LogisticsBuilderR2.r2_spec(),
+            ],
+            matchups: vec![
+                PolicyMatchup::new(
+                    "greedy-coordinated-r2--builder-defender-r2",
+                    PolicyId::GreedyCoordinatedR2,
+                    PolicyId::BuilderDefenderR2,
+                ),
+                PolicyMatchup::new(
+                    "greedy-coordinated-r2--logistics-builder-r2",
+                    PolicyId::GreedyCoordinatedR2,
+                    PolicyId::LogisticsBuilderR2,
+                ),
+            ],
+            bucket_policy: BucketPolicy::Flat(0),
+            gates: Vec::new(),
+        }
+    }
+
+    fn zeroed_elapsed_tsv(dir: &std::path::Path) -> String {
+        let text = std::fs::read_to_string(dir.join("matches.tsv")).expect("matches.tsv");
+        let mut records = parse_balance_tsv(&text).expect("parses");
+        for record in &mut records {
+            record.elapsed_ms = 0;
+        }
+        balance_records_to_tsv(&records)
+    }
+
+    #[test]
+    fn tiny_b4_run_archives_effects_for_every_candidate() {
+        let root =
+            std::env::temp_dir().join(format!("b4-e2e-test-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&root);
+        let plan = tiny_b4_plan("b4-tiny-e2e");
+        let (dir, crashes, config_failures, roster) =
+            run_b4_plan(&root, &plan, 2, Some("testcommit")).expect("runs end to end");
+        assert_eq!(crashes, 0);
+        assert_eq!(
+            config_failures, 0,
+            "pc-80 maps generate (map-regime, ADR-0018)"
+        );
+        assert_eq!(dir, root.join("balance").join("b4-tiny-e2e"));
+
+        // Every candidate has a paired-effect AND a side-effect block,
+        // and the map-regime arm carries its caveat.
+        let effects = std::fs::read_to_string(dir.join("effects.txt")).expect("effects.txt");
+        for candidate in ["attack-damage-25", "portal-count-80"] {
+            assert!(
+                effects.contains(&format!("## candidate {candidate}")),
+                "{candidate} paired-effect block"
+            );
+            assert!(
+                effects.contains("side-effects:"),
+                "{candidate} side-effect block"
+            );
+            assert!(
+                effects.contains("stability:"),
+                "{candidate} stability verdict"
+            );
+            assert!(effects.contains("bootstrap b4-map-clustered-bootstrap-v1 iterations=10000"));
+        }
+        assert!(effects.contains("MAP-REGIME variant"));
+        assert!(
+            effects.contains("full_roster:"),
+            "the pilot->Full bridge is recorded"
+        );
+        // 2 maps x 2 pairs per variant.
+        assert!(effects.contains("maps=1 units=2"));
+        // The archived roster of a 2-map tiny run cannot be stable (2/4
+        // decisive units cannot clear Wilson one-sided) — the honest
+        // outcome is the stop record.
+        assert!(roster.is_empty());
+        assert!(effects.contains("full_roster: EMPTY") || effects.contains("STOPPED:"));
+
+        // maps.tsv carries the variant dimension rows.
+        let maps = std::fs::read_to_string(dir.join("maps.tsv")).expect("maps.tsv");
+        assert!(maps.contains("default"));
+        assert!(maps.contains("portal-count-80"));
+
+        // hashes.txt includes the effects.txt content hash, matching an
+        // independent re-hash.
+        let hashes = std::fs::read_to_string(dir.join("hashes.txt")).expect("hashes.txt");
+        let expected = format!(
+            "blake3:{}  effects.txt",
+            arena_replay::canon::hex(blake3::hash(effects.as_bytes()).as_bytes())
+        );
+        assert!(
+            hashes.lines().any(|l| l == expected),
+            "effects.txt hash folded"
+        );
+
+        // Worker independence through the same entry: 1 vs 2 workers give
+        // identical records modulo elapsed_ms (into a separate root).
+        let root2 = root.join("workers-1");
+        let (_, _, _, _) = run_b4_plan(&root2, &plan, 1, Some("testcommit")).expect("1 worker");
+        assert_eq!(
+            zeroed_elapsed_tsv(&dir),
+            zeroed_elapsed_tsv(&root2.join("balance").join("b4-tiny-e2e")),
+            "worker count moved the records"
+        );
+
+        // An existing archive directory is refused (history is never
+        // overwritten).
+        let refused = run_b4_plan(&root, &plan, 2, Some("testcommit"));
+        assert!(refused.is_err(), "second run into the same root refuses");
+        assert!(refused.unwrap_err().contains("never overwritten"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

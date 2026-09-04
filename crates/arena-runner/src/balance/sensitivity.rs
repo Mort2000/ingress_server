@@ -656,3 +656,333 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// The operator entry (runs, archives, appends effects.txt)
+// ---------------------------------------------------------------------
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::balance::execute::{BalanceRunResult, run_balance_batch_with};
+use crate::balance::pairs::{PairedResult, compute_paired_results, variant_summaries};
+use crate::run::MAX_WORKERS;
+
+/// Runs ONE B4 experiment end to end: executes the batch with the B4
+/// replay sampling, computes the paired integer results, archives the
+/// complete section-12 artifact set into a NEW
+/// `runs/balance/<experiment-id>/` directory, renders the ADR-0018
+/// `effects.txt` over the archived maps and folds its content hash into
+/// `hashes.txt`. Returns the archive directory, the crash and
+/// config-failure counts (the exit-status inputs) and the derived Full
+/// roster (empty for interaction plans).
+pub fn run_b4_plan(
+    output_root: &Path,
+    plan: &ExperimentPlan,
+    workers: usize,
+    base_commit: Option<&str>,
+) -> Result<(PathBuf, u64, u64, Vec<String>), String> {
+    println!(
+        "balance-b4: {} — {} variants x {} matchups x {} maps x 2 legs = {} matches",
+        plan.experiment_id,
+        plan.variants.len(),
+        plan.matchups.len(),
+        plan.map_count,
+        plan.variants.len() * plan.matchups.len() * plan.map_count as usize * 2
+    );
+    let run: BalanceRunResult = run_balance_batch_with(
+        plan,
+        workers,
+        &crate::balance::execute::default_cell_setup,
+        &b4_replay_sample,
+    )
+    .map_err(|e| e.to_string())?;
+    println!(
+        "balance-b4: {} done in {:?} ({} crashes, {} config failures, {} replays)",
+        plan.experiment_id,
+        std::time::Duration::from_millis(run.elapsed_ms as u64),
+        run.crashes(),
+        run.config_failures,
+        run.replays.len()
+    );
+    let pairs = compute_paired_results(plan, &run.records).map_err(|e| e.to_string())?;
+    let summaries = variant_summaries(plan, &pairs);
+    let dir = crate::balance::archive::write_balance_artifacts(
+        output_root,
+        plan,
+        &run,
+        &pairs,
+        &summaries,
+        base_commit,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // The effects document reads the archived maps (geometry strata over
+    // the archive's own variant dimension).
+    let archived = crate::balance::effects::load_archived_maps(&dir)?;
+    let text = crate::balance::effects::effects_text(plan, &run.records, &pairs, &archived);
+    std::fs::write(dir.join("effects.txt"), &text).map_err(|e| e.to_string())?;
+    let hashes_path = dir.join("hashes.txt");
+    let mut hashes = std::fs::read_to_string(&hashes_path).map_err(|e| e.to_string())?;
+    hashes.push_str(&format!(
+        "blake3:{}  effects.txt\n",
+        arena_replay::canon::hex(blake3::hash(text.as_bytes()).as_bytes())
+    ));
+    std::fs::write(&hashes_path, &hashes).map_err(|e| e.to_string())?;
+
+    let roster = if plan.stage == Stage::Sensitivity {
+        let verdicts = crate::balance::effects::stability(plan, &pairs, &run.records);
+        crate::balance::effects::stable_candidates(&verdicts)
+    } else {
+        Vec::new()
+    };
+    Ok((dir, run.crashes(), run.config_failures, roster))
+}
+
+/// Reads a finished run's `pairs.tsv` rows (the committed-report path:
+/// per-match records re-load through `parse_balance_tsv`).
+pub fn read_pairs_tsv(dir: &Path) -> Result<Vec<PairedResult>, String> {
+    let text = std::fs::read_to_string(dir.join("pairs.tsv")).map_err(|e| e.to_string())?;
+    crate::balance::pairs::parse_pairs_tsv(&text)
+}
+
+/// The frozen interaction arm rule (ADR-0018): of a factor's stable
+/// arms, the one with the larger |pooled margin_delta sum| (computed
+/// from the source run's own pairs rows); ties break to the
+/// lexicographically smaller variant_id — mechanical, auditable.
+fn arm_of_factor(
+    field: &str,
+    roster: &[String],
+    margin_sums: &BTreeMap<String, i128>,
+) -> Option<&'static B4Candidate> {
+    let mut arms: Vec<&B4Candidate> = B4_CANDIDATES
+        .iter()
+        .filter(|c| c.field == field && roster.iter().any(|r| r == c.variant_id))
+        .collect();
+    match arms.len() {
+        0 => None,
+        1 => Some(arms.remove(0)),
+        _ => {
+            arms.sort_by(|a, b| {
+                let magnitude = |candidate: &B4Candidate| {
+                    margin_sums
+                        .get(candidate.variant_id)
+                        .copied()
+                        .unwrap_or(0)
+                        .abs()
+                };
+                magnitude(b)
+                    .cmp(&magnitude(a))
+                    .then_with(|| a.variant_id.cmp(b.variant_id))
+            });
+            Some(arms.remove(0))
+        }
+    }
+}
+
+/// The pooled |margin_delta| sums per variant of a finished run.
+fn margin_delta_sums(pairs: &[PairedResult]) -> BTreeMap<String, i128> {
+    let mut sums: BTreeMap<String, i128> = BTreeMap::new();
+    for row in pairs {
+        *sums.entry(row.variant_id.clone()).or_default() += row.margin_delta_vs_base;
+    }
+    sums
+}
+
+/// Builds the frozen interaction plans (plan 7.4 priority order) whose
+/// BOTH factors carry a stable arm in `roster`.
+pub fn b4_interaction_plans(
+    roster: &[String],
+    pairs: &[PairedResult],
+    map_count: u32,
+) -> Vec<ExperimentPlan> {
+    let sums = margin_delta_sums(pairs);
+    let mut plans = Vec::new();
+    for (a_field, b_field) in B4_INTERACTION_PRIORITY {
+        let (Some(a), Some(b)) = (
+            arm_of_factor(a_field, roster, &sums),
+            arm_of_factor(b_field, roster, &sums),
+        ) else {
+            continue;
+        };
+        let id = interaction_experiment_id(a.field, b.field);
+        plans.push(b4_interaction_plan(a, b, map_count, &id));
+    }
+    plans
+}
+
+/// What `balance-b4` runs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum B4Mode {
+    /// The official pilot (100 Development maps).
+    Pilot,
+    /// The scratch pilot (`-pilot-r0`, 8 maps — exploratory only).
+    ScratchPilot,
+    /// Full: derive the stable roster from the pilot archive, then run
+    /// Development 300 + Validation 100.
+    Full { pilot_dir: PathBuf },
+    /// Interactions: derive the roster from the full archive(s) and run
+    /// the plan-7.4 priority pairs whose factors are both stable.
+    Interaction { full_dirs: Vec<PathBuf> },
+}
+
+/// The pilot archive's own stable-roster derivation (the only bridge).
+fn roster_of(dir: &Path) -> Result<Vec<String>, String> {
+    let manifest = std::fs::read_to_string(dir.join("manifest.txt")).map_err(|e| e.to_string())?;
+    let experiment_id = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("experiment_id="))
+        .ok_or("manifest carries no experiment_id")?
+        .to_string();
+    let maps: u32 = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("maps_used="))
+        .and_then(|v| v.parse().ok())
+        .ok_or("manifest carries no maps_used")?;
+    let plan = b4_pilot_plan(maps, &experiment_id);
+    let pairs = read_pairs_tsv(dir)?;
+    let records = {
+        let text = std::fs::read_to_string(dir.join("matches.tsv")).map_err(|e| e.to_string())?;
+        crate::balance::record::parse_balance_tsv(&text)?
+    };
+    let verdicts = crate::balance::effects::stability(&plan, &pairs, &records);
+    for verdict in &verdicts {
+        if verdict.stable {
+            println!(
+                "balance-b4: {} STABLE {} (direction {}, median {})",
+                experiment_id, verdict.variant_id, verdict.direction, verdict.margin_median
+            );
+        }
+    }
+    Ok(crate::balance::effects::stable_candidates(&verdicts))
+}
+
+/// `arena-runner balance-b4 <output-root> [base-commit]
+/// [--pilot | --full <pilot-dir> | --interaction <full-dir,...>]`: runs
+/// the frozen B4 experiments into NEW `runs/balance/<experiment-id>/`
+/// directories. Returns the process exit code (0 iff every archived run
+/// has zero crashes and zero config failures — any failure keeps its
+/// records but fails the run, never silently skipped).
+pub fn run_b4(output_root: &Path, base_commit: Option<&str>, mode: B4Mode) -> i32 {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(MAX_WORKERS);
+    let plans: Vec<ExperimentPlan> = match &mode {
+        B4Mode::Pilot => vec![b4_pilot_plan(B4_PILOT_MAP_COUNT, B4_PILOT_EXPERIMENT_ID)],
+        B4Mode::ScratchPilot => vec![b4_pilot_plan(
+            B4_PILOT_SCRATCH_MAP_COUNT,
+            &format!("{B4_PILOT_EXPERIMENT_ID}-pilot-r0"),
+        )],
+        B4Mode::Full { pilot_dir } => {
+            let roster = match roster_of(pilot_dir) {
+                Ok(roster) => roster,
+                Err(error) => {
+                    eprintln!("balance-b4: {error}");
+                    return 1;
+                }
+            };
+            if roster.is_empty() {
+                eprintln!(
+                    "balance-b4: no stable candidate in {} — record the stops and close B4 (plan 7.1 else-branch)",
+                    pilot_dir.display()
+                );
+                return 0;
+            }
+            println!(
+                "balance-b4: full roster from {}: {roster:?}",
+                pilot_dir.display()
+            );
+            let dev = match b4_full_plan(
+                SeedSet::Development,
+                B4_FULL_DEV_MAP_COUNT,
+                &roster,
+                B4_FULL_DEV_EXPERIMENT_ID,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    eprintln!("balance-b4: {error}");
+                    return 1;
+                }
+            };
+            let val = match b4_full_plan(
+                SeedSet::Validation,
+                B4_FULL_VAL_MAP_COUNT,
+                &roster,
+                B4_FULL_VAL_EXPERIMENT_ID,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    eprintln!("balance-b4: {error}");
+                    return 1;
+                }
+            };
+            vec![dev, val]
+        }
+        B4Mode::Interaction { full_dirs } => {
+            let mut roster = Vec::new();
+            let mut pairs = Vec::new();
+            for dir in full_dirs {
+                match roster_of(dir) {
+                    Ok(mut arms) => {
+                        roster.append(&mut arms);
+                        match read_pairs_tsv(dir) {
+                            Ok(mut rows) => pairs.append(&mut rows),
+                            Err(error) => {
+                                eprintln!("balance-b4: {error}");
+                                return 1;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("balance-b4: {error}");
+                        return 1;
+                    }
+                }
+            }
+            let plans = b4_interaction_plans(&roster, &pairs, B4_PILOT_MAP_COUNT);
+            if plans.is_empty() {
+                eprintln!(
+                    "balance-b4: no plan-7.4 factor pair has two stable arms — nothing to run"
+                );
+                return 0;
+            }
+            println!(
+                "balance-b4: {} interaction plan(s) from roster {roster:?}",
+                plans.len()
+            );
+            plans
+        }
+    };
+    for plan in &plans {
+        if let Err(error) = plan.validate() {
+            eprintln!("balance-b4: {error}");
+            return 1;
+        }
+    }
+
+    let mut clean = true;
+    for plan in &plans {
+        match run_b4_plan(output_root, plan, workers, base_commit) {
+            Ok((dir, crashes, config_failures, roster)) => {
+                println!(
+                    "balance-b4: archived {} (full roster: {roster:?})",
+                    dir.display()
+                );
+                if crashes > 0 || config_failures > 0 {
+                    eprintln!(
+                        "balance-b4: {} recorded {crashes} crashes and {config_failures} config failures — inspect {}",
+                        plan.experiment_id,
+                        dir.display()
+                    );
+                    clean = false;
+                }
+            }
+            Err(error) => {
+                eprintln!("balance-b4: {error}");
+                return 1;
+            }
+        }
+    }
+    i32::from(!clean)
+}

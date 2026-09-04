@@ -330,6 +330,55 @@ fn main() {
                 pilot,
             ));
         }
+        Some("balance-b4") => {
+            // B4 parameter sensitivity (docs/ai-balance-plan.md sections
+            // 7.3/7.4/8.3, ADR-0018): the frozen 13-candidate single-grid
+            // pilot (default), the scratch pilot, the Full runs over the
+            // stability-derived roster, and the plan-7.4 interaction
+            // experiments — each archived with the ADR-0018 effects.txt.
+            let mut rest = args.iter().skip(2).cloned();
+            let output_root = std::path::PathBuf::from(
+                rest.next()
+                    .filter(|s| !s.starts_with("--"))
+                    .unwrap_or_else(|| "runs".to_string()),
+            );
+            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
+            let rest: Vec<String> = rest.collect();
+            let mode = if rest.iter().any(|s| s == "--pilot") {
+                arena_runner::balance::sensitivity::B4Mode::ScratchPilot
+            } else if let Some(index) = rest.iter().position(|s| s == "--full") {
+                match rest.get(index + 1) {
+                    Some(dir) => arena_runner::balance::sensitivity::B4Mode::Full {
+                        pilot_dir: std::path::PathBuf::from(dir),
+                    },
+                    None => {
+                        eprintln!(
+                            "usage: arena-runner balance-b4 <output-root> [base-commit] [--pilot | --full <pilot-dir> | --interaction <full-dir,...>]"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            } else if let Some(index) = rest.iter().position(|s| s == "--interaction") {
+                match rest.get(index + 1) {
+                    Some(dirs) => arena_runner::balance::sensitivity::B4Mode::Interaction {
+                        full_dirs: dirs.split(',').map(std::path::PathBuf::from).collect(),
+                    },
+                    None => {
+                        eprintln!(
+                            "usage: arena-runner balance-b4 <output-root> [base-commit] [--pilot | --full <pilot-dir> | --interaction <full-dir,...>]"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                arena_runner::balance::sensitivity::B4Mode::Pilot
+            };
+            std::process::exit(arena_runner::balance::sensitivity::run_b4(
+                &output_root,
+                base_commit.as_deref(),
+                mode,
+            ));
+        }
         Some("balance-drop-reasons") => {
             // B3 per-reason Drop breakdown over a balance archive: verified
             // offline re-execution of every in-scope row (plan section 16

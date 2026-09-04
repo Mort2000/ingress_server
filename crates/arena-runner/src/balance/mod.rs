@@ -11,6 +11,7 @@
 pub mod ablation;
 pub mod analysis;
 pub mod archive;
+pub mod effects;
 pub mod execute;
 pub mod pairs;
 pub mod plan;
