@@ -11,14 +11,21 @@
 //! B2 (ADR-0016) adds the six competitive R2 policies of plan section 6.1
 //! plus the DIAGNOSTIC `idle` opponent — fresh tags, version `r2.0`,
 //! fresh stream kind-tag bytes 6..=12 — with their parameters recorded in
-//! full-value canonical form ([`PolicyParameters::tag`]). The m6 mapping
-//! stays total and injective over [`PolicyId::MIRRORED`]; R2 policies
-//! have no `BotKind` ([`PolicyId::bot_kind`] is `Option`).
+//! full-value canonical form ([`PolicyParameters::tag`]). B3 (ADR-0017)
+//! appends the three DIAGNOSTIC ablation arms (version `b3.0` for the
+//! Hybrid arms, `r2.0` + stream kind-tag 13 for the canonical arm). The
+//! m6 mapping stays total and injective over [`PolicyId::MIRRORED`]; R2
+//! and ablation policies have no `BotKind` ([`PolicyId::bot_kind`] is
+//! `Option`).
 
 use arena_core::config::GameConfig;
 use arena_core::map::MapDefinition;
 use arena_core::types::Faction;
 
+use crate::ablation::{
+    B3_VERSION, GreedyCoordinatedCanonical, HybridAblation, HybridAblationParams,
+    canonical_core_params,
+};
 use crate::bot::{BOT_VERSION, BotKind, make_bot};
 use crate::r2::adaptive_hybrid_r2::{AdaptiveHybridParams, AdaptiveHybridR2};
 use crate::r2::blocker_builder::{BlockerBuilder, BlockerBuilderParams};
@@ -29,10 +36,11 @@ use crate::r2::greedy_coordinated::GreedyCoordinated;
 use crate::r2::idle::IdlePolicy;
 use crate::r2::logistics_builder::{LogisticsBuilder, LogisticsBuilderParams};
 
-/// A strategy's identity in a balance experiment (ADR-0015/0016). The
+/// A strategy's identity in a balance experiment (ADR-0015/0016/0017). The
 /// five `MIRRORED` ids map one-to-one onto the frozen m6.0 baselines
 /// (total and injective, pinned by the tests); the seven R2 ids are the
-/// six plan-6.1 policies plus the diagnostic idle opponent.
+/// six plan-6.1 policies plus the diagnostic idle opponent; the three
+/// ablation ids are the B3 measurement arms (ADR-0017).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PolicyId {
     Random,
@@ -47,6 +55,9 @@ pub enum PolicyId {
     BlockerBuilderR2,
     AdaptiveHybridR2,
     Idle,
+    HybridBuilderOnly,
+    HybridBuilderAttack,
+    GreedyCoordinatedCanonical,
 }
 
 impl PolicyId {
@@ -72,8 +83,15 @@ impl PolicyId {
         PolicyId::AdaptiveHybridR2,
     ];
 
-    /// The full B2 registry, declaration order.
-    pub const ALL: [PolicyId; 12] = [
+    /// The B3 ablation-arm registry (ADR-0017), declaration order.
+    pub const ABLATION: [PolicyId; 3] = [
+        PolicyId::HybridBuilderOnly,
+        PolicyId::HybridBuilderAttack,
+        PolicyId::GreedyCoordinatedCanonical,
+    ];
+
+    /// The full registry (B2 + B3), declaration order.
+    pub const ALL: [PolicyId; 15] = [
         PolicyId::Random,
         PolicyId::NearestPortal,
         PolicyId::GreedyField,
@@ -86,10 +104,14 @@ impl PolicyId {
         PolicyId::BlockerBuilderR2,
         PolicyId::AdaptiveHybridR2,
         PolicyId::Idle,
+        PolicyId::HybridBuilderOnly,
+        PolicyId::HybridBuilderAttack,
+        PolicyId::GreedyCoordinatedCanonical,
     ];
 
     /// Stable lowercase tag. The mirrored ids reuse the frozen
-    /// `BotKind::tag` strings; the R2 ids carry the plan section 6.1 tags.
+    /// `BotKind::tag` strings; the R2 ids carry the plan section 6.1 tags;
+    /// the ablation ids carry the ADR-0017 arm tags.
     pub fn tag(self) -> &'static str {
         match self {
             PolicyId::Random => "random",
@@ -104,6 +126,9 @@ impl PolicyId {
             PolicyId::BlockerBuilderR2 => "blocker-builder-r2",
             PolicyId::AdaptiveHybridR2 => "adaptive-hybrid-r2",
             PolicyId::Idle => "idle",
+            PolicyId::HybridBuilderOnly => "hybrid-builder-only",
+            PolicyId::HybridBuilderAttack => "hybrid-builder-attack",
+            PolicyId::GreedyCoordinatedCanonical => "greedy-coordinated-canonical",
         }
     }
 
@@ -122,6 +147,9 @@ impl PolicyId {
             "blocker-builder-r2" => Some(PolicyId::BlockerBuilderR2),
             "adaptive-hybrid-r2" => Some(PolicyId::AdaptiveHybridR2),
             "idle" => Some(PolicyId::Idle),
+            "hybrid-builder-only" => Some(PolicyId::HybridBuilderOnly),
+            "hybrid-builder-attack" => Some(PolicyId::HybridBuilderAttack),
+            "greedy-coordinated-canonical" => Some(PolicyId::GreedyCoordinatedCanonical),
             _ => None,
         }
     }
@@ -169,6 +197,9 @@ impl PolicyId {
             PolicyId::BlockerBuilderR2 => PolicyFamily::Blocker,
             PolicyId::AdaptiveHybridR2 => PolicyFamily::AdaptiveHybrid,
             PolicyId::Idle => PolicyFamily::Idle,
+            PolicyId::HybridBuilderOnly => PolicyFamily::Ablation,
+            PolicyId::HybridBuilderAttack => PolicyFamily::Ablation,
+            PolicyId::GreedyCoordinatedCanonical => PolicyFamily::Ablation,
         }
     }
 
@@ -216,6 +247,35 @@ impl PolicyId {
             parameters,
         }
     }
+
+    /// The default B3 ablation-arm spec of an ABLATION id (ADR-0017):
+    /// version `b3.0` for the two Hybrid arms, `r2.0` for the canonical
+    /// arm (it IS the r2 core); family always `ablation` (diagnostic).
+    pub fn ablation_spec(self) -> PolicySpec {
+        let parameters = match self {
+            PolicyId::HybridBuilderOnly => {
+                PolicyParameters::HybridAblation(HybridAblationParams::builder_only())
+            }
+            PolicyId::HybridBuilderAttack => {
+                PolicyParameters::HybridAblation(HybridAblationParams::builder_attack())
+            }
+            PolicyId::GreedyCoordinatedCanonical => {
+                PolicyParameters::GreedyCoordinated(canonical_core_params())
+            }
+            other => {
+                unreachable!("{} is not an ablation id (use ABLATION)", other.tag())
+            }
+        };
+        PolicySpec {
+            policy_id: self,
+            family: self.family(),
+            version: match self {
+                PolicyId::GreedyCoordinatedCanonical => crate::r2::R2_VERSION,
+                _ => B3_VERSION,
+            },
+            parameters,
+        }
+    }
 }
 
 /// The plan section 6.1 strategy families.
@@ -241,11 +301,14 @@ pub enum PolicyFamily {
     Blocker,
     /// Diagnostic: the plan-10.1 idle opponent (B2).
     Idle,
+    /// Diagnostic: the B3 default-config ablation arms (ADR-0017) —
+    /// measurement policies never enter competitive summaries.
+    Ablation,
 }
 
 impl PolicyFamily {
     /// The full family registry, declaration order.
-    pub const ALL: [PolicyFamily; 10] = [
+    pub const ALL: [PolicyFamily; 11] = [
         PolicyFamily::Random,
         PolicyFamily::Nearest,
         PolicyFamily::AnchorDestroyer,
@@ -256,6 +319,7 @@ impl PolicyFamily {
         PolicyFamily::KeyRunner,
         PolicyFamily::Blocker,
         PolicyFamily::Idle,
+        PolicyFamily::Ablation,
     ];
 
     /// Stable lowercase tag for artifacts and record round-trips.
@@ -271,6 +335,7 @@ impl PolicyFamily {
             PolicyFamily::KeyRunner => "key-runner",
             PolicyFamily::Blocker => "blocker",
             PolicyFamily::Idle => "idle",
+            PolicyFamily::Ablation => "ablation",
         }
     }
 
@@ -287,6 +352,7 @@ impl PolicyFamily {
             "key-runner" => Some(PolicyFamily::KeyRunner),
             "blocker" => Some(PolicyFamily::Blocker),
             "idle" => Some(PolicyFamily::Idle),
+            "ablation" => Some(PolicyFamily::Ablation),
             _ => None,
         }
     }
@@ -300,6 +366,7 @@ impl PolicyFamily {
                 | PolicyFamily::Nearest
                 | PolicyFamily::AnchorDestroyer
                 | PolicyFamily::Idle
+                | PolicyFamily::Ablation
         )
     }
 }
@@ -332,6 +399,10 @@ pub enum PolicyParameters {
     BlockerBuilder(BlockerBuilderParams),
     /// `adaptive-hybrid-r2`: core + phase/score/threat role switching.
     AdaptiveHybridR2(AdaptiveHybridParams),
+    /// The B3 Hybrid ablation arms (`hybrid-builder-only` /
+    /// `hybrid-builder-attack`, ADR-0017): the frozen round body minus the
+    /// toggled-off role branches.
+    HybridAblation(HybridAblationParams),
     /// The diagnostic idle opponent: no parameters.
     Idle,
 }
@@ -356,6 +427,7 @@ impl PolicyParameters {
             }
             PolicyParameters::BlockerBuilder(p) => format!("blocker-builder-r2|{}", p.tag()),
             PolicyParameters::AdaptiveHybridR2(p) => format!("adaptive-hybrid-r2|{}", p.tag()),
+            PolicyParameters::HybridAblation(p) => format!("hybrid-ablation|{}", p.tag()),
         }
     }
 
@@ -387,6 +459,9 @@ impl PolicyParameters {
             }
             "adaptive-hybrid-r2" => {
                 AdaptiveHybridParams::from_tag(body).map(PolicyParameters::AdaptiveHybridR2)
+            }
+            "hybrid-ablation" => {
+                HybridAblationParams::from_tag(body).map(PolicyParameters::HybridAblation)
             }
             _ => None,
         }
@@ -420,6 +495,9 @@ impl PolicySpec {
             PolicyParameters::Idle => {
                 self.version == crate::r2::R2_VERSION && self.policy_id == PolicyId::Idle
             }
+            PolicyParameters::HybridAblation(_) => {
+                self.version == B3_VERSION && self.policy_id.bot_kind().is_none()
+            }
             PolicyParameters::GreedyCoordinated(_)
             | PolicyParameters::BuilderDefender(_)
             | PolicyParameters::BuilderDisruptor(_)
@@ -446,15 +524,39 @@ impl PolicySpec {
             ));
         }
         // Parameter-set identity: each R2 parameters variant exists for
-        // exactly its own policy id.
+        // exactly its own policy id (the ablation canonical arm shares
+        // the r2 core's parameter variant — its whole point — and the
+        // Hybrid ablation variant exists for exactly the two Hybrid
+        // arms).
         let matches_id = match (self.policy_id, &self.parameters) {
             (PolicyId::GreedyCoordinatedR2, PolicyParameters::GreedyCoordinated(_))
+            | (
+                PolicyId::GreedyCoordinatedCanonical,
+                PolicyParameters::GreedyCoordinated(_),
+            )
             | (PolicyId::BuilderDefenderR2, PolicyParameters::BuilderDefender(_))
             | (PolicyId::BuilderDisruptorR2, PolicyParameters::BuilderDisruptor(_))
             | (PolicyId::LogisticsBuilderR2, PolicyParameters::LogisticsBuilder(_))
             | (PolicyId::BlockerBuilderR2, PolicyParameters::BlockerBuilder(_))
             | (PolicyId::AdaptiveHybridR2, PolicyParameters::AdaptiveHybridR2(_))
             | (PolicyId::Idle, PolicyParameters::Idle) => true,
+            // The two Hybrid arms share ONE parameters variant: the roles
+            // value inside it is the arm — a builder-only id carrying the
+            // builder-attack roles would be a mislabeled policy, refused.
+            (
+                PolicyId::HybridBuilderOnly,
+                PolicyParameters::HybridAblation(HybridAblationParams {
+                    roles: crate::ablation::HybridAblationRoles::BuilderOnly,
+                    ..
+                }),
+            )
+            | (
+                PolicyId::HybridBuilderAttack,
+                PolicyParameters::HybridAblation(HybridAblationParams {
+                    roles: crate::ablation::HybridAblationRoles::BuilderAttack,
+                    ..
+                }),
+            ) => true,
             (id, PolicyParameters::FrozenM6) => id.bot_kind().is_some(),
             _ => false,
         };
@@ -487,6 +589,11 @@ pub fn r2_specs() -> Vec<PolicySpec> {
         .collect()
 }
 
+/// The three B3 ablation-arm specs (ADR-0017), declaration order.
+pub fn ablation_specs() -> Vec<PolicySpec> {
+    PolicyId::ABLATION.iter().map(|id| id.ablation_spec()).collect()
+}
+
 /// Constructs one faction's player for a policy spec: a frozen m6.0
 /// baseline delegates 1:1 to the untouched `make_bot` (the executable
 /// behavior pin is the lockstep test below); an R2 policy is built from
@@ -514,6 +621,18 @@ pub fn make_policy_player(
             cfg,
             map,
         )),
+        // The canonical ablation arm shares the r2 core's parameter
+        // variant, so its (more specific) arm must precede the general
+        // r2 construction arm.
+        (
+            PolicyId::GreedyCoordinatedCanonical,
+            PolicyParameters::GreedyCoordinated(params),
+        ) => crate::r2::PolicyPlayer::R2(Box::new(GreedyCoordinatedCanonical::new(
+            faction,
+            bot_seed,
+            cfg,
+            *params,
+        ))),
         (_, PolicyParameters::GreedyCoordinated(params)) => crate::r2::PolicyPlayer::R2(Box::new(
             GreedyCoordinated::new(faction, bot_seed, cfg, *params),
         )),
@@ -532,6 +651,15 @@ pub fn make_policy_player(
         (_, PolicyParameters::AdaptiveHybridR2(params)) => crate::r2::PolicyPlayer::R2(Box::new(
             AdaptiveHybridR2::new(faction, bot_seed, cfg, *params),
         )),
+        (_, PolicyParameters::HybridAblation(params)) => {
+            crate::r2::PolicyPlayer::R2(Box::new(HybridAblation::new(
+                faction,
+                bot_seed,
+                cfg,
+                map,
+                *params,
+            )))
+        }
         (_, PolicyParameters::Idle) => crate::r2::PolicyPlayer::R2(Box::new(IdlePolicy)),
     }
 }
@@ -577,6 +705,23 @@ mod tests {
         }
         assert_eq!(PolicyId::Idle.r2_spec().family, PolicyFamily::Idle);
         assert!(PolicyFamily::Idle.is_diagnostic());
+        // B3 (ADR-0017): the three ablation arms register with their own
+        // versions and validate.
+        let ablation = ablation_specs();
+        assert_eq!(ablation.len(), 3);
+        for spec in &ablation {
+            assert_eq!(spec.validate(), Ok(()));
+            assert!(spec.family.is_diagnostic());
+            assert!(
+                spec.policy_id == PolicyId::GreedyCoordinatedCanonical
+                    || spec.version == B3_VERSION,
+                "hybrid arms are b3.0; the canonical arm is r2.0"
+            );
+        }
+        assert_eq!(
+            PolicyId::GreedyCoordinatedCanonical.ablation_spec().version,
+            crate::r2::R2_VERSION
+        );
     }
 
     // (b) tag/from_tag round-trips for every PolicyId, PolicyFamily and
@@ -584,6 +729,11 @@ mod tests {
     // round-trip with identity sensitivity.
     #[test]
     fn tags_round_trip_for_every_id_family_and_parameters() {
+        assert_eq!(PolicyId::ALL.len(), 15, "5 m6 mirrors + 7 R2 + 3 ablation");
+        assert_eq!(PolicyId::MIRRORED.len(), 5, "the m6 mirror registry is untouched");
+        assert_eq!(PolicyId::R2_COMPETITIVE.len(), 6, "the B2 registry is untouched");
+        assert_eq!(PolicyId::ABLATION.len(), 3);
+        assert_eq!(PolicyFamily::ALL.len(), 11);
         for id in PolicyId::ALL {
             assert_eq!(PolicyId::from_tag(id.tag()), Some(id));
         }
@@ -594,6 +744,10 @@ mod tests {
         assert_eq!(
             PolicyFamily::from_tag("field-builder"),
             Some(PolicyFamily::FieldBuilder)
+        );
+        assert_eq!(
+            PolicyFamily::from_tag("ablation"),
+            Some(PolicyFamily::Ablation)
         );
         assert_eq!(
             PolicyParameters::from_tag(&PolicyParameters::FrozenM6.tag()),
@@ -608,7 +762,8 @@ mod tests {
         tags.sort_unstable();
         tags.dedup();
         assert_eq!(tags.len(), PolicyId::ALL.len(), "policy tags distinct");
-        // Diagnostic families are exactly the three m6 probes plus Idle.
+        // Diagnostic families are exactly the three m6 probes, Idle and
+        // the B3 ablation family (ADR-0017).
         let diagnostic: Vec<PolicyFamily> = PolicyFamily::ALL
             .iter()
             .copied()
@@ -620,7 +775,8 @@ mod tests {
                 PolicyFamily::Random,
                 PolicyFamily::Nearest,
                 PolicyFamily::AnchorDestroyer,
-                PolicyFamily::Idle
+                PolicyFamily::Idle,
+                PolicyFamily::Ablation
             ]
         );
         // Six competitive families are represented by the R2 registry.
@@ -712,6 +868,13 @@ mod tests {
             assert_eq!(id.tag(), stream.tag());
         }
         assert_eq!(PolicyId::Idle.tag(), crate::r2::rng::R2Stream::Idle.tag());
+        // The canonical ablation arm owns stream kind tag 13 (ADR-0017);
+        // the two Hybrid arms draw no randomness and own no stream.
+        assert_eq!(
+            PolicyId::GreedyCoordinatedCanonical.tag(),
+            crate::r2::rng::R2Stream::GreedyCoordinatedCanonical.tag()
+        );
+        assert_eq!(crate::r2::rng::R2Stream::GreedyCoordinatedCanonical.kind_tag(), 13);
     }
 
     // A spec with the frozen-m6 parameters but a non-m6 version (or a

@@ -56,7 +56,7 @@ fn r2_stream_tags_are_exactly_6_to_12_and_disjoint_from_m6_kinds() {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(tags.len(), sorted.len(), "stream tags are distinct");
-    assert_eq!(sorted, vec![6, 7, 8, 9, 10, 11, 12]);
+    assert_eq!(sorted, vec![6, 7, 8, 9, 10, 11, 12, 13]);
     // No stream tag collides with any frozen m6 kind tag (1..=5).
     for kind in BotKind::ALL {
         assert!(
@@ -64,8 +64,9 @@ fn r2_stream_tags_are_exactly_6_to_12_and_disjoint_from_m6_kinds() {
             "r2 namespace must stay disjoint from the m6 kind {kind:?}"
         );
     }
-    // One registry, seven streams: the six plan-6.1 policies plus idle.
-    assert_eq!(R2Stream::ALL.len(), 7);
+    // One registry, eight streams: the six plan-6.1 policies, idle, and
+    // the B3 canonical ablation arm (kind tag 13, ADR-0017).
+    assert_eq!(R2Stream::ALL.len(), 8);
 }
 
 #[test]
@@ -1531,7 +1532,8 @@ fn near_equal_sampling_is_seed_sensitive_across_streams() {
             total += 1;
         }
     }
-    assert_eq!(total, 112);
+    // 8 streams (B3 appended the canonical arm, ADR-0017) x 16 seeds.
+    assert_eq!(total, 128);
     assert!(
         picks_of_first > 0 && picks_of_first < total,
         "both near-equal candidates must be reachable (first picked {picks_of_first}/{total})"

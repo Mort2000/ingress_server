@@ -20,9 +20,9 @@ use arena_core::types::Faction;
 
 use crate::rng::{BOT_RNG_DOMAIN, BOT_RNG_VERSION, faction_tag};
 
-/// One R2 policy's RNG stream identity: the six plan-6.1 policies plus the
-/// diagnostic idle opponent. Declaration order freezes the kind-tag bytes
-/// 6..=12.
+/// One R2 policy's RNG stream identity: the six plan-6.1 policies, the
+/// diagnostic idle opponent, and the B3 canonical ablation arm
+/// (ADR-0017). Declaration order freezes the kind-tag bytes 6..=13.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum R2Stream {
     /// `greedy-coordinated-r2` (kind tag 6).
@@ -40,11 +40,16 @@ pub enum R2Stream {
     /// The diagnostic idle policy (kind tag 12) — a first-class recorded
     /// opponent for the plan-10.1 idle gate, never a competitive policy.
     Idle,
+    /// The diagnostic `greedy-coordinated-canonical` ablation arm (kind
+    /// tag 13, ADR-0017) — the r2 core configured for canonical
+    /// deterministic spawns; the first B3 stream under the "append bytes
+    /// >= 13" freeze rule.
+    GreedyCoordinatedCanonical,
 }
 
 impl R2Stream {
     /// The full registry, kind-tag declaration order.
-    pub const ALL: [R2Stream; 7] = [
+    pub const ALL: [R2Stream; 8] = [
         R2Stream::GreedyCoordinated,
         R2Stream::BuilderDefender,
         R2Stream::BuilderDisruptor,
@@ -52,6 +57,7 @@ impl R2Stream {
         R2Stream::BlockerBuilder,
         R2Stream::AdaptiveHybrid,
         R2Stream::Idle,
+        R2Stream::GreedyCoordinatedCanonical,
     ];
 
     /// Stable lowercase tag — the plan section 6.1 policy tag of the policy
@@ -65,6 +71,7 @@ impl R2Stream {
             R2Stream::BlockerBuilder => "blocker-builder-r2",
             R2Stream::AdaptiveHybrid => "adaptive-hybrid-r2",
             R2Stream::Idle => "idle",
+            R2Stream::GreedyCoordinatedCanonical => "greedy-coordinated-canonical",
         }
     }
 
@@ -78,11 +85,12 @@ impl R2Stream {
             "blocker-builder-r2" => Some(R2Stream::BlockerBuilder),
             "adaptive-hybrid-r2" => Some(R2Stream::AdaptiveHybrid),
             "idle" => Some(R2Stream::Idle),
+            "greedy-coordinated-canonical" => Some(R2Stream::GreedyCoordinatedCanonical),
             _ => None,
         }
     }
 
-    /// The stream's kind-tag byte in the frozen D53 key shape (6..=12,
+    /// The stream's kind-tag byte in the frozen D53 key shape (6..=13,
     /// frozen in declaration order).
     pub fn kind_tag(self) -> u8 {
         match self {
@@ -93,6 +101,7 @@ impl R2Stream {
             R2Stream::BlockerBuilder => 10,
             R2Stream::AdaptiveHybrid => 11,
             R2Stream::Idle => 12,
+            R2Stream::GreedyCoordinatedCanonical => 13,
         }
     }
 }
@@ -162,8 +171,9 @@ mod tests {
             assert_eq!(R2Stream::from_tag(stream.tag()), Some(stream));
         }
         assert_eq!(R2Stream::from_tag("greedy-coordinated"), None);
-        // Declaration order is the kind-tag order 6..=12.
+        // Declaration order is the kind-tag order 6..=13 (the B3 canonical
+        // ablation arm appended byte 13, ADR-0017).
         let tags: Vec<u8> = R2Stream::ALL.iter().map(|s| s.kind_tag()).collect();
-        assert_eq!(tags, vec![6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(tags, vec![6, 7, 8, 9, 10, 11, 12, 13]);
     }
 }

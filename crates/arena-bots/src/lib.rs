@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ablation;
 pub mod bot;
 pub mod common;
 pub mod destroy_anchor;
@@ -18,9 +19,13 @@ pub mod r2;
 pub mod random;
 pub mod rng;
 
+pub use ablation::{
+    B3_VERSION, GreedyCoordinatedCanonical, HybridAblation, HybridAblationParams,
+    HybridAblationRoles, canonical_core_params,
+};
 pub use bot::{BOT_VERSION, Bot, BotKind, BotStrategy, make_bot};
 pub use policy::{
-    PolicyFamily, PolicyId, PolicyParameters, PolicySpec, frozen_m6_specs, make_policy_player,
-    r2_specs,
+    PolicyFamily, PolicyId, PolicyParameters, PolicySpec, ablation_specs, frozen_m6_specs,
+    make_policy_player, r2_specs,
 };
 pub use rng::BotRng;
