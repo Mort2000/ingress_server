@@ -400,6 +400,45 @@ pub fn b4_replay_sample(cell: &MatchCell) -> bool {
     cell.leg == 0 && cell.map_index < B4_REPLAY_MAPS
 }
 
+/// The CLI MODE suffix of an archived plan's reproduce line: a bare
+/// `balance-b4 runs <commit>` re-runs the PILOT, so a Full archive must
+/// name `--full <pilot archive>` (the only code path that builds
+/// base + a proper subset of the frozen grid — the stable-roster
+/// bridge, ADR-0018) and an interaction archive must name
+/// `--interaction <full archives>`. A sensitivity shape no CLI mode
+/// produces renders a VISIBLE marker rather than a silently wrong
+/// command; non-B4 stages carry no mode.
+pub fn b4_reproduce_mode(plan: &ExperimentPlan) -> String {
+    match plan.stage {
+        Stage::Interaction => format!(
+            " --interaction runs/balance/{B4_FULL_DEV_EXPERIMENT_ID},runs/balance/{B4_FULL_VAL_EXPERIMENT_ID}"
+        ),
+        Stage::Sensitivity => {
+            let grid: Vec<&str> = B4_CANDIDATES
+                .iter()
+                .map(|c| c.variant_id)
+                .chain(std::iter::once(plan.base_variant.as_str()))
+                .collect();
+            let ids: Vec<&str> = plan
+                .variants
+                .iter()
+                .map(|v| v.variant_id.as_str())
+                .collect();
+            let all_in_grid = ids.iter().all(|id| grid.contains(id));
+            if ids.len() == grid.len() {
+                // Base + every grid candidate in any order: the pilot.
+                String::new()
+            } else if ids.len() >= 2 && all_in_grid {
+                // Base + a proper subset of the grid: a Full run.
+                format!(" --full runs/balance/{B4_PILOT_EXPERIMENT_ID}")
+            } else {
+                " <MODE-NOT-DERIVABLE: not any frozen B4 experiment shape>".to_string()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +699,78 @@ mod tests {
                 .iter()
                 .any(|c| c.leg == 0 && c.map_index == 25 && !b4_replay_sample(c))
         );
+    }
+
+    // The reproduce MODE of an archived plan: the pilot re-runs bare, a
+    // Full plan only exists through `--full <pilot archive>` (the
+    // stable-roster bridge) and an interaction plan only through
+    // `--interaction <full archives>`; a shape no CLI mode produces
+    // renders a visible marker instead of a silently wrong command.
+    #[test]
+    fn reproduce_mode_follows_the_plan_shape() {
+        let pilot = b4_pilot_plan(1, "mode-check");
+        assert_eq!(b4_reproduce_mode(&pilot), "");
+        let full = b4_full_plan(
+            SeedSet::Development,
+            1,
+            &["max-link-1500m".to_string(), "max-link-2500m".to_string()],
+            "mode-check-full",
+        )
+        .expect("full builds");
+        assert_eq!(
+            b4_reproduce_mode(&full),
+            format!(" --full runs/balance/{B4_PILOT_EXPERIMENT_ID}")
+        );
+        let single_arm = b4_full_plan(
+            SeedSet::Validation,
+            1,
+            &["recharge-cost-2".to_string()],
+            "mode-check-val",
+        )
+        .expect("single-arm full builds");
+        assert_eq!(
+            b4_reproduce_mode(&single_arm),
+            format!(" --full runs/balance/{B4_PILOT_EXPERIMENT_ID}")
+        );
+        let interaction = b4_interaction_plan(
+            &candidate("move-budget-240m"),
+            &candidate("max-link-2500m"),
+            1,
+            "mode-check-interaction",
+        );
+        assert_eq!(
+            b4_reproduce_mode(&interaction),
+            format!(
+                " --interaction runs/balance/{B4_FULL_DEV_EXPERIMENT_ID},runs/balance/{B4_FULL_VAL_EXPERIMENT_ID}"
+            )
+        );
+        // A sensitivity plan carrying an arm NO CLI mode can build (an
+        // off-grid variant) stays visibly wrong — never a silently wrong
+        // bare command. (Base + a grid SUBSET is exactly the Full shape,
+        // whatever built it, and renders --full.)
+        let mut hand_built = b4_pilot_plan(1, "hand-built");
+        hand_built.variants.truncate(2);
+        assert_eq!(
+            b4_reproduce_mode(&hand_built),
+            format!(" --full runs/balance/{B4_PILOT_EXPERIMENT_ID}"),
+            "base + one grid arm is the Full shape even when hand-truncated"
+        );
+        hand_built.variants[1] = ConfigVariant::new(
+            "move-budget-320m",
+            {
+                let mut cfg = GameConfig::default();
+                cfg.move_budget_cm = 32_000;
+                cfg
+            },
+            vec!["move_budget_cm"],
+        );
+        assert!(
+            b4_reproduce_mode(&hand_built).contains("MODE-NOT-DERIVABLE"),
+            "an off-grid arm is not any frozen B4 experiment shape"
+        );
+        // Non-B4 stages carry no mode.
+        let smoke = crate::balance::smoke::b1_smoke_plan(1);
+        assert_eq!(b4_reproduce_mode(&smoke), "");
     }
 }
 

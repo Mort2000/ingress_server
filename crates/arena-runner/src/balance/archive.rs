@@ -21,8 +21,8 @@ use arena_core::types::PortalId;
 use crate::balance::execute::BalanceRunResult;
 use crate::balance::pairs::{PairedResult, VariantSummary, paired_results_to_tsv};
 use crate::balance::plan::{
-    CONFIG_FIELD_NAMES, ExperimentPlan, Gate, Stage, bot_seed_derivation, game_seed_derivation,
-    map_seed_derivation, schedule_seed_derivation,
+    CONFIG_FIELD_NAMES, ExperimentPlan, Gate, SeedSet, Stage, bot_seed_derivation,
+    game_seed_derivation, map_seed_derivation, schedule_seed_derivation,
 };
 use crate::balance::record::balance_records_to_tsv;
 
@@ -265,8 +265,9 @@ pub fn manifest_text(
         &mut text,
         "reproduce",
         format!(
-            "cargo run --release -p arena-runner -- {} runs <base_commit> (experiment {})",
+            "cargo run --release -p arena-runner -- {} runs <base_commit>{} (experiment {})",
             stage_subcommand(plan.stage),
+            crate::balance::sensitivity::b4_reproduce_mode(plan),
             plan.experiment_id
         ),
     );
@@ -633,8 +634,9 @@ pub fn report_text(
     ));
     out.push_str("- `hashes.txt` carries the blake3 of every artifact (runs/ is untracked; the committed doc cites these)\n\n");
     out.push_str(&format!(
-        "Reproduce: `cargo run --release -p arena-runner -- {} runs <base_commit>` (base_commit recorded: {}).\n",
+        "Reproduce: `cargo run --release -p arena-runner -- {} runs <base_commit>{}` (base_commit recorded: {}).\n",
         stage_subcommand(plan.stage),
+        crate::balance::sensitivity::b4_reproduce_mode(plan),
         base_commit.unwrap_or("unrecorded")
     ));
     out
@@ -875,13 +877,43 @@ mod tests {
                 vec!["records-integrity", "no-crashes", "command-drop"],
             ),
         ];
+        // The B4 reproduce line carries the CLI MODE next to the
+        // subcommand: a Full plan (base + a proper subset of the frozen
+        // grid) only exists through `--full <pilot-archive>` (the
+        // stable-roster bridge, ADR-0018) and an interaction plan only
+        // through `--interaction <full-archives>` — a bare `balance-b4
+        // runs <commit>` re-runs the PILOT, never this experiment.
+        let full = crate::balance::sensitivity::b4_full_plan(
+            SeedSet::Development,
+            1,
+            &["max-link-1500m".to_string(), "max-link-2500m".to_string()],
+            "stage-aware-pin-full",
+        )
+        .expect("full plan builds");
+        let manifest = manifest_text(&full, &run, Some("pin-commit"));
+        assert!(
+            manifest.contains(
+                "reproduce=cargo run --release -p arena-runner -- balance-b4 runs <base_commit> \
+                 --full runs/balance/b4-sensitivity-pilot-r2"
+            ),
+            "full manifest reproduce line carries --full and the pilot archive"
+        );
+        let interaction_report = report_text(&cases[5].1, &run, &[], &[], &[], Some("pin-commit"));
+        assert!(
+            interaction_report.contains(
+                "cargo run --release -p arena-runner -- balance-b4 runs <base_commit> \
+                 --interaction runs/balance/b4-sensitivity-full-dev-r1,runs/balance/b4-sensitivity-full-val-r1"
+            ),
+            "interaction report reproduce line carries --interaction and the full archives"
+        );
         for (name, plan, subcommand, doc, gate_count, gate_ids) in cases {
             let manifest = manifest_text(&plan, &run, Some("pin-commit"));
+            let expected_mode = crate::balance::sensitivity::b4_reproduce_mode(&plan);
             assert!(
                 manifest.contains(&format!(
-                    "reproduce=cargo run --release -p arena-runner -- {subcommand} runs <base_commit>"
+                    "reproduce=cargo run --release -p arena-runner -- {subcommand} runs <base_commit>{expected_mode}"
                 )),
-                "{name}: manifest reproduce line names {subcommand}"
+                "{name}: manifest reproduce line names {subcommand} and its mode"
             );
             assert!(
                 manifest.contains(&format!("note=runs/ is untracked; {doc} carries")),
@@ -891,9 +923,9 @@ mod tests {
             let report = report_text(&plan, &run, &[], &[], &[], Some("pin-commit"));
             assert!(
                 report.contains(&format!(
-                    "Reproduce: `cargo run --release -p arena-runner -- {subcommand} runs <base_commit>`"
+                    "Reproduce: `cargo run --release -p arena-runner -- {subcommand} runs <base_commit>{expected_mode}`"
                 )),
-                "{name}: report reproduce line names {subcommand}"
+                "{name}: report reproduce line names {subcommand} and its mode"
             );
             if gate_count == 0 {
                 assert!(
