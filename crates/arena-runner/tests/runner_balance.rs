@@ -673,9 +673,15 @@ mod smoke_gates {
         assert_eq!(rows[1][33], "move_budget_cm");
         assert_ne!(rows[0][32], rows[1][32], "config hashes differ");
 
-        // maps.tsv: one row per map; map files are content-addressed and
-        // decode back to the identical MapDefinition.
+        // maps.tsv: one row per base map (the smoke plan has no map-regime
+        // variant, so every row belongs to the base variant — ADR-0018
+        // added the trailing variant column); map files are
+        // content-addressed and decode back to the identical MapDefinition.
         let maps_text = std::fs::read_to_string(dir.join("maps.tsv")).expect("read");
+        assert_eq!(
+            maps_text.lines().next().expect("header"),
+            "map_id\tmap_seed\tcontent_hash\tfile\tvariant_id"
+        );
         let map_rows: Vec<Vec<&str>> = maps_text
             .lines()
             .skip(1)
@@ -684,7 +690,8 @@ mod smoke_gates {
         assert_eq!(map_rows.len(), 2);
         let mut seen_hashes = std::collections::BTreeSet::new();
         for row in &map_rows {
-            assert_eq!(row.len(), 4);
+            assert_eq!(row.len(), 5);
+            assert_eq!(row[4], "default", "base rows carry the base variant id");
             assert_eq!(row[3], format!("maps/map-{}.bin", row[2]));
             let bytes = std::fs::read(dir.join(row[3])).expect("map file");
             assert_eq!(

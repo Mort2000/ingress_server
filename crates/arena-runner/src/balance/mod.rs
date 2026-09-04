@@ -17,4 +17,5 @@ pub mod plan;
 pub mod readiness;
 pub mod record;
 pub mod schedule;
+pub mod sensitivity;
 pub mod smoke;

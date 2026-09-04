@@ -8,7 +8,7 @@ B4 交付 `docs/ai-balance-plan.md` 第 7.3 节（阶段 B）的单变量参数�
 
 ## 候选网格（冻结；plan 7.3 原表）
 
-七个参数 × 每参数两档非默认候选 = 14 个候选 variant，外加 base。每个非 base variant 恰好声明一个变更字段（`Stage::Sensitivity` 由 `ExperimentPlan::validate` 强制）。候选值是 Pilot 起点，不是预设结论。
+七个参数的全部非默认档（`RECHARGE_COST` 只有一档）= 13 个候选 variant，外加 base。每个非 base variant 恰好声明一个变更字段（`Stage::Sensitivity` 由 `ExperimentPlan::validate` 强制）。候选值是 Pilot 起点，不是预设结论。
 
 | variant_id | 字段 | 默认值 | 候选值 | 主要观察（plan 7.3） |
 |---|---|---:|---:|---|
@@ -49,12 +49,12 @@ ADR-0014 冻结了"跨变体共享同一 Map Definition 仅当变体不改 `gene
 
 | experiment id | stage | 内容 | 地图 | 场次 |
 |---|---|---|---|---|
-| `b4-sensitivity-pilot-r1` | sensitivity | base + 全部 14 候选 × 6 对阵 × 2 腿 | Development 100 | 18 000 |
+| `b4-sensitivity-pilot-r1` | sensitivity | base + 全部 13 候选 × 6 对阵 × 2 腿 | Development 100 | 16 800 |
 | `b4-sensitivity-full-dev-r1` | sensitivity | base + 稳定候选（见稳定规则）× 6 对阵 × 2 腿 | Development 300 | ≤ 稳定数×3 600 |
 | `b4-sensitivity-full-val-r1` | sensitivity | 同上 variant 集 | Validation 100 | ≤ 稳定数×1 200 |
 | `b4-interaction-<a>-<b>-r1` | interaction | `[base, A, B, A+B]` × 6 对阵 × 2 腿 | Development 100 | 4 800 |
 
-- replay 采样（全部 B4 实验）：每 (variant, pair) 前 25 张地图的 leg-0（B3 的 25 图先例；Pilot ≈ 2 250 份）。
+- replay 采样（全部 B4 实验）：每 (variant, pair) 前 25 张地图的 leg-0（B3 的 25 图先例；Pilot = 14×6×25 = 2 100 份）。
 - 注册 gate（plan 10.2/10.1）：`records-integrity`（readiness 层 gate 7 复用）、`no-crashes`、`command-drop`（< 50‰）。
 - Full 的 variant 集是**派生**的：由 pilot 数据经下述稳定规则机械得出（`stable_candidates` 是 pilot 数据进入 Full 名单的唯一桥梁），并在报告中冻结记录。Full 重跑全部地图而非并入 pilot 行（自包含归档；跨实验确定性已由 B3 -r3 重发证明）。
 - 交互实验只对两个因子均有稳定主效应的参数运行，优先级 = plan 7.4：`move_budget_cm × max_link_distance_cm`、`attack_damage × recharge_amount`、`attack_damage × recharge_cost_supply`、`portal_count × max_link_distance_cm`。同参数两档皆稳定时，取 |合并 margin_delta 和| 较大的一档（并列取 variant_id 字典序小者）。交互实验 id 的 `<a>`/`<b>` 用短码：`mb`、`mld`、`ad`、`ra`、`rc`、`is`、`pc`。

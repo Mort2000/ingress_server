@@ -95,36 +95,37 @@ fn blake3_hex(bytes: &[u8]) -> String {
 
 /// The CLI subcommand that re-runs this stage's frozen experiments — the
 /// reproduce line of BOTH `manifest.txt` and `report.md` (Smoke=B1,
-/// Readiness=B2, Ablation=B3). A later stage registers its subcommand
-/// here when its operator entry lands; the explicit marker keeps an
-/// unwired stage visibly wrong instead of silently re-issuing the B1
-/// batch (the archived `-r1`/`-r2`/`-r3` B2/B3 reports carried a stale
-/// `balance-b1` reproduce line for exactly that reason).
+/// Readiness=B2, Ablation=B3, Sensitivity/Interaction=B4). A later stage
+/// registers its subcommand here when its operator entry lands; the
+/// explicit marker keeps an unwired stage visibly wrong instead of
+/// silently re-issuing the B1 batch (the archived `-r1`/`-r2`/`-r3`
+/// B2/B3 reports carried a stale `balance-b1` reproduce line for exactly
+/// that reason).
 fn stage_subcommand(stage: Stage) -> &'static str {
     match stage {
         Stage::Smoke => "balance-b1",
         Stage::Readiness => "balance-b2",
         Stage::Ablation => "balance-b3",
-        Stage::Sensitivity | Stage::Interaction | Stage::Retune | Stage::Confirm => {
-            "balance-<unwired-stage>"
-        }
+        Stage::Sensitivity | Stage::Interaction => "balance-b4",
+        Stage::Retune | Stage::Confirm => "balance-<unwired-stage>",
     }
 }
 
 /// The committed doc that carries this stage's report and artifact
 /// content hashes while `runs/` stays untracked (plan section 12).
-/// `None` for stages whose report doc is not frozen yet (Sensitivity/
-/// Interaction/Retune); the manifest note then states the plan-section-12
-/// duty without naming a wrong file.
+/// `None` for stages whose report doc is not frozen yet (Retune); the
+/// manifest note then states the plan-section-12 duty without naming a
+/// wrong file.
 fn stage_report_doc(stage: Stage) -> Option<&'static str> {
     match stage {
         Stage::Smoke => Some("docs/balance-b1-smoke.md"),
         Stage::Readiness => Some("docs/balance-b2-readiness.md"),
         Stage::Ablation => Some("docs/balance-b3-ablation.md"),
+        Stage::Sensitivity | Stage::Interaction => Some("docs/balance-b4-sensitivity.md"),
         // Plan section 12: the final confirmation report syncs to
         // docs/balance-report-r2.md.
         Stage::Confirm => Some("docs/balance-report-r2.md"),
-        Stage::Sensitivity | Stage::Interaction | Stage::Retune => None,
+        Stage::Retune => None,
     }
 }
 
@@ -239,6 +240,22 @@ pub fn manifest_text(
         "pairing",
         "unit=(map, game_seed, bot_seed, policy pair, bucket policy); leg0=policy_a as ENL, leg1=policy_a as RES; variants reuse identical unit seeds".to_string(),
     );
+    line(&mut text, "map_regime_variants", {
+        let regime: Vec<&str> = plan
+            .variants
+            .iter()
+            .filter(|v| v.is_map_regime())
+            .map(|v| v.variant_id.as_str())
+            .collect();
+        if regime.is_empty() {
+            "-".to_string()
+        } else {
+            format!(
+                "{} (own MapDefinition from the same map_seed, ADR-0018; paired deltas include the map-regime change)",
+                regime.join(",")
+            )
+        }
+    });
     line(
         &mut text,
         "base_commit",
@@ -331,27 +348,30 @@ pub fn policies_tsv(plan: &ExperimentPlan) -> String {
     text
 }
 
-/// One archived map: its content hash and file name.
+/// One archived map: the variant it belongs to (base rows carry the base
+/// variant id; map-regime variants carry their own — ADR-0018), its
+/// content hash and file name.
 pub struct ArchivedMap {
+    pub variant_id: String,
     pub map_id: String,
     pub map_seed: u64,
     pub content_hash: String,
     pub file: String,
 }
 
-/// Encodes, content-addresses and writes the plan's base-variant maps
-/// into `maps/` (each distinct content once), returning the `maps.tsv`
-/// index rows in map order.
+/// Encodes, content-addresses and writes the plan's maps into `maps/`
+/// (each distinct content once): the base-variant maps plus, for every
+/// MAP-REGIME variant (ADR-0018 — a variant declaring a map-defining
+/// field), that variant's own map per map seed (its cells ran on it).
+/// An infeasible variant map has no row — its cells are the archive's
+/// `config-failure` records, never a silent skip. Rule-only variants
+/// byte-share the base rows by construction and executor verification.
 pub fn write_maps(dir: &Path, plan: &ExperimentPlan) -> Result<Vec<ArchivedMap>, ArchiveError> {
     let maps_dir = dir.join("maps");
     fs::create_dir_all(&maps_dir)?;
     let base = plan.base();
-    let mut index = Vec::with_capacity(plan.map_count as usize);
     let mut by_content: BTreeMap<String, String> = BTreeMap::new();
-    for k in 0..plan.map_count {
-        let seed = crate::balance::plan::map_seed(plan.seed_set, k);
-        let map = arena_core::map::generate_map(seed, &base.config)
-            .map_err(|_| ArchiveError::Io(io::Error::other("base map does not regenerate")))?;
+    let mut store = |map: arena_core::map::MapDefinition| -> (String, String) {
         let bytes = encode_map(&map);
         let content_hash = blake3_hex(&bytes);
         let file = by_content
@@ -361,27 +381,64 @@ pub fn write_maps(dir: &Path, plan: &ExperimentPlan) -> Result<Vec<ArchivedMap>,
         if !by_content.contains_key(&content_hash) {
             let path = maps_dir.join(&file);
             if !path.exists() {
-                fs::write(&path, &bytes)?;
+                fs::write(&path, &bytes).expect("map file writes");
             }
             by_content.insert(content_hash.clone(), file.clone());
         }
-        index.push(ArchivedMap {
-            map_id: crate::balance::schedule::map_id(plan.seed_set, k),
-            map_seed: seed,
-            content_hash,
-            file,
-        });
+        (content_hash, file)
+    };
+
+    // Which variants contribute their OWN map rows: the base variant,
+    // plus every map-regime variant.
+    let mut row_variants: Vec<&crate::balance::plan::ConfigVariant> = vec![
+        plan.variants
+            .iter()
+            .find(|v| v.variant_id == plan.base_variant)
+            .expect("base"),
+    ];
+    for variant in &plan.variants {
+        if variant.variant_id != plan.base_variant && variant.is_map_regime() {
+            row_variants.push(variant);
+        }
+    }
+
+    let mut index = Vec::with_capacity(row_variants.len() * plan.map_count as usize);
+    for variant in row_variants {
+        for k in 0..plan.map_count {
+            let seed = crate::balance::plan::map_seed(plan.seed_set, k);
+            let map = match arena_core::map::generate_map(seed, &variant.config) {
+                Ok(map) => map,
+                // Only reachable for a map-regime variant whose cells the
+                // executor recorded as config failures (the base pool
+                // regenerated above them); no row, no silent skip.
+                Err(_) if variant.variant_id != plan.base_variant => continue,
+                Err(_) => {
+                    return Err(ArchiveError::Io(io::Error::other(
+                        "base map does not regenerate",
+                    )));
+                }
+            };
+            let (content_hash, file) = store(map);
+            index.push(ArchivedMap {
+                variant_id: variant.variant_id.clone(),
+                map_id: crate::balance::schedule::map_id(plan.seed_set, k),
+                map_seed: seed,
+                content_hash,
+                file,
+            });
+        }
     }
     Ok(index)
 }
 
-/// The `maps.tsv` index body.
+/// The `maps.tsv` index body (the base format plus the trailing
+/// `variant_id` column — ADR-0018).
 pub fn maps_tsv(maps: &[ArchivedMap]) -> String {
-    let mut text = String::from("map_id\tmap_seed\tcontent_hash\tfile\n");
+    let mut text = String::from("map_id\tmap_seed\tcontent_hash\tfile\tvariant_id\n");
     for map in maps {
         text.push_str(&format!(
-            "{}\t{:#018x}\t{}\tmaps/{}\n",
-            map.map_id, map.map_seed, map.content_hash, map.file
+            "{}\t{:#018x}\t{}\tmaps/{}\t{}\n",
+            map.map_id, map.map_seed, map.content_hash, map.file, map.variant_id
         ));
     }
     text
@@ -556,6 +613,7 @@ pub fn report_text(
             match plan.stage {
                 Stage::Readiness => "gates.txt",
                 Stage::Ablation => "analysis.txt",
+                Stage::Sensitivity | Stage::Interaction => "effects.txt",
                 _ => "the stage's analysis artifact",
             }
         ));
@@ -567,7 +625,7 @@ pub fn report_text(
     }
     out.push_str("## Archive\n\n");
     out.push_str(&format!(
-        "- {} content-addressed map file(s) under `maps/` (one file per distinct Map Definition; cross-variant units share the same file by construction and by executor verification)\n",
+        "- {} map index row(s) over content-addressed files under `maps/` (one file per distinct Map Definition; rule-only variants share the base file by construction and by executor verification, map-regime variants add their own rows — ADR-0018)\n",
         maps.len()
     ));
     out.push_str(&format!(
@@ -668,6 +726,61 @@ pub fn write_balance_artifacts(
 mod tests {
     use super::*;
 
+    // maps.tsv carries the variant dimension (ADR-0018): base rows plus
+    // one row per map-regime variant map, content-addressed and deduped
+    // by content; a rule-only variant shares the base row by construction.
+    #[test]
+    fn maps_tsv_carries_variant_rows_and_dedups_by_content() {
+        let plan = crate::balance::sensitivity::b4_pilot_plan(2, "maps-variant-check");
+        let root =
+            std::env::temp_dir().join(format!("b4-maps-test-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("balance").join(&plan.experiment_id);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let maps = write_maps(&dir, &plan).expect("writes");
+        // 2 base + 2 portal-count-80 + 2 portal-count-160 rows; the other
+        // eleven candidates byte-share the base rows (no rows of their own).
+        assert_eq!(maps.len(), 6);
+        let variants: Vec<&str> = maps.iter().map(|m| m.variant_id.as_str()).collect();
+        assert_eq!(variants[0], "default");
+        assert!(variants.contains(&"portal-count-80"));
+        assert!(variants.contains(&"portal-count-160"));
+        assert!(!variants.contains(&"move-budget-160m"));
+
+        let text = maps_tsv(&maps);
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().expect("header"),
+            "map_id\tmap_seed\tcontent_hash\tfile\tvariant_id"
+        );
+        let mut files = std::collections::BTreeSet::new();
+        let mut hashes = std::collections::BTreeSet::new();
+        for line in lines {
+            let row: Vec<&str> = line.split('\t').collect();
+            assert_eq!(row.len(), 5);
+            let bytes = std::fs::read(dir.join(row[3])).expect("map file exists");
+            assert_eq!(blake3_hex(&bytes), row[2], "content-addressed");
+            hashes.insert(row[2].to_string());
+            files.insert(row[3].to_string());
+            // The row's map regenerates from its own variant config (the
+            // base row under the base config, the regime row under its own).
+            let variant = plan
+                .variants
+                .iter()
+                .find(|v| v.variant_id == row[4])
+                .expect("variant of the row");
+            let seed = u64::from_str_radix(row[1].trim_start_matches("0x"), 16).expect("seed");
+            let map = arena_core::map::generate_map(seed, &variant.config).expect("regenerates");
+            assert_eq!(decode_map(&bytes).as_ref(), Some(&map));
+            if row[4] == "portal-count-80" {
+                assert_eq!(map.portals().len(), 80);
+            }
+        }
+        assert_eq!(files.len(), hashes.len(), "deduped by content");
+        assert_eq!(hashes.len(), 6, "six distinct maps");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn map_encoding_round_trips() {
         let cfg = arena_core::config::GameConfig::default();
@@ -741,6 +854,27 @@ mod tests {
                 1,
                 vec!["idle-scoring"],
             ),
+            (
+                "sensitivity-pilot",
+                crate::balance::sensitivity::b4_pilot_plan(1, "stage-aware-pin"),
+                "balance-b4",
+                "docs/balance-b4-sensitivity.md",
+                3,
+                vec!["records-integrity", "no-crashes", "command-drop"],
+            ),
+            (
+                "interaction",
+                crate::balance::sensitivity::b4_interaction_plan(
+                    &crate::balance::sensitivity::B4_CANDIDATES[1],
+                    &crate::balance::sensitivity::B4_CANDIDATES[3],
+                    1,
+                    "stage-aware-pin",
+                ),
+                "balance-b4",
+                "docs/balance-b4-sensitivity.md",
+                3,
+                vec!["records-integrity", "no-crashes", "command-drop"],
+            ),
         ];
         for (name, plan, subcommand, doc, gate_count, gate_ids) in cases {
             let manifest = manifest_text(&plan, &run, Some("pin-commit"));
@@ -788,6 +922,9 @@ mod tests {
                     report.contains(match plan.stage {
                         Stage::Readiness => "appended to this archive as gates.txt",
                         Stage::Ablation => "appended to this archive as analysis.txt",
+                        Stage::Sensitivity | Stage::Interaction => {
+                            "appended to this archive as effects.txt"
+                        }
                         _ => "appended to this archive as",
                     }),
                     "{name}: gates section names the stage's evaluation artifact"
