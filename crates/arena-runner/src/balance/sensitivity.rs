@@ -14,10 +14,16 @@ use crate::balance::plan::{ConfigVariant, ExperimentPlan, PolicyMatchup, SeedSet
 use crate::balance::schedule::MatchCell;
 use crate::policy::BucketPolicy;
 
-/// The frozen experiment ids (archive directory names; ADR-0018). A
-/// defective run is re-issued as `-r2` with the defective directory kept
-/// as history, never overwritten; scratch pilots append `-pilot-r0`.
-pub const B4_PILOT_EXPERIMENT_ID: &str = "b4-sensitivity-pilot-r1";
+/// The frozen experiment ids (archive directory names; ADR-0018). `-r1`
+/// of the pilot was superseded by the stability-rule CLARIFICATION
+/// (ADR-0018: condition (c) operationalizes plan 10.3's ">= 3 pairs with
+/// the same direction", NOT unanimity of every one-sided pair — the
+/// first implementation required unanimity, structurally impassable
+/// where the builder-disruptor pairs flip sign); raw per-match records
+/// were already correct, trajectories reproduce exactly, and the -r1
+/// directory stays on disk as history, never overwritten. Scratch
+/// pilots append `-pilot-r0`.
+pub const B4_PILOT_EXPERIMENT_ID: &str = "b4-sensitivity-pilot-r2";
 pub const B4_FULL_DEV_EXPERIMENT_ID: &str = "b4-sensitivity-full-dev-r1";
 pub const B4_FULL_VAL_EXPERIMENT_ID: &str = "b4-sensitivity-full-val-r1";
 
@@ -561,7 +567,7 @@ mod tests {
             &format!("{B4_PILOT_EXPERIMENT_ID}-pilot-r0"),
         );
         assert_eq!(scratch.map_count, 8);
-        assert_eq!(scratch.experiment_id, "b4-sensitivity-pilot-r1-pilot-r0");
+        assert_eq!(scratch.experiment_id, "b4-sensitivity-pilot-r2-pilot-r0");
         assert_eq!(scratch.stage, official.stage);
         assert_eq!(scratch.variants, official.variants);
         assert_eq!(scratch.policies, official.policies);
@@ -985,4 +991,91 @@ pub fn run_b4(output_root: &Path, base_commit: Option<&str>, mode: B4Mode) -> i3
         }
     }
     i32::from(!clean)
+}
+
+#[cfg(test)]
+mod interaction_arm_tests {
+    use super::*;
+    use crate::balance::pairs::PairedResult;
+
+    fn row(variant_id: &str, map_index: u32, margin_delta: i128) -> PairedResult {
+        PairedResult {
+            pair_id: format!("pair#m{map_index:03}"),
+            pair_tag: "pair".to_string(),
+            variant_id: variant_id.to_string(),
+            base_variant_id: "default".to_string(),
+            map_index,
+            legs: 2,
+            policy_a_wins: 1,
+            policy_b_wins: 1,
+            draws: 0,
+            crashes: 0,
+            config_failures: 0,
+            a_score2_leg0: 0,
+            a_score2_leg1: 0,
+            b_score2_leg0: 0,
+            b_score2_leg1: 0,
+            margin_sum: 0,
+            outcome_delta_vs_base: 0,
+            margin_delta_vs_base: margin_delta,
+        }
+    }
+
+    // The frozen arm rule: of a factor's stable arms, the larger
+    // |pooled margin_delta sum| wins (ties -> lexicographically smaller
+    // variant_id); pairs whose factors are not both stable are skipped,
+    // in plan-7.4 priority order.
+    #[test]
+    fn interaction_plans_pick_arms_by_magnitude_and_skip_unstable_factors() {
+        let roster = vec![
+            "move-budget-160m".to_string(),
+            "move-budget-240m".to_string(),
+            "max-link-2500m".to_string(),
+        ];
+        // |sums|: mb-160m = 5000 > mb-240m = 1000 -> the mb arm is
+        // move-budget-160m; the mld arm is max-link-2500m.
+        let pairs = vec![
+            row("move-budget-160m", 0, 4000),
+            row("move-budget-160m", 1, 1000),
+            row("move-budget-240m", 0, 1000),
+            row("max-link-2500m", 0, -700),
+            row("attack-damage-25", 0, 99_999), // stable data but NOT in roster
+        ];
+        let plans = b4_interaction_plans(&roster, &pairs, 100);
+        assert_eq!(plans.len(), 1, "only mb x mld has two stable factors");
+        let plan = &plans[0];
+        assert_eq!(plan.experiment_id, "b4-interaction-mb-mld-r1");
+        assert_eq!(plan.stage, Stage::Interaction);
+        let ids: Vec<&str> = plan
+            .variants
+            .iter()
+            .map(|v| v.variant_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "default",
+                "move-budget-160m",
+                "max-link-2500m",
+                "move-budget-160m+max-link-2500m"
+            ]
+        );
+        assert_eq!(plan.validate(), Ok(()));
+        assert_eq!(plan.map_count, 100);
+
+        // Tie on magnitude -> the lexicographically smaller variant_id.
+        let tie = vec![
+            row("move-budget-160m", 0, 500),
+            row("move-budget-240m", 0, -500),
+        ];
+        let plans = b4_interaction_plans(&roster, &tie, 100);
+        assert_eq!(
+            plans[0].variants[1].variant_id, "move-budget-160m",
+            "tie breaks to the smaller id"
+        );
+
+        // No factor pair with two stable arms -> nothing to run.
+        assert!(b4_interaction_plans(&["recharge-cost-2".to_string()], &pairs, 100).is_empty());
+        assert!(b4_interaction_plans(&[], &pairs, 100).is_empty());
+    }
 }

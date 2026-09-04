@@ -49,7 +49,7 @@ ADR-0014 冻结了"跨变体共享同一 Map Definition 仅当变体不改 `gene
 
 | experiment id | stage | 内容 | 地图 | 场次 |
 |---|---|---|---|---|
-| `b4-sensitivity-pilot-r1` | sensitivity | base + 全部 13 候选 × 6 对阵 × 2 腿 | Development 100 | 16 800 |
+| `b4-sensitivity-pilot-r2`（-r1 为被稳定规则澄清取代的首发） | sensitivity | base + 全部 13 候选 × 6 对阵 × 2 腿 | Development 100 | 16 800 |
 | `b4-sensitivity-full-dev-r1` | sensitivity | base + 稳定候选（见稳定规则）× 6 对阵 × 2 腿 | Development 300 | ≤ 稳定数×3 600 |
 | `b4-sensitivity-full-val-r1` | sensitivity | 同上 variant 集 | Validation 100 | ≤ 稳定数×1 200 |
 | `b4-interaction-<a>-<b>-r1` | interaction | `[base, A, B, A+B]` × 6 对阵 × 2 腿 | Development 100 | 4 800 |
@@ -69,6 +69,8 @@ ADR-0014 冻结了"跨变体共享同一 Map Definition 仅当变体不改 `gene
 4. **副作用护栏**（plan 10.3，每候选 vs base、跨对阵合并）：双方零分（no-score）比赛数、draw 数、crash/config-failure 数（须为 0）、合并 drop permille（对冻结 < 50‰ 带判定，原始分子分母并列）、ENL/RES 胜场分（阵营偏差）、机制利用率 delta——transfers/recharges/attacks/attack_hits/hacks/links_created/fields_created/first-field 场数与轮次和/field lifetime（destroyed+surviving 轮次和），全部为该 variant 自身 played 记录两阵营池化的 `FactionMatchStats` 整数和，permille 只打印在计数旁。
 5. **几何分层**（唯一冻结分层，喂 plan 11"地图交互"行）：特征 = 每张归档地图的"门户最近邻距离中位数"（对每 portal 取最近邻距离 cm 的 floor 整数，再 nearest-rank 中位）；切点 = base 地图特征的 nearest-rank p333/p667（三等分，越界钳入首/末层）；地图机制变体用自己的归档地图、base 切点归类。每 (variant, stratum) 报配对方向计数（up/down/zero）。
 6. **稳定规则**（机械化，pilot→Full 的唯一桥梁；plan 7.1"效应方向稳定且有实际意义"）：某候选**稳定** := (a) 该 variant 零 crash 且零 config-failure；(b) 该 variant 合并 drop permille < 50；(c) ≥3 个对阵的 margin 方向 Wilson 95% 区间整体在 500‰ 一侧（lower>500 或 upper<500）且这些对阵方向一致；(d) 合并 margin_delta 的 nearest-rank 中位数 ≠ 0。任一不满足即"停止该方向并记录"（plan 7.1 else 分支），不进入 Full。
+
+   **(c) 的澄清（2026-09-05，pilot -r1 归档后、任何 Full 运行前）**："这些对阵方向一致"按 plan 10.3 的原文门槛（"改善方向至少在三个独立策略对上相同"）操作化为：**同一方向的单侧对阵 ≥3 个，且严格多于反方向的单侧对阵**（3+3 平局无方向、判不稳定）；反方向的单侧对阵（异议）逐对阵记录在判定与报告中，不隐藏、不否决。首次实现（-r1 归档所用）误将 (c) 读作"全部单侧对阵一致"——比 plan 10.3 更严，且在 builder-disruptor 对阵系统性反向的结构下使门槛不可通过，与 plan 7.1 的流程（预期部分方向进入 Full）矛盾。该实现缺陷已修正；pilot 以 `-r2` 重发（轨迹逐场不变：map/game/bot seed 不含 experiment id；仅 schedule_seed 回显与 bootstrap 种子随 id 变化），`-r1` 目录按惯例保留为历史。
 7. **交互差分中的差分**（plan 7.4 反转读出）：对每 (pair, unit)，`DiD = delta(A+B) − delta(A) − delta(B)`（margin 与 outcome 两个整数序列，均以 vs-base 配对差为输入）；每 pair 报 DiD 符号计数。**反转**判定（冻结）：条件方向 = `delta(A+B) − delta(B)`（在 B 之上加 A 的效应）的 up/(up+down) Wilson 95% 整体在一侧，且与 A 自身主效应方向（同一交互批次内 delta(A) 的同型区间方向）相反。纯加和效应 → DiD 全零、无反转。
 
 ## 产物

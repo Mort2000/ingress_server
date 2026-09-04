@@ -733,8 +733,12 @@ pub struct StabilityVerdict {
     /// +1/-1 of the agreeing one-sided pairs (0 when they disagree or
     /// none reach the bar).
     pub direction: i8,
-    /// The pair tags whose interval cleared 500 permille, with side.
+    /// The pair tags whose interval cleared 500 permille WITH the
+    /// qualifying direction.
     pub agreeing_pairs: Vec<(String, i8)>,
+    /// One-sided pairs pointing the OTHER way (recorded, never hidden —
+    /// plan 10.3 sets a >=3-pair threshold, not unanimity).
+    pub dissenting_pairs: Vec<(String, i8)>,
     /// Pooled nearest-rank median of the played margin deltas.
     pub margin_median: i128,
     pub drop_permille: u64,
@@ -769,17 +773,47 @@ pub fn stability_from_effects(
         }
         let id = variant.variant_id.as_str();
         let rows: Vec<&VariantPairEffect> = effects.iter().filter(|e| e.variant_id == id).collect();
-        let agreeing: Vec<(String, i8)> = rows
+        let one_sided: Vec<(String, i8)> = rows
             .iter()
             .filter(|e| e.one_sided() != 0)
             .map(|e| (e.pair_tag.clone(), e.one_sided()))
             .collect();
-        let directions: std::collections::BTreeSet<i8> =
-            agreeing.iter().map(|(_, side)| *side).collect();
-        let direction = if directions.len() == 1 {
-            *directions.iter().next().expect("non-empty")
+        // The plan-10.3 threshold: at least THREE independent pairs with
+        // the same direction — not unanimity. The qualifying direction is
+        // the side with the most one-sided pairs, requiring >= 3 and
+        // strictly more than the opposite side (a 3+3 tie has none).
+        let plus = one_sided.iter().filter(|(_, side)| *side > 0).count();
+        let minus = one_sided.iter().filter(|(_, side)| *side < 0).count();
+        let (direction, agreeing, dissenting) = if plus >= 3 && plus > minus {
+            (
+                1,
+                one_sided
+                    .iter()
+                    .filter(|(_, s)| *s > 0)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                one_sided
+                    .iter()
+                    .filter(|(_, s)| *s < 0)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        } else if minus >= 3 && minus > plus {
+            (
+                -1,
+                one_sided
+                    .iter()
+                    .filter(|(_, s)| *s < 0)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                one_sided
+                    .iter()
+                    .filter(|(_, s)| *s > 0)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
         } else {
-            0
+            (0, Vec::new(), one_sided)
         };
 
         let per_map = deltas_per_map(plan, pairs, id);
@@ -800,14 +834,18 @@ pub fn stability_from_effects(
                 side.drop_permille, side.drop_dropped, side.drop_submitted
             ));
         }
-        if agreeing.len() < 3 {
-            failed.push(format!(
-                "{} of {} pair(s) one-sided (need >= 3)",
-                agreeing.len(),
-                rows.len()
-            ));
-        } else if direction == 0 {
-            failed.push(format!("one-sided pairs disagree: {:?}", agreeing));
+        if direction == 0 {
+            if plus >= 3 && plus == minus {
+                failed.push(format!(
+                    "one-sided pairs tie {plus}+/{minus}- — no direction"
+                ));
+            } else {
+                failed.push(format!(
+                    "{} one-sided pair(s) with one direction (need >= 3 of {} pairs)",
+                    plus.max(minus),
+                    rows.len()
+                ));
+            }
         }
         if margin_median == 0 {
             failed.push(
@@ -820,6 +858,7 @@ pub fn stability_from_effects(
             stable: failed.is_empty(),
             direction,
             agreeing_pairs: agreeing,
+            dissenting_pairs: dissenting,
             margin_median,
             drop_permille: side.drop_permille,
             crashes: side.crashes,
@@ -1241,7 +1280,12 @@ pub fn effects_text(
                 verdict.config_failures
             ));
             for (pair, side) in &verdict.agreeing_pairs {
-                out.push_str(&format!("    one-sided pair {pair} ({})\n", side));
+                out.push_str(&format!("    one-sided pair {pair} ({side})\n"));
+            }
+            for (pair, side) in &verdict.dissenting_pairs {
+                out.push_str(&format!(
+                    "    one-sided DISSENTING pair {pair} ({side}) — recorded, plan 10.3 needs >=3 agreeing, not unanimity\n"
+                ));
             }
             if verdict.stable {
                 out.push_str("    verdict: STABLE — enters the Full roster (stable_candidates)\n");
@@ -1808,6 +1852,8 @@ mod tests {
             "greedy-coordinated-r2--builder-disruptor-r2",
             "builder-defender-r2--builder-disruptor-r2",
             "greedy-coordinated-r2--logistics-builder-r2",
+            "logistics-builder-r2--blocker-builder-r2",
+            "builder-disruptor-r2--adaptive-hybrid-r2",
         ];
         let plan = sensitivity_plan(
             "stability",
@@ -1815,6 +1861,7 @@ mod tests {
                 "attack-damage-25",
                 "recharge-amount-10",
                 "initial-supply-10",
+                "max-link-2500m",
             ],
             &pairs_tags,
         );
@@ -1853,11 +1900,25 @@ mod tests {
                 ));
             }
         }
-        // initial-supply-10: 4 one-sided pairs but directions mixed.
+        // initial-supply-10: pairs 0-2 one-sided +, pair 3 one-sided -,
+        // pairs 4-5 split — the plan-10.3 threshold (>= 3 pairs one
+        // direction) holds; the dissent is recorded, arm stable.
         for (index, pair) in pairs_tags.iter().enumerate() {
             for map in 0..8u32 {
-                let delta = if index < 3 { 90 } else { -90 };
+                let delta = match index {
+                    0 | 1 | 2 => 90,
+                    3 => -90,
+                    _ if map % 2 == 0 => 1,
+                    _ => -1,
+                };
                 rows.push(settled_row(&plan, "initial-supply-10", pair, map, delta, 1));
+            }
+        }
+        // max-link-2500m: a 3+3 tie of one-sided pairs — no direction.
+        for (index, pair) in pairs_tags.iter().enumerate() {
+            for map in 0..8u32 {
+                let delta = if index < 3 { 70 } else { -70 };
+                rows.push(settled_row(&plan, "max-link-2500m", pair, map, delta, 1));
             }
         }
         // Clean records for every variant (drops well under the band).
@@ -1881,14 +1942,14 @@ mod tests {
         }
 
         let verdicts = stability(&plan, &rows, &records);
-        assert_eq!(verdicts.len(), 3);
+        assert_eq!(verdicts.len(), 4);
         let stable = verdicts
             .iter()
             .find(|v| v.variant_id == "attack-damage-25")
             .unwrap();
         assert!(stable.stable, "failed legs: {:?}", stable.failed);
         assert_eq!(stable.direction, 1);
-        assert_eq!(stable.agreeing_pairs.len(), 4);
+        assert_eq!(stable.agreeing_pairs.len(), 6);
         assert_eq!(stable.margin_median, 250);
         assert_eq!(stable.drop_permille, 1);
 
@@ -1898,23 +1959,40 @@ mod tests {
             .unwrap();
         assert!(!two_pairs.stable);
         assert!(
-            two_pairs
-                .failed
-                .iter()
-                .any(|f| f.contains("2 of 4 pair(s) one-sided (need >= 3)"))
+            two_pairs.failed.iter().any(
+                |f| f.contains("2 one-sided pair(s) with one direction (need >= 3 of 6 pairs)")
+            )
         );
 
-        let mixed = verdicts
+        let dissent = verdicts
             .iter()
             .find(|v| v.variant_id == "initial-supply-10")
             .unwrap();
-        assert!(!mixed.stable, "agreeing-but-mixed directions never stable");
-        assert!(mixed.failed.iter().any(|f| f.contains("disagree")));
+        assert!(
+            dissent.stable,
+            "3 of 4 one-sided pairs agreeing passes the plan-10.3 threshold"
+        );
+        assert_eq!(dissent.direction, 1);
+        assert_eq!(
+            dissent.dissenting_pairs,
+            vec![(pairs_tags[3].to_string(), -1)],
+            "the dissenting one-sided pair is recorded, never hidden"
+        );
 
-        // The roster bridge carries EXACTLY the stable arm.
+        let tie = verdicts
+            .iter()
+            .find(|v| v.variant_id == "max-link-2500m")
+            .unwrap();
+        assert!(!tie.stable, "a 3+3 tie has no direction");
+        assert!(tie.failed.iter().any(|f| f.contains("tie")));
+
+        // The roster bridge carries EXACTLY the stable arms, in plan order.
         assert_eq!(
             stable_candidates(&verdicts),
-            vec!["attack-damage-25".to_string()]
+            vec![
+                "attack-damage-25".to_string(),
+                "initial-supply-10".to_string()
+            ]
         );
         // And the full builder refuses an empty roster (the recorded
         // reason is pinned in sensitivity.rs's own tests).
