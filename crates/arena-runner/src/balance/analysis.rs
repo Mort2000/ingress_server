@@ -1037,7 +1037,7 @@ pub fn analysis_text(
             "-".to_string()
         };
         out.push_str(&format!(
-            "| {} | {} | {} ({}) | {} | {} ({}) | {} | {}/{}{} ({}) |\n",
+            "| {} | {} | {} ({}) | {} | {} ({}) | {} | {}/{}/{} ({} permille) |\n",
             mechanics.policy.tag(),
             mechanics.matches_played,
             mechanics.first_field_round_sum,

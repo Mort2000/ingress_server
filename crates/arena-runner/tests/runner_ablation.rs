@@ -35,7 +35,7 @@ use arena_runner::policy::BucketPolicy;
 #[test]
 fn b3_matrix_plan_is_frozen_and_valid() {
     let plan = b3_matrix_plan(B3_MATRIX_MAP_COUNT, B3_MATRIX_EXPERIMENT_ID);
-    assert_eq!(plan.experiment_id, "b3-ablation-matrix-r1");
+    assert_eq!(plan.experiment_id, "b3-ablation-matrix-r2");
     assert_eq!(plan.stage, Stage::Ablation);
     assert_eq!(plan.seed_set, SeedSet::Development);
     assert_eq!(plan.map_count, 100);
@@ -89,7 +89,7 @@ fn b3_matrix_plan_is_frozen_and_valid() {
 #[test]
 fn pilot_variant_shrinks_map_counts_only() {
     let official = b3_matrix_plan(B3_MATRIX_MAP_COUNT, B3_MATRIX_EXPERIMENT_ID);
-    let pilot = b3_matrix_plan(B3_PILOT_MATRIX_MAP_COUNT, "b3-ablation-matrix-r1-pilot-r0");
+    let pilot = b3_matrix_plan(B3_PILOT_MATRIX_MAP_COUNT, "b3-ablation-matrix-r2-pilot-r0");
     assert_eq!(pilot.map_count, 8);
     assert_eq!(pilot.stage, official.stage);
     assert_eq!(pilot.variants, official.variants);
@@ -97,7 +97,7 @@ fn pilot_variant_shrinks_map_counts_only() {
     assert_eq!(pilot.matchups, official.matchups);
     assert_eq!(pilot.bucket_policy, official.bucket_policy);
     let idle_official = b3_idle_plan(B3_IDLE_MAP_COUNT, B3_IDLE_EXPERIMENT_ID);
-    let idle_pilot = b3_idle_plan(B3_PILOT_IDLE_MAP_COUNT, "b3-ablation-idle-r1-pilot-r0");
+    let idle_pilot = b3_idle_plan(B3_PILOT_IDLE_MAP_COUNT, "b3-ablation-idle-r2-pilot-r0");
     assert_eq!(idle_pilot.map_count, 4);
     assert_eq!(idle_pilot.matchups, idle_official.matchups);
     assert_eq!(idle_pilot.policies, idle_official.policies);
@@ -106,7 +106,7 @@ fn pilot_variant_shrinks_map_counts_only() {
 #[test]
 fn b3_idle_plan_is_frozen_and_valid() {
     let plan = b3_idle_plan(B3_IDLE_MAP_COUNT, B3_IDLE_EXPERIMENT_ID);
-    assert_eq!(plan.experiment_id, "b3-ablation-idle-r1");
+    assert_eq!(plan.experiment_id, "b3-ablation-idle-r2");
     assert_eq!(plan.stage, Stage::Ablation);
     assert_eq!(plan.map_count, 50);
     assert_eq!(plan.policies.len(), 4, "three arms + idle");
@@ -950,6 +950,28 @@ fn b3_scratch_run_archives_analysis_and_refuses_existing_dirs() {
     assert!(analysis.contains("matches total=2 played=2"));
     assert!(analysis.contains("records-integrity:"));
     assert!(analysis.contains("Per-pair W-D-L"));
+    // The per-policy mechanics table separates submitted/ok/dropped with
+    // explicit slashes (regression pin: r1's analysis.txt concatenated ok
+    // and dropped into one ambiguous column).
+    assert!(analysis.contains("submitted/ok/dropped (drop permille)"));
+    for line in analysis
+        .lines()
+        .filter(|l| l.starts_with("| greedy-field |"))
+    {
+        let last = line
+            .split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .last()
+            .unwrap_or_default();
+        let counts = last.split_whitespace().next().unwrap_or_default();
+        let parts: Vec<&str> = counts.split('/').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "mechanics row counts '{counts}' are submitted/ok/dropped"
+        );
+    }
     // Records match policies.tsv (family/version/parameters per row).
     let policies_tsv = std::fs::read_to_string(dir.join("policies.tsv")).expect("policies");
     let matches_tsv = std::fs::read_to_string(dir.join("matches.tsv")).expect("matches");
