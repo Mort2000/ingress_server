@@ -18,3 +18,4 @@
 | [0014](./0014-r2-seed-set-domains-and-paired-scheduling.md) | accepted | 冻结 R2 Seed Set 主种子、推导域与同图换边配对单位 |
 | [0015](./0015-independent-policy-identity.md) | accepted | 策略以独立 policy_id/family/version/parameters 标识；版本只增不改；bot RNG kind-tag 1-5 永属 m6 |
 | [0016](./0016-r2-policy-portfolio-and-readiness-gates.md) | accepted | 冻结 B2 六策略组合（kind-tag 6-12、结构化参数全值序列化、Readiness 阶段）与第 10.1 节就绪门槛的统计定义、阈值与主动阻断几何代理 |
+| [0017](./0017-b3-default-config-ablation.md) | accepted | 冻结 B3 默认配置消融的三个测量臂（hybrid-builder-only/hybrid-builder-attack b3.0、greedy-coordinated-canonical r2.0 + kind-tag 13）、两个矩阵/Idle 实验与第 9 节统计定义（Wilson、nearest-rank 分位、支配分类） |
