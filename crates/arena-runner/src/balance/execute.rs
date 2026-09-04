@@ -5,9 +5,14 @@
 //! match), catching panics as `Crash` records that stay in the result set.
 //! Variants that cannot honor the unit's shared Map Definition are
 //! recorded as `config-failure` cells, never silently skipped (plan
-//! section 7.3, ADR-0014 caveat).
+//! section 7.3). ADR-0014's shared-map boundary holds for rule-only
+//! variants (byte-verified per map); ADR-0018's MAP-REGIME variants —
+//! declaring a map-defining field — generate their OWN MapDefinition from
+//! the SAME map_seed, and an infeasible variant map is that variant's
+//! config-failure cells, never a batch abort (base infeasibility still
+//! aborts: a config defect).
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -199,10 +204,15 @@ pub fn run_balance_batch(
     run_balance_batch_with(plan, workers, &default_cell_setup, &sample_leg0)
 }
 
-/// The full executor: expands the plan, generates the base-variant map
-/// pool, verifies every other variant SHARES each map (else records
-/// `config-failure` cells — ADR-0014 caveat), then runs every cell on a
-/// stride-partitioned worker pool and merges results in cell order.
+/// The full executor: expands the plan, generates the per-variant map
+/// pools — the base pool first (infeasible BASE map aborts the batch as a
+/// config defect), then every variant's own pool: rule-only variants are
+/// byte-verified against the base pool (ADR-0014; a mismatch becomes that
+/// variant's `config-failure` cells), map-regime variants generate their
+/// OWN MapDefinition from the same map_seed (ADR-0018; an infeasible
+/// variant map likewise becomes config-failure cells, never an abort) —
+/// then runs every cell on a stride-partitioned worker pool and merges
+/// results in cell order.
 pub fn run_balance_batch_with(
     plan: &ExperimentPlan,
     workers: usize,
@@ -217,7 +227,8 @@ pub fn run_balance_batch_with(
     let cells = expand(plan).map_err(BalanceError::PlanInvalid)?;
     let base = plan.base();
 
-    // Base-variant map pool (shared across variants and matchups).
+    // Base-variant map pool (shared across rule-only variants and
+    // matchups). An infeasible BASE map is a config defect: abort.
     let mut pool: Vec<Arc<MapDefinition>> = Vec::with_capacity(plan.map_count as usize);
     for k in 0..plan.map_count {
         let seed = crate::balance::plan::map_seed(plan.seed_set, k);
@@ -227,23 +238,38 @@ pub fn run_balance_batch_with(
         }
     }
 
-    // Shared-map verification: every non-base variant must produce the
-    // SAME MapDefinition from the same map seed, or its cells on that map
-    // become config failures (recorded, not skipped).
-    let mut shared_map_failures: BTreeSet<(String, u32)> = BTreeSet::new();
+    // Per-variant map pools in variant declaration order: Some(map) runs,
+    // None is that (variant, map)'s config-failure cells.
+    let mut variant_maps: Vec<Vec<Option<Arc<MapDefinition>>>> =
+        Vec::with_capacity(plan.variants.len());
     for variant in &plan.variants {
-        if variant.variant_id == plan.base_variant {
-            continue;
-        }
+        let map_regime = variant.variant_id != plan.base_variant && variant.is_map_regime();
+        let mut maps: Vec<Option<Arc<MapDefinition>>> = Vec::with_capacity(plan.map_count as usize);
         for k in 0..plan.map_count {
             let seed = crate::balance::plan::map_seed(plan.seed_set, k);
-            let shares =
-                generate_map(seed, &variant.config).is_ok_and(|map| map == *pool[k as usize]);
-            if !shares {
-                shared_map_failures.insert((variant.variant_id.clone(), k));
+            if variant.variant_id == plan.base_variant {
+                maps.push(Some(pool[k as usize].clone()));
+            } else if map_regime {
+                // ADR-0018: the variant's mechanism IS the map regime —
+                // same seed stream, its own derived map; infeasible
+                // generation is a per-variant config failure.
+                maps.push(generate_map(seed, &variant.config).ok().map(Arc::new));
+            } else {
+                // ADR-0014: byte-share verification against the base pool;
+                // a mismatch is that variant's config-failure cells.
+                let shares =
+                    generate_map(seed, &variant.config).is_ok_and(|map| map == *pool[k as usize]);
+                maps.push(shares.then(|| pool[k as usize].clone()));
             }
         }
+        variant_maps.push(maps);
     }
+    let variant_index: BTreeMap<&str, usize> = plan
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| (variant.variant_id.as_str(), index))
+        .collect();
 
     let workers = workers.clamp(1, MAX_WORKERS).min(cells.len().max(1));
     let variant_cfg: Vec<(String, GameConfig)> = plan
@@ -262,9 +288,9 @@ pub fn run_balance_batch_with(
         let mut handles = Vec::with_capacity(workers);
         for worker in 0..workers {
             let cells = &cells;
-            let pool = &pool;
+            let variant_maps = &variant_maps;
+            let variant_index = &variant_index;
             let variant_cfg = &variant_cfg;
-            let failures = &shared_map_failures;
             handles.push(scope.spawn(move || {
                 let mut ours = Vec::new();
                 let mut index = worker;
@@ -277,65 +303,74 @@ pub fn run_balance_batch_with(
                         .find(|(id, _)| *id == cell.variant_id)
                         .expect("variant exists")
                         .1;
-                    let slot = if failures.contains(&(cell.variant_id.clone(), cell.map_index)) {
-                        // Config failure: identity echo, empty stats,
-                        // stays in the result set.
-                        Slot::Failure(BalanceMatchRecord::config_failure(cell, &spec_a, &spec_b))
-                    } else {
-                        let (enl_spec, res_spec) = if cell.policy_a_is_enl {
-                            (spec_a.clone(), spec_b.clone())
-                        } else {
-                            (spec_b.clone(), spec_a.clone())
-                        };
-                        let descriptor = cell_descriptor(cell, &spec_a, &spec_b);
-                        let map = &pool[cell.map_index as usize];
-                        // The WHOLE cell — strategy construction and spawn
-                        // validation included — runs under catch_unwind,
-                        // matching the frozen m6 `run_match` crash contract:
-                        // a single-match panic (bot build, spawn rejection,
-                        // any round) is recorded as THIS cell's Crash and
-                        // never aborts the batch.
-                        let started = Instant::now();
-                        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let cell_setup = setup(cell, &enl_spec, &res_spec, cfg, map);
-                            crate::run::run_match_recorded(
-                                &descriptor,
-                                cfg,
-                                map,
-                                &cell_setup.enl_spawns,
-                                &cell_setup.res_spawns,
-                                cell_setup.enl,
-                                cell_setup.res,
-                                replay_sample(cell),
-                            )
-                        }));
-                        let played = match caught {
-                            Ok(played) => played,
-                            Err(_panic) => crate::run::RecordedMatch {
-                                record: crate::metrics::MatchRecord::crashed(
-                                    &descriptor,
-                                    started.elapsed().as_millis() as u64,
+                    let variant_map = variant_index
+                        .get(cell.variant_id.as_str())
+                        .and_then(|&vi| variant_maps[vi][cell.map_index as usize].as_ref());
+                    let slot = match variant_map {
+                        None => {
+                            // Config failure (infeasible map-regime map or a
+                            // byte-share mismatch): identity echo, empty
+                            // stats, stays in the result set.
+                            Slot::Failure(BalanceMatchRecord::config_failure(
+                                cell, &spec_a, &spec_b,
+                            ))
+                        }
+                        Some(map) => {
+                            let (enl_spec, res_spec) = if cell.policy_a_is_enl {
+                                (spec_a.clone(), spec_b.clone())
+                            } else {
+                                (spec_b.clone(), spec_a.clone())
+                            };
+                            let descriptor = cell_descriptor(cell, &spec_a, &spec_b);
+                            // The WHOLE cell — strategy construction and spawn
+                            // validation included — runs under catch_unwind,
+                            // matching the frozen m6 `run_match` crash contract:
+                            // a single-match panic (bot build, spawn rejection,
+                            // any round) is recorded as THIS cell's Crash and
+                            // never aborts the batch.
+                            let started = Instant::now();
+                            let caught =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let cell_setup = setup(cell, &enl_spec, &res_spec, cfg, map);
+                                    crate::run::run_match_recorded(
+                                        &descriptor,
+                                        cfg,
+                                        map,
+                                        &cell_setup.enl_spawns,
+                                        &cell_setup.res_spawns,
+                                        cell_setup.enl,
+                                        cell_setup.res,
+                                        replay_sample(cell),
+                                    )
+                                }));
+                            let played = match caught {
+                                Ok(played) => played,
+                                Err(_panic) => crate::run::RecordedMatch {
+                                    record: crate::metrics::MatchRecord::crashed(
+                                        &descriptor,
+                                        started.elapsed().as_millis() as u64,
+                                    ),
+                                    replay: None,
+                                },
+                            };
+                            let replay = played.replay.map(|bytes| BalanceReplay {
+                                cell_index: cell.index,
+                                variant_id: cell.variant_id.clone(),
+                                pair_id: cell.pair_id.clone(),
+                                leg: cell.leg,
+                                map_id: cell.map_id.clone(),
+                                bytes,
+                            });
+                            Slot::Played(
+                                BalanceMatchRecord::from_match_record(
+                                    cell,
+                                    &spec_a,
+                                    &spec_b,
+                                    &played.record,
                                 ),
-                                replay: None,
-                            },
-                        };
-                        let replay = played.replay.map(|bytes| BalanceReplay {
-                            cell_index: cell.index,
-                            variant_id: cell.variant_id.clone(),
-                            pair_id: cell.pair_id.clone(),
-                            leg: cell.leg,
-                            map_id: cell.map_id.clone(),
-                            bytes,
-                        });
-                        Slot::Played(
-                            BalanceMatchRecord::from_match_record(
-                                cell,
-                                &spec_a,
-                                &spec_b,
-                                &played.record,
-                            ),
-                            replay,
-                        )
+                                replay,
+                            )
+                        }
                     };
                     ours.push((index, slot));
                     index += workers;

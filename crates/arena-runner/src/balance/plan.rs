@@ -215,6 +215,20 @@ fn config_words(cfg: &GameConfig) -> [u32; arena_core::codec::CONFIG_U32_COUNT] 
     words
 }
 
+/// The six config fields `arena_core::map::generate_map` reads — the
+/// fields that DEFINE the generated MapDefinition (ADR-0018). A variant
+/// declaring (proven by `validate_contrast` to actually change) any of
+/// them is a MAP-REGIME variant: it regenerates its own map from the
+/// same map_seed instead of byte-sharing the base map.
+pub const MAP_DEFINING_FIELDS: [&str; 6] = [
+    "map_width_cm",
+    "map_height_cm",
+    "portal_count",
+    "portal_min_distance_cm",
+    "clustered_portal_ratio_permille",
+    "portal_cluster_count",
+];
+
 /// One complete configuration plus the fields it DECLARES to change
 /// against the plan's base variant (plan sections 5.3 and 7.3: a variant
 /// is the complete `GameConfig`; the declared-only difference is verified,
@@ -259,6 +273,16 @@ impl ConfigVariant {
     /// same value the m6 path records (`tournament::config::config_identity`).
     pub fn config_hash(&self) -> u64 {
         crate::tournament::config::config_identity(&self.config)
+    }
+
+    /// Whether this variant changes (declares) at least one
+    /// map-defining field (ADR-0018): such variants generate their OWN
+    /// MapDefinition from the same map_seed; all others must byte-share
+    /// the base map (ADR-0014, executor-verified).
+    pub fn is_map_regime(&self) -> bool {
+        self.declared_changed_fields
+            .iter()
+            .any(|field| MAP_DEFINING_FIELDS.contains(field))
     }
 }
 
@@ -467,6 +491,16 @@ impl ExperimentPlan {
                         ));
                     }
                 }
+                Stage::Interaction => {
+                    // Plan 7.4 small factorial experiments: base, A, B, A+B
+                    // — at most two declared fields per variant (ADR-0018).
+                    if changed > 2 {
+                        return Err(format!(
+                            "stage interaction declares at most two fields: variant {} declares {:?}",
+                            variant.variant_id, variant.declared_changed_fields
+                        ));
+                    }
+                }
                 Stage::Ablation | Stage::Readiness => {
                     return Err(format!(
                         "stage {} may not change rule parameters (variant {} declares {:?})",
@@ -477,6 +511,21 @@ impl ExperimentPlan {
                 }
                 _ => {}
             }
+            // Belt-and-braces: a plan never carries a config arena-core
+            // itself would refuse (generate_map validates first anyway).
+            if let Err(error) = variant.config.validate() {
+                return Err(format!(
+                    "variant {}: config does not validate: {error:?}",
+                    variant.variant_id
+                ));
+            }
+        }
+        // The base variant's config validates too.
+        if let Err(error) = base.config.validate() {
+            return Err(format!(
+                "variant {}: config does not validate: {error:?}",
+                base.variant_id
+            ));
         }
         if matches!(self.stage, Stage::Ablation | Stage::Readiness) {
             // Belt-and-braces: the ablation and readiness stages are
@@ -836,6 +885,124 @@ mod tests {
         // Interaction stage accepts the two-field contrast.
         plan.stage = Stage::Interaction;
         assert_eq!(plan.validate(), Ok(()));
+    }
+
+    // B4 map-regime classification (ADR-0018): exactly the six
+    // generate_map-read fields make a variant regenerate its own
+    // MapDefinition from the same map_seed; rule-only fields keep the
+    // ADR-0014 byte-shared base map.
+    #[test]
+    fn map_regime_is_exactly_the_map_defining_declarations() {
+        // The frozen default values of the six map-defining fields (the
+        // frozen-default guard: B4 candidates change exactly one field
+        // against THESE values).
+        let default = GameConfig::default();
+        assert_eq!(default.map_width_cm, 600_000);
+        assert_eq!(default.map_height_cm, 600_000);
+        assert_eq!(default.portal_count, 120);
+        assert_eq!(default.portal_min_distance_cm, 8_000);
+        assert_eq!(default.clustered_portal_ratio_permille, 700);
+        assert_eq!(default.portal_cluster_count, 6);
+        // Every map-defining name is a canonical config field name.
+        let canonical: std::collections::BTreeSet<&str> =
+            CONFIG_FIELD_NAMES.iter().copied().collect();
+        for name in MAP_DEFINING_FIELDS {
+            assert!(canonical.contains(name), "{name} is not a config field");
+        }
+        assert_eq!(MAP_DEFINING_FIELDS.len(), 6);
+
+        let base = ConfigVariant::new("default", GameConfig::default(), Vec::new());
+        let mut is_regime = |field: &'static str, regime: bool| {
+            let mut cfg = GameConfig::default();
+            match field {
+                "map_width_cm" => cfg.map_width_cm = 550_000,
+                "map_height_cm" => cfg.map_height_cm = 550_000,
+                "portal_count" => cfg.portal_count = 80,
+                "portal_min_distance_cm" => cfg.portal_min_distance_cm = 6_000,
+                "clustered_portal_ratio_permille" => cfg.clustered_portal_ratio_permille = 600,
+                "portal_cluster_count" => cfg.portal_cluster_count = 5,
+                "move_budget_cm" => cfg.move_budget_cm = 24_000,
+                "max_link_distance_cm" => cfg.max_link_distance_cm = 250_000,
+                "attack_damage" => cfg.attack_damage = 25,
+                "recharge_amount" => cfg.recharge_amount = 20,
+                "recharge_cost_supply" => cfg.recharge_cost_supply = 2,
+                "initial_supply" => cfg.initial_supply = 40,
+                _ => panic!("unknown field {field}"),
+            }
+            let variant = ConfigVariant::new("probe", cfg, vec![field]);
+            assert_eq!(validate_contrast(&variant, &base), Ok(()));
+            assert_eq!(
+                variant.is_map_regime(),
+                regime,
+                "{field} classification (ADR-0018)"
+            );
+        };
+        for field in MAP_DEFINING_FIELDS {
+            is_regime(field, true);
+        }
+        for field in [
+            "move_budget_cm",
+            "max_link_distance_cm",
+            "attack_damage",
+            "recharge_amount",
+            "recharge_cost_supply",
+            "initial_supply",
+        ] {
+            is_regime(field, false);
+        }
+        // A mixed declaration is map-regime (>=1 map-defining field).
+        let mut cfg = GameConfig::default();
+        cfg.move_budget_cm = 24_000;
+        cfg.portal_count = 80;
+        let mixed = ConfigVariant::new("mixed", cfg, vec!["move_budget_cm", "portal_count"]);
+        assert!(mixed.is_map_regime());
+        // The base variant (no declarations) is not.
+        assert!(!base.is_map_regime());
+    }
+
+    // Interaction plans are SMALL factorial experiments (plan 7.4): a
+    // non-base variant may declare at most two fields (base, A, B, A+B).
+    #[test]
+    fn interaction_variants_declare_at_most_two_fields() {
+        let mut cfg = GameConfig::default();
+        cfg.move_budget_cm = 24_000;
+        cfg.attack_damage = 25;
+        cfg.initial_supply = 40;
+        let mut plan = valid_plan();
+        plan.stage = Stage::Interaction;
+        plan.variants[1] = ConfigVariant::new(
+            "three-fields",
+            cfg,
+            vec!["move_budget_cm", "attack_damage", "initial_supply"],
+        );
+        assert!(
+            plan.validate().is_err(),
+            "interaction variants declare at most two fields"
+        );
+        // Two fields still validate (the A+B arm).
+        plan.variants[1].config.initial_supply = GameConfig::default().initial_supply;
+        plan.variants[1].declared_changed_fields = vec!["move_budget_cm", "attack_damage"];
+        assert_eq!(plan.validate(), Ok(()));
+    }
+
+    // Belt-and-braces: every variant's complete config must itself
+    // validate (arena-core GameConfig::validate) — a plan never carries a
+    // config arena-core would refuse.
+    #[test]
+    fn every_variant_config_must_validate() {
+        let mut cfg = GameConfig::default();
+        cfg.attack_damage = 0; // arena-core refuses (HpBounds)
+        let mut plan = valid_plan();
+        plan.variants[1] = ConfigVariant::new("zero-damage", cfg, vec!["attack_damage"]);
+        let error = plan.validate().expect_err("invalid variant config refused");
+        assert!(
+            error.contains("zero-damage"),
+            "error names the variant: {error}"
+        );
+        assert!(
+            error.contains("config"),
+            "error says the config is invalid: {error}"
+        );
     }
 
     #[test]
