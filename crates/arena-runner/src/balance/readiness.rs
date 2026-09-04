@@ -653,13 +653,6 @@ pub fn count_active_blocks(replay: &ReplayFile, blocker: Faction) -> u64 {
         .iter()
         .map(|p| (p.id, p.position, p.owner))
         .collect();
-    let position = |id: PortalId| -> arena_core::types::Coord {
-        portals
-            .iter()
-            .find(|(pid, _, _)| *pid == id)
-            .expect("replay map portals are dense")
-            .1
-    };
     let mut owners: BTreeMap<PortalId, Owner> =
         portals.iter().map(|(id, _, owner)| (*id, *owner)).collect();
     let mut links: BTreeSet<LinkId> = BTreeSet::new();
@@ -957,11 +950,11 @@ fn rr_gates(plan: &ExperimentPlan, run: &BalanceRunResult) -> Vec<GateCount> {
     evaluate_round_robin_gates(plan, &run.records, &run.replays)
 }
 
-fn idle_gates(plan: &ExperimentPlan, run: &BalanceRunResult) -> Vec<GateCount> {
+fn idle_gates(_plan: &ExperimentPlan, run: &BalanceRunResult) -> Vec<GateCount> {
     vec![idle_gate(&run.records)]
 }
 
-fn blocking_gates(plan: &ExperimentPlan, run: &BalanceRunResult) -> Vec<GateCount> {
+fn blocking_gates(_plan: &ExperimentPlan, run: &BalanceRunResult) -> Vec<GateCount> {
     vec![
         blocking_gate(&run.records, &run.replays, PolicyId::BlockerBuilderR2),
         drop_gate(&run.records),
