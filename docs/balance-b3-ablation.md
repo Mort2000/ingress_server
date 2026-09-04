@@ -69,28 +69,28 @@
 | greedy-coordinated-canonical | 125 | **125** | 100 | 100 | 152/48 |
 | greedy-field（m6） | 125 | 125 | 100 | 100 | 142/58 |
 | hybrid（m6） | 125 | 125 | 100 | 100 | 140/60 |
-| hybrid-builder-only | 125 | 125 | 100 | 100 | 104/96 |
+| hybrid-builder-only | 125 | 125 | 100 | 100 | 144/56 |
 | hybrid-builder-attack | 125 | 125 | 100 | 100 | 150/50 |
 | greedy-coordinated-r2（seeded） | 125 | **0** | 100 | 100 | 108/92 |
 | adaptive-hybrid-r2（seeded） | 125 | 0 | 100 | 100 | 124/76 |
 | builder-disruptor-r2（seeded） | 125 | 0 | 100 | 100 | 82/112（6 平） |
 
-确定性出生（m6 系 + canonical 臂）的 mirror 100% 首轮出生冲突并带强 ENL 偏置（`Flat(0)` 先手）；seeded top-K + 出生抖动（B2 修正）把冲突降为 0、ENL 偏置收敛到 108/92。mirror 单元双腿结果 100% 同阵营胜（对称性本身符合预期，按原始计数如实记录）。
+确定性出生（m6 系 + canonical 臂）的 mirror 100% 首轮出生冲突并带强 ENL 偏置（`Flat(0)` 先手，+40..+52/200）；seeded top-K + 出生抖动（B2 修正）把冲突降为 0、ENL 偏置收敛（三个 seeded mirror：gc-r2 108/92、adaptive 124/76、disruptor 反向 82/112，|偏置| ≤30/200）。mirror 单元双腿结果 100% 同阵营胜（对称性本身符合预期，按原始计数如实记录）。
 
 ## 滚雪球（P(win | leading@R100)，原始计数 won/lost/drew，tie 另计）
 
 | 对阵 | R100 列联 | P(win\|led) |
 |---|---|---|
-| hybrid vs greedy-coordinated-r2 | 3/0/0（R50 前几乎无人领先；R200 132/0/0，R300 199/0/0） | 1000‰ |
+| hybrid vs greedy-coordinated-r2 | 3/0/0（hybrid 在 R50/R100 仅 3 场领先、leader 零平局——其余 197 场的领先者是 gc-r2 且全部落败；R200 132/0/0，R300 199/0/0） | 1000‰ |
 | greedy-coordinated-r2 vs hybrid-builder-only | 192/2/0 | 989‰ |
 | hybrid-builder-only vs hybrid-builder-attack | 0/100/0（反向 100/0/0） | 0‰ / 1000‰ |
 | builder-disruptor-r2（对全部对手） | 领先即全胜 | 1000‰ |
 
-竞争性得分对局中领先者在 R100 后几乎必胜（plan §10.3 的 >90% 硬告警带全面触发）——与"规则风险"分类一致：默认参数下翻盘空间极小，喂给 B4。
+R100 领先的预测力按对局类型分裂（上表均为上侧计数，原始证据在 `analysis.txt` checkpoint 表）：建场者互角与 `builder-disruptor-r2` 参与的对局触发 plan §10.3 的 >90% 硬告警带（gc-r2 对 hybrid-builder-only 989‰；disruptor 领先即全胜）；而含攻击 overlay 的对局恰好相反——R100 领先者（建场方）几乎必败（hybrid 对 gc-r2 时 gc-r2 在 R100 领先 197/200 却 0 胜；对 gc-canonical 0/189、对 adaptive-hybrid-r2 1/188 同型）。全矩阵非 mirror 合并 P(win|led@R100) = 4,003/5,600（715‰）——默认参数下没有普适的 R100 锁定，但被支配方同样没有翻盘路径，与"规则风险"分类一致，喂给 B4。
 
 ## 机制与 Drop（整数原始计数）
 
-池化机制（每策略 1,800 个 faction slot = 7 对手 × 200 + mirror 双侧 400；矩阵全量）：`greedy-coordinated-r2` first-field 均值 35 轮、29,067 场次建场、Drop 0‰；`greedy-field`(m6) 均值 93 轮（n=1,696）、11,260 场次、52‰；`hybrid` 与两臂 71 轮 / 11,939-12,061 场 / 5-8‰——臂与冻结 Hybrid 的建造指标一致，与 gc 核心差 2 倍，差距来自建场协调而非出生；`greedy-coordinated-canonical` 38 轮 / 28,648 场 / 1‰（与 gc-r2 一致，进一步佐证出生对照无正面效应）。
+池化机制（每策略 1,800 个 faction slot = 7 对手 × 200 + mirror 双侧 400；矩阵全量）：`greedy-coordinated-r2` first-field 均值 35 轮、29,067 场次建场、Drop 0‰；`greedy-field`(m6) 均值 93 轮（n=1,696）、11,260 场次、52‰；`hybrid` 与两臂 71 轮 / 11,939-14,845 场 / 5-8‰——首场轮次与 Drop 与冻结 Hybrid 同级（`hybrid-builder-only` 无攻击分派，建场数 14,845 反而高于 hybrid 的 12,061），建场量与 gc 核心差约 2 倍，差距来自建场协调而非出生；`greedy-coordinated-canonical` 38 轮 / 28,648 场 / 1‰（与 gc-r2 一致，进一步佐证出生对照无正面效应）。
 
 Drop 按原因分解（`b3-drop-reasons-matrix-r3`：3,000 行验证重执行——每行从自身 policy tag + 全值参数重构 `PolicyPlayer`，final State Hash 与 per-faction submitted/ok/dropped 对档核验，任何不匹配即中止；per-reason 合计与档内 `commands_dropped` 逐策略对账 OK）：
 
@@ -122,6 +122,7 @@ Drop 按原因分解（`b3-drop-reasons-matrix-r3`：3,000 行验证重执行—
 4. **三次重发的轨迹逐字段一致**：map/game/bot seed 不依赖 experiment id——`-r1`/`-r2`/`-r3` 的 7,200+300 行逐场结果、比分、final_state_hash 与全部统计列完全一致（仅 experiment_id / 由其派生的 schedule_seed / elapsed_ms 不同；`pairs.tsv`、`replays.tsv`、`maps/`、`configs.tsv`、`policies.tsv` 逐字节相同；两次 Drop 重执行的 `drop-reasons.tsv`/`summary.txt` 哈希相同）。`-r1`/`-r2` 目录按不覆盖历史原则保留。
 5. Pilot 先行（`--pilot-r0`，8/4 图，scratch 目录，运行后删除）：576+24 场 0 crash、analysis 与 mirror 探针工作正常后才发起官方批次。
 6. 全部统计为非权威离线分析（plan §9.3）：整数原始计数是记录，permille 与 Wilson 界限只是派生展示；`analysis.txt` 由 `matches.tsv`+`pairs.tsv`+replay 头机器可重算；无任何派生值进入 Game Result、Replay Hash 或规则结算。
+7. **报告文本层的四处叙述错误在提交后的独立复核中被发现并更正（原始数据胜出，本条即更正记录；运行产物与 `analysis.txt` 从未有过这些错误）**：(a) mirror 表 `hybrid-builder-only` 的 ENL/RES 胜误写 104/96，档内真值 144/56（`analysis.txt` per-pair 表与原始 `matches.tsv` 一致）；(b) 机制段落把两臂建场数并入 "11,939-12,061 场" 区间——`hybrid-builder-only` 实际 14,845 场（区间只覆盖 hybrid 与 builder-attack）；(c) 滚雪球表 hybrid 行的括注 "R50 前几乎无人领先" 与档内事实相反——R50/R100 每场都有领先者（leader 零平局），197 场的领先者是 gc-r2（全部落败），hybrid 自己仅 3 场领先；(d) 结语句 "领先者在 R100 后几乎必胜、>90% 硬告警带全面触发" 过度概括——全矩阵非 mirror 合并 P(win|led@R100)=4,003/5,600（715‰），含攻击 overlay 的对局中 R100 领先者（建场方）几乎必败。所有表格中的 W-D-L、Wilson、分位、mirror 结构计数与 Drop 数字经逐项独立重算无误。
 
 ## 产物与内容哈希（plan §12；`runs/` 不跟踪）
 
