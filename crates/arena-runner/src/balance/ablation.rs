@@ -19,15 +19,17 @@ use crate::policy::BucketPolicy;
 use crate::run::MAX_WORKERS;
 
 /// The frozen experiment ids (archive directory names; ADR-0017). `-r1`
-/// was the first official attempt, superseded by a rendering defect in
-/// its archived `analysis.txt` (the per-policy mechanics table printed
-/// the ok and dropped counts without a separator — raw records were
-/// unaffected); it stays on disk as history, never overwritten. `-r2` is
-/// the current official run of the same frozen plans (seeds derive
-/// without the experiment id, so `-r2` reproduces `-r1`'s trajectories
-/// exactly). Pilot runs append `-pilot-r0` and are exploratory only.
-pub const B3_MATRIX_EXPERIMENT_ID: &str = "b3-ablation-matrix-r2";
-pub const B3_IDLE_EXPERIMENT_ID: &str = "b3-ablation-idle-r2";
+/// was superseded by a rendering defect in its archived `analysis.txt`
+/// (ok and dropped counts printed without a separator); `-r2` was
+/// superseded by a mechanics-pooling defect (mirror records contributed
+/// only ONE of the policy's two faction slots). Raw per-match records
+/// were correct in both; both stay on disk as history, never
+/// overwritten. `-r3` is the current official run of the same frozen
+/// plans (seeds derive without the experiment id, so every re-issue
+/// reproduces the same trajectories exactly). Pilot runs append
+/// `-pilot-r0` and are exploratory only.
+pub const B3_MATRIX_EXPERIMENT_ID: &str = "b3-ablation-matrix-r3";
+pub const B3_IDLE_EXPERIMENT_ID: &str = "b3-ablation-idle-r3";
 
 /// The official map counts (frozen before the official run; plan section
 /// 8.3 never reduces swap legs — every unit runs both legs).

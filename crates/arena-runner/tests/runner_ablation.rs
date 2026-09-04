@@ -35,7 +35,7 @@ use arena_runner::policy::BucketPolicy;
 #[test]
 fn b3_matrix_plan_is_frozen_and_valid() {
     let plan = b3_matrix_plan(B3_MATRIX_MAP_COUNT, B3_MATRIX_EXPERIMENT_ID);
-    assert_eq!(plan.experiment_id, "b3-ablation-matrix-r2");
+    assert_eq!(plan.experiment_id, "b3-ablation-matrix-r3");
     assert_eq!(plan.stage, Stage::Ablation);
     assert_eq!(plan.seed_set, SeedSet::Development);
     assert_eq!(plan.map_count, 100);
@@ -89,7 +89,7 @@ fn b3_matrix_plan_is_frozen_and_valid() {
 #[test]
 fn pilot_variant_shrinks_map_counts_only() {
     let official = b3_matrix_plan(B3_MATRIX_MAP_COUNT, B3_MATRIX_EXPERIMENT_ID);
-    let pilot = b3_matrix_plan(B3_PILOT_MATRIX_MAP_COUNT, "b3-ablation-matrix-r2-pilot-r0");
+    let pilot = b3_matrix_plan(B3_PILOT_MATRIX_MAP_COUNT, "b3-ablation-matrix-r3-pilot-r0");
     assert_eq!(pilot.map_count, 8);
     assert_eq!(pilot.stage, official.stage);
     assert_eq!(pilot.variants, official.variants);
@@ -97,7 +97,7 @@ fn pilot_variant_shrinks_map_counts_only() {
     assert_eq!(pilot.matchups, official.matchups);
     assert_eq!(pilot.bucket_policy, official.bucket_policy);
     let idle_official = b3_idle_plan(B3_IDLE_MAP_COUNT, B3_IDLE_EXPERIMENT_ID);
-    let idle_pilot = b3_idle_plan(B3_PILOT_IDLE_MAP_COUNT, "b3-ablation-idle-r2-pilot-r0");
+    let idle_pilot = b3_idle_plan(B3_PILOT_IDLE_MAP_COUNT, "b3-ablation-idle-r3-pilot-r0");
     assert_eq!(idle_pilot.map_count, 4);
     assert_eq!(idle_pilot.matchups, idle_official.matchups);
     assert_eq!(idle_pilot.policies, idle_official.policies);
@@ -106,7 +106,7 @@ fn pilot_variant_shrinks_map_counts_only() {
 #[test]
 fn b3_idle_plan_is_frozen_and_valid() {
     let plan = b3_idle_plan(B3_IDLE_MAP_COUNT, B3_IDLE_EXPERIMENT_ID);
-    assert_eq!(plan.experiment_id, "b3-ablation-idle-r2");
+    assert_eq!(plan.experiment_id, "b3-ablation-idle-r3");
     assert_eq!(plan.stage, Stage::Ablation);
     assert_eq!(plan.map_count, 50);
     assert_eq!(plan.policies.len(), 4, "three arms + idle");
@@ -502,6 +502,50 @@ fn mechanics_pool_per_policy_with_raw_sums() {
     // The idle side never participated with scoring stats.
     assert_eq!(mechanics[1].matches_played, 2);
     assert_eq!(mechanics[1].fields_created, 0);
+
+    // A MIRROR record contributes BOTH faction slots of the same policy
+    // (the r2 official matrix undercounted mirrors here — one side per
+    // record — until the raw matches.tsv recompute caught it; this row
+    // pins both-sides pooling).
+    let enl_mirror = {
+        let mut stats = stats_with(3, Some(50));
+        stats.commands_submitted = 80;
+        stats.commands_ok = 78;
+        stats.commands_dropped = 2;
+        stats.field_area2_sum = 7_000;
+        stats
+    };
+    let res_mirror = {
+        let mut stats = stats_with(2, Some(60));
+        stats.commands_submitted = 70;
+        stats.commands_ok = 66;
+        stats.commands_dropped = 4;
+        stats.field_area2_sum = 5_000;
+        stats
+    };
+    let mirror = record(
+        2,
+        "hybrid--hybrid",
+        "hybrid--hybrid#m000",
+        0,
+        PolicyId::Hybrid,
+        PolicyId::Hybrid,
+        100,
+        90,
+        BalanceOutcome::Played(Outcome::EnlWin),
+        Some(Faction::Enl),
+        enl_mirror,
+        res_mirror,
+    );
+    let mechanics = policy_mechanics(&[mirror], &specs);
+    assert_eq!(mechanics[0].matches_played, 2, "both mirror slots");
+    assert_eq!(mechanics[0].commands_submitted, 150);
+    assert_eq!(mechanics[0].commands_ok, 144);
+    assert_eq!(mechanics[0].commands_dropped, 6);
+    assert_eq!(mechanics[0].fields_created, 5);
+    assert_eq!(mechanics[0].field_area2_sum, 12_000);
+    assert_eq!(mechanics[0].first_field_round_sum, 110);
+    assert_eq!(mechanics[0].first_field_count, 2);
 }
 
 // ---------------------------------------------------------------------

@@ -329,10 +329,14 @@ pub fn pair_summaries(
 /// One policy's pooled raw mechanics over the matches it played.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PolicyMechanics {
-    pub policy: PolicyId,
+    /// FACTION SLOTS the policy played (a mirror match contributes TWO
+    /// slots of the same policy — the pool must include both sides, the
+    /// same definition the raw `matches.tsv` and the verified drop pass
+    /// use).
     pub matches_played: u64,
+    pub policy: PolicyId,
     pub first_field_round_sum: u64,
-    /// Matches with a recorded first-field round (the mean's denominator).
+    /// Slots with a recorded first-field round (the mean's denominator).
     pub first_field_count: u64,
     pub field_area2_sum: u128,
     pub lifetime_rounds_sum: u64,
@@ -342,9 +346,10 @@ pub struct PolicyMechanics {
     pub commands_dropped: u64,
 }
 
-/// Pools per-policy mechanics in the plan's policy declaration order
-/// (participation by policy-id membership of the record's sides, never by
-/// a zero score).
+/// Pools per-policy mechanics in the plan's policy declaration order,
+/// over every FACTION SLOT the policy played (participation by policy-id
+/// membership of each side, never by a zero score; a mirror record
+/// contributes both of its sides).
 pub fn policy_mechanics(
     records: &[BalanceMatchRecord],
     specs: &[PolicySpec],
@@ -365,33 +370,37 @@ pub fn policy_mechanics(
                 commands_dropped: 0,
             };
             for record in records.iter().filter(|r| played(r)) {
-                let stats = if record.policy_a == spec.policy_id {
-                    if record.policy_a_is_enl {
-                        &record.stats.enl
-                    } else {
-                        &record.stats.res
-                    }
-                } else if record.policy_b == spec.policy_id {
-                    if record.policy_a_is_enl {
-                        &record.stats.res
-                    } else {
-                        &record.stats.enl
-                    }
+                // Both faction slots of the record: policy_a on its own
+                // faction, policy_b on the opposite one (a mirror record
+                // contributes both slots of the same policy).
+                let sides = if record.policy_a_is_enl {
+                    [
+                        (record.policy_a, &record.stats.enl),
+                        (record.policy_b, &record.stats.res),
+                    ]
                 } else {
-                    continue;
+                    [
+                        (record.policy_a, &record.stats.res),
+                        (record.policy_b, &record.stats.enl),
+                    ]
                 };
-                mechanics.matches_played += 1;
-                if let Some(round) = stats.first_field_round {
-                    mechanics.first_field_round_sum += round as u64;
-                    mechanics.first_field_count += 1;
+                for (policy, side) in sides {
+                    if policy != spec.policy_id {
+                        continue;
+                    }
+                    mechanics.matches_played += 1;
+                    if let Some(round) = side.first_field_round {
+                        mechanics.first_field_round_sum += round as u64;
+                        mechanics.first_field_count += 1;
+                    }
+                    mechanics.field_area2_sum += side.field_area2_sum;
+                    mechanics.lifetime_rounds_sum +=
+                        side.destroyed_lifetime_rounds_sum + side.surviving_lifetime_rounds_sum;
+                    mechanics.fields_created += side.fields_created;
+                    mechanics.commands_submitted += side.commands_submitted;
+                    mechanics.commands_ok += side.commands_ok;
+                    mechanics.commands_dropped += side.commands_dropped;
                 }
-                mechanics.field_area2_sum += stats.field_area2_sum;
-                mechanics.lifetime_rounds_sum +=
-                    stats.destroyed_lifetime_rounds_sum + stats.surviving_lifetime_rounds_sum;
-                mechanics.fields_created += stats.fields_created;
-                mechanics.commands_submitted += stats.commands_submitted;
-                mechanics.commands_ok += stats.commands_ok;
-                mechanics.commands_dropped += stats.commands_dropped;
             }
             mechanics
         })
@@ -1012,7 +1021,7 @@ pub fn analysis_text(
 
     // Policy mechanics.
     out.push_str("## Per-policy mechanics (pooled raw sums; means derived)\n\n");
-    out.push_str("| policy | matches | first-field sum (n, mean) | field_area2_sum | lifetime rounds (mean) | fields | submitted/ok/dropped (drop permille) |\n|---|---|---|---|---|---|---|\n");
+    out.push_str("| policy | slots | first-field sum (n, mean) | field_area2_sum | lifetime rounds (mean) | fields | submitted/ok/dropped (drop permille) |\n|---|---|---|---|---|---|---|\n");
     for mechanics in policy_mechanics(records, &plan.policies) {
         let ff_mean = if mechanics.first_field_count > 0 {
             format!(
