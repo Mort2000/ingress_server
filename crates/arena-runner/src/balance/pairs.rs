@@ -346,7 +346,7 @@ mod tests {
     use crate::balance::plan::{ConfigVariant, PolicyMatchup, SeedSet, Stage};
     use crate::balance::schedule::MatchCell;
     use crate::policy::BucketPolicy;
-    use arena_bots::policy::{PolicyFamily, PolicyId};
+    use arena_bots::policy::{PolicyFamily, PolicyId, PolicyParameters};
     use arena_core::config::GameConfig;
 
     fn plan_two_variants() -> ExperimentPlan {
@@ -421,9 +421,11 @@ mod tests {
             policy_a: cell.policy_a,
             policy_a_family: PolicyFamily::FieldBuilder,
             policy_a_version: "m6.0".to_string(),
+            policy_a_parameters: PolicyParameters::FrozenM6,
             policy_b: cell.policy_b,
             policy_b_family: PolicyFamily::AdaptiveHybrid,
             policy_b_version: "m6.0".to_string(),
+            policy_b_parameters: PolicyParameters::FrozenM6,
             policy_a_is_enl: cell.policy_a_is_enl,
             map_seed: cell.map_seed,
             game_seed: cell.game_seed,

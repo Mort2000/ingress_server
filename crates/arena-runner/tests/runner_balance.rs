@@ -4,7 +4,7 @@
 //! tamper rejection, and — further below as the milestones land — the
 //! end-to-end B1 completion condition.
 
-use arena_bots::policy::{PolicyFamily, PolicyId};
+use arena_bots::policy::{PolicyFamily, PolicyId, PolicyParameters};
 use arena_core::types::Score2;
 use arena_runner::balance::plan::{ConfigVariant, ExperimentPlan, SeedSet, Stage};
 use arena_runner::balance::record::{
@@ -203,7 +203,7 @@ fn balance_records_tsv_round_trips_exactly() {
         hand_built_record(0, 0, true),
         hand_built_record(1, 1, false),
     ];
-    assert_eq!(balance_columns().len(), 27 + 2 * 23 + 12);
+    assert_eq!(balance_columns().len(), 29 + 2 * 23 + 12);
     let tsv = balance_records_to_tsv(&records);
     let parsed = parse_balance_tsv(&tsv).expect("round-trips");
     assert_eq!(parsed.len(), 2);
@@ -213,6 +213,12 @@ fn balance_records_tsv_round_trips_exactly() {
     assert_eq!(parsed[0].policy_a, PolicyId::GreedyField);
     assert_eq!(parsed[0].policy_a_family, PolicyFamily::FieldBuilder);
     assert_eq!(parsed[0].policy_a_version, "m6.0");
+    // The complete parameter sets ride in their own per-side columns
+    // (plan 10.1 bullet 6; ADR-0016 gate 7 reads them back).
+    assert!(balance_columns().contains(&"policy_a_parameters".to_string()));
+    assert!(balance_columns().contains(&"policy_b_parameters".to_string()));
+    assert_eq!(parsed[0].policy_a_parameters, PolicyParameters::FrozenM6);
+    assert_eq!(parsed[0].policy_b_parameters, PolicyParameters::FrozenM6);
     assert_eq!(parsed[0].policy_b_family, PolicyFamily::AdaptiveHybrid);
     assert_eq!(parsed[0].stats.enl.first_field_round, Some(30));
     assert_eq!(parsed[0].stats.enl.field_area2_sum, 1_000_000);
@@ -243,6 +249,10 @@ fn tampered_balance_rows_are_refused() {
     assert!(parse_balance_tsv(&tampered).is_err());
     // Bad family tag.
     let tampered = tsv.replacen("field-builder\t", "fieldbuilder\t", 1);
+    assert!(parse_balance_tsv(&tampered).is_err());
+    // Unknown parameter serialization: the full-value parameters column
+    // parses strictly (an edited string never maps to a parameter set).
+    let tampered = tsv.replacen("frozen-m6\t", "frozen-m6-v2\t", 1);
     assert!(parse_balance_tsv(&tampered).is_err());
     // Odd-length state hash hex.
     let odd_hash = {

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use arena_bots::policy::{PolicyFamily, PolicyId, PolicySpec};
+use arena_bots::policy::{PolicyFamily, PolicyId, PolicyParameters, PolicySpec};
 use arena_core::types::Score2;
 
 use crate::balance::schedule::MatchCell;
@@ -45,8 +45,9 @@ impl BalanceOutcome {
 
 /// Everything one executed balance match contributes: the balance
 /// identity (experiment, seed set, variant, pair, leg, map, policies with
-/// families and versions) plus the frozen m6 metric payload and elapsed
-/// wall-clock as METADATA ONLY.
+/// families, versions and the FULL parameter sets — plan 10.1 bullet 6)
+/// plus the frozen m6 metric payload and elapsed wall-clock as METADATA
+/// ONLY.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BalanceMatchRecord {
     pub index: u64,
@@ -61,9 +62,17 @@ pub struct BalanceMatchRecord {
     pub policy_a: PolicyId,
     pub policy_a_family: PolicyFamily,
     pub policy_a_version: String,
+    /// Policy A's complete parameter set: the full-value canonical
+    /// serialization ([`PolicyParameters::tag`]) enters the row, so a
+    /// re-tuned policy (plan 7.5) is disambiguated per row even when id
+    /// and version repeat, and the records-integrity gate can compare
+    /// every row against `policies.tsv` (ADR-0016 gate 7).
+    pub policy_a_parameters: PolicyParameters,
     pub policy_b: PolicyId,
     pub policy_b_family: PolicyFamily,
     pub policy_b_version: String,
+    /// Policy B's complete parameter set (see [`Self::policy_a_parameters`]).
+    pub policy_b_parameters: PolicyParameters,
     pub policy_a_is_enl: bool,
     pub map_seed: u64,
     pub game_seed: u64,
@@ -101,9 +110,11 @@ impl BalanceMatchRecord {
             policy_a: cell.policy_a,
             policy_a_family: spec_a.family,
             policy_a_version: spec_a.version.to_string(),
+            policy_a_parameters: spec_a.parameters,
             policy_b: cell.policy_b,
             policy_b_family: spec_b.family,
             policy_b_version: spec_b.version.to_string(),
+            policy_b_parameters: spec_b.parameters,
             policy_a_is_enl: cell.policy_a_is_enl,
             map_seed: cell.map_seed,
             game_seed: cell.game_seed,
@@ -136,9 +147,11 @@ impl BalanceMatchRecord {
             policy_a: cell.policy_a,
             policy_a_family: spec_a.family,
             policy_a_version: spec_a.version.to_string(),
+            policy_a_parameters: spec_a.parameters,
             policy_b: cell.policy_b,
             policy_b_family: spec_b.family,
             policy_b_version: spec_b.version.to_string(),
+            policy_b_parameters: spec_b.parameters,
             policy_a_is_enl: cell.policy_a_is_enl,
             map_seed: cell.map_seed,
             game_seed: cell.game_seed,
@@ -181,9 +194,11 @@ pub fn balance_columns() -> Vec<String> {
         "policy_a",
         "policy_a_family",
         "policy_a_version",
+        "policy_a_parameters",
         "policy_b",
         "policy_b_family",
         "policy_b_version",
+        "policy_b_parameters",
         "policy_a_is_enl",
         "map_seed",
         "game_seed",
@@ -226,9 +241,11 @@ pub fn balance_record_to_row(record: &BalanceMatchRecord) -> Vec<String> {
         record.policy_a.tag().to_string(),
         record.policy_a_family.tag().to_string(),
         record.policy_a_version.clone(),
+        record.policy_a_parameters.tag(),
         record.policy_b.tag().to_string(),
         record.policy_b_family.tag().to_string(),
         record.policy_b_version.clone(),
+        record.policy_b_parameters.tag(),
         u8::from(record.policy_a_is_enl).to_string(),
         record.map_seed.to_string(),
         record.game_seed.to_string(),
@@ -297,6 +314,13 @@ fn parse_balance_record(map: &BTreeMap<&str, &str>) -> Result<BalanceMatchRecord
         PolicyFamily::from_tag(map.get(name).copied().unwrap_or(""))
             .ok_or_else(|| format!("{name} tag"))
     };
+    // Identity-sensitive: the full-value parameter serialization parses
+    // back strictly, so an edited parameter value never silently parses
+    // to a different (e.g. default) set (ADR-0016).
+    let parameters = |name: &str| -> Result<PolicyParameters, String> {
+        PolicyParameters::from_tag(map.get(name).copied().unwrap_or(""))
+            .ok_or_else(|| format!("{name} tag"))
+    };
     Ok(BalanceMatchRecord {
         index: u64_of(map, "index")?,
         experiment_id: map.get("experiment_id").copied().unwrap_or("").to_string(),
@@ -314,6 +338,7 @@ fn parse_balance_record(map: &BTreeMap<&str, &str>) -> Result<BalanceMatchRecord
             .copied()
             .unwrap_or("")
             .to_string(),
+        policy_a_parameters: parameters("policy_a_parameters")?,
         policy_b: policy("policy_b")?,
         policy_b_family: family("policy_b_family")?,
         policy_b_version: map
@@ -321,6 +346,7 @@ fn parse_balance_record(map: &BTreeMap<&str, &str>) -> Result<BalanceMatchRecord
             .copied()
             .unwrap_or("")
             .to_string(),
+        policy_b_parameters: parameters("policy_b_parameters")?,
         policy_a_is_enl: map.get("policy_a_is_enl").copied().unwrap_or("0") == "1",
         map_seed: u64_of(map, "map_seed")?,
         game_seed: u64_of(map, "game_seed")?,

@@ -29,13 +29,16 @@ use crate::policy::BucketPolicy;
 // ---------------------------------------------------------------------
 
 /// The frozen experiment ids (archive directory names). `-r1` is the
-/// first official attempt, superseded by the standby-deadlock fix (kept
-/// on disk as history, never overwritten); `-r2` is the current official
-/// run of the same frozen plans. The pilot runs append `-pilot-r0` and
-/// are exploratory only — never gate evidence.
-pub const B2_RR_EXPERIMENT_ID: &str = "b2-readiness-rr-r2";
-pub const B2_IDLE_EXPERIMENT_ID: &str = "b2-readiness-idle-r2";
-pub const B2_BLOCK_EXPERIMENT_ID: &str = "b2-readiness-block-r2";
+/// first official attempt, superseded by the standby-deadlock fix; `-r2`
+/// was superseded because its `matches.tsv` predates the per-row policy
+/// parameter columns, leaving the parameters half of the frozen
+/// records-integrity gate (ADR-0016 gate 7) without archived per-match
+/// evidence — both stay on disk as history, never overwritten; `-r3` is
+/// the current official run of the same frozen plans. The pilot runs
+/// append `-pilot-r0` and are exploratory only — never gate evidence.
+pub const B2_RR_EXPERIMENT_ID: &str = "b2-readiness-rr-r3";
+pub const B2_IDLE_EXPERIMENT_ID: &str = "b2-readiness-idle-r3";
+pub const B2_BLOCK_EXPERIMENT_ID: &str = "b2-readiness-block-r3";
 
 /// The official map counts (frozen before the official run; plan section
 /// 8.3 never reduces swap legs — every unit runs both legs).
@@ -107,7 +110,7 @@ pub fn b2_round_robin_plan(map_count: u32, experiment_id: &str) -> ExperimentPla
             },
             crate::balance::plan::Gate::Pending {
                 gate_id: "records-integrity".to_string(),
-                statement: "every match record's policy family/version matches policies.tsv".to_string(),
+                statement: "every match record's policy family/version/parameters match policies.tsv".to_string(),
             },
         ],
     }
@@ -551,23 +554,28 @@ fn sorted_spawns(
     out
 }
 
-/// Gate 7 — records integrity (plan 10.1): every match record's policy
-/// family and version agree with the plan's policy registry
-/// (`policies.tsv` is generated from the same registry).
+/// Gate 7 — records integrity (plan 10.1, frozen as ADR-0016 gate 7):
+/// every match record's policy version AND parameters agree with the
+/// plan's policy registry (`policies.tsv` is generated from the same
+/// registry, one row per `PolicySpec` — family, version and the
+/// full-value parameter serialization).
 pub fn records_gate(records: &[BalanceMatchRecord], plan: &ExperimentPlan) -> GateCount {
     let mut checked = 0u64;
+    let mut bad = 0u64;
     let mut mismatches = Vec::new();
     for record in records {
-        for (tag, family, version) in [
+        for (tag, family, version, parameters) in [
             (
                 record.policy_a.tag(),
                 record.policy_a_family.tag(),
                 record.policy_a_version.as_str(),
+                &record.policy_a_parameters,
             ),
             (
                 record.policy_b.tag(),
                 record.policy_b_family.tag(),
                 record.policy_b_version.as_str(),
+                &record.policy_b_parameters,
             ),
         ] {
             let Some(spec) = plan.policies.iter().find(|s| s.policy_id.tag() == tag) else {
@@ -578,6 +586,7 @@ pub fn records_gate(records: &[BalanceMatchRecord], plan: &ExperimentPlan) -> Ga
                 continue;
             };
             checked += 1;
+            let mut side_bad = false;
             if spec.family.tag() != family || spec.version != version {
                 mismatches.push(format!(
                     "record {}: {} family/version {}/{} != {}/{}",
@@ -588,13 +597,28 @@ pub fn records_gate(records: &[BalanceMatchRecord], plan: &ExperimentPlan) -> Ga
                     spec.family.tag(),
                     spec.version
                 ));
+                side_bad = true;
             }
+            // The parameters half of the frozen check: the record's
+            // complete parameter set must equal the registry row's
+            // (typed equality; the full-value tags are echoed for
+            // humans only).
+            if spec.parameters != *parameters {
+                mismatches.push(format!(
+                    "record {}: {} parameters {} != {}",
+                    record.index,
+                    tag,
+                    parameters.tag(),
+                    spec.parameters.tag()
+                ));
+                side_bad = true;
+            }
+            bad += u64::from(side_bad);
         }
     }
-    let bad = mismatches.len() as u64;
     GateCount::new(
         "records-integrity",
-        "every match record's policy family/version matches policies.tsv",
+        "every match record's policy family/version/parameters match policies.tsv",
         checked - bad.min(checked),
         checked,
         0,

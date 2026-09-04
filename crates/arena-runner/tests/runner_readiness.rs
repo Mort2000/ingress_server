@@ -71,9 +71,11 @@ fn record(
         policy_a: a,
         policy_a_family: spec_a.family,
         policy_a_version: spec_a.version.to_string(),
+        policy_a_parameters: spec_a.parameters,
         policy_b: b,
         policy_b_family: spec_b.family,
         policy_b_version: spec_b.version.to_string(),
+        policy_b_parameters: spec_b.parameters,
         policy_a_is_enl: true,
         map_seed: cell.map_seed,
         game_seed: cell.game_seed,
@@ -341,7 +343,7 @@ fn drop_gate_pools_competitive_matches_only_and_enforces_the_threshold() {
 }
 
 #[test]
-fn records_gate_detects_family_and_version_mismatches() {
+fn records_gate_detects_family_version_and_parameter_mismatches() {
     let plan = b2_blocking_plan(1, "unit-readiness-block");
     let mut ok = record(
         0,
@@ -358,9 +360,35 @@ fn records_gate_detects_family_and_version_mismatches() {
     let mut wrong_family = ok.clone();
     wrong_family.policy_a_family = arena_bots::policy::PolicyFamily::FieldBuilder;
     assert!(!records_gate(&[wrong_family], &plan).passed);
-    let mut wrong_version = ok;
+    let mut wrong_version = ok.clone();
     wrong_version.policy_b_version = "r2.1".to_string();
     assert!(!records_gate(&[wrong_version], &plan).passed);
+    // Same policy_id, same version, RETUNED parameters: the frozen gate's
+    // parameters half must flag the row (the B4/B5 retuned-policy case —
+    // ADR-0016 gate 7).
+    let mut wrong_parameters = ok;
+    wrong_parameters.policy_a_parameters = arena_bots::PolicyParameters::BlockerBuilder(
+        arena_bots::r2::blocker_builder::BlockerBuilderParams {
+            block_min_value: 2,
+            ..arena_bots::r2::blocker_builder::BlockerBuilderParams::default()
+        },
+    );
+    assert!(!records_gate(&[wrong_parameters.clone()], &plan).passed);
+    // ...and the mismatch is reported against the registry's full-value
+    // serialization.
+    assert!(wrong_parameters.policy_a_parameters.tag().contains("min=2"));
+    assert_eq!(
+        plan.policies
+            .iter()
+            .find(|s| s.policy_id == PolicyId::BlockerBuilderR2)
+            .unwrap()
+            .parameters
+            .tag(),
+        arena_bots::PolicyParameters::BlockerBuilder(
+            arena_bots::r2::blocker_builder::BlockerBuilderParams::default()
+        )
+        .tag()
+    );
 }
 
 // ---------------------------------------------------------------------
