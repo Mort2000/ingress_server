@@ -84,7 +84,6 @@ fn run_capturing_maps(
                  map: &arena_core::map::MapDefinition|
      -> CellSetup {
         let hash = {
-            use std::hash::Hasher;
             let mut hasher = blake3::Hasher::new();
             hasher.update(&encode_map(map));
             let mut out = [0u8; 8];

@@ -823,7 +823,6 @@ fn recorded_stats_fold_counts_real_transfers() {
     for seed in [0x7A5Cu64, 0x5EED_AA, 0x1234_5678] {
         let spawns = |spec: &arena_bots::policy::PolicySpec,
                       faction: arena_core::types::Faction| {
-            use arena_bots::r2::R2Policy;
             let mut player =
                 arena_bots::policy::make_policy_player(spec, faction, seed, &cfg, &map);
             let roster = arena_core::state::GameState::initial_roster(&cfg);

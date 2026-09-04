@@ -342,7 +342,6 @@ pub fn variant_summaries(plan: &ExperimentPlan, results: &[PairedResult]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
     use crate::balance::plan::{ConfigVariant, PolicyMatchup, SeedSet, Stage};
     use crate::balance::schedule::MatchCell;
     use crate::policy::BucketPolicy;

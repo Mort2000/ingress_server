@@ -912,7 +912,7 @@ mod tests {
         assert_eq!(MAP_DEFINING_FIELDS.len(), 6);
 
         let base = ConfigVariant::new("default", GameConfig::default(), Vec::new());
-        let mut is_regime = |field: &'static str, regime: bool| {
+        let is_regime = |field: &'static str, regime: bool| {
             let mut cfg = GameConfig::default();
             match field {
                 "map_width_cm" => cfg.map_width_cm = 550_000,

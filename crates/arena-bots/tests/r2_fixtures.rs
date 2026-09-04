@@ -1894,7 +1894,7 @@ fn adaptive_switches_roles_by_phase_score_and_threat() {
     // Each scenario drives a FRESH instance: the opponent model accumulates
     // public history by design, and these scenarios assert the switching
     // inputs in isolation.
-    let mut fresh = || {
+    let fresh = || {
         AdaptiveHybridR2::new(
             Faction::Enl,
             0x0A0A_0000_0000_0001,

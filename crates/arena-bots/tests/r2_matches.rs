@@ -12,11 +12,8 @@
 mod support;
 
 use arena_bots::policy::{PolicyId, PolicySpec};
-use arena_bots::r2::R2Policy;
 use arena_core::config::GameConfig;
 use arena_core::event::EventKind;
-use arena_core::harness::RoundStrategy;
-use arena_core::observe::Observation;
 use arena_core::types::{Command, Faction, Score2};
 use support::{IdleStrategy, portal_spawns, run_policy_match};
 
@@ -65,7 +62,7 @@ fn every_r2_policy_scores_against_idle() {
     let map = match_map();
     let res_spawns = portal_spawns(&cfg, &map, Faction::Res);
     for spec in competitive_specs() {
-        let (reports, state) = run_policy_match(
+        let (_reports, state) = run_policy_match(
             &cfg,
             &map,
             &spec,
@@ -89,22 +86,6 @@ fn every_r2_policy_scores_against_idle() {
             spec.policy_id.tag(),
             fields
         );
-    }
-}
-
-/// Records one faction's per-round command streams (the determinism gate
-/// compares two recordings command-for-command).
-struct RecordingPolicy<P: R2Policy> {
-    inner: P,
-    rounds: Vec<Vec<Vec<Command>>>,
-}
-
-impl<P: R2Policy> RoundStrategy for RecordingPolicy<P> {
-    fn submit_round(&mut self, obs: &Observation) -> Vec<arena_core::harness::AgentSubmission> {
-        let submissions = self.inner.submit_round(obs);
-        self.rounds
-            .push(submissions.iter().map(|s| s.commands.clone()).collect());
-        submissions
     }
 }
 

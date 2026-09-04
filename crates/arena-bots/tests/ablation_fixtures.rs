@@ -201,7 +201,7 @@ fn drive_arm_vs_greedy_field(
     let bot_seed = 0x0B3_0000_0000_0001u64;
     let game_seed = 0x6A1E_5EED_0000_0B3Au64;
     let (enl_roster, res_roster) = GameState::initial_roster(&cfg);
-    let (mut enl_strategy, enl_entries) = match enl_side {
+    let (enl_strategy, enl_entries) = match enl_side {
         EnlSide::Frozen(kind) => {
             let mut bot = make_bot(*kind, Faction::Enl, bot_seed, &cfg, &map);
             let entries = bot.choose_spawns(&cfg, &map, &enl_roster);

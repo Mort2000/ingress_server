@@ -1322,12 +1322,11 @@ pub fn effects_text(
 mod tests {
     use super::*;
     use crate::balance::pairs::PairedResult;
-    use crate::balance::plan::{ConfigVariant, PolicyMatchup, SeedSet, Stage};
+    use crate::balance::plan::{PolicyMatchup, SeedSet, Stage};
     use crate::balance::record::BalanceMatchRecord;
     use crate::balance::sensitivity::{B4_CANDIDATES, candidate_variant};
     use crate::policy::BucketPolicy;
     use arena_bots::policy::{PolicyFamily, PolicyId, PolicyParameters};
-    use arena_core::config::GameConfig;
 
     /// A tiny sensitivity plan: base + the named grid candidates, one
     /// matchup per pair tag supplied by the test.
