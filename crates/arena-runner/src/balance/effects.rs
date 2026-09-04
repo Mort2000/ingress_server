@@ -81,7 +81,7 @@ impl VariantPairEffect {
     /// below, 0 otherwise (the frozen direction readout).
     pub fn one_sided(&self) -> i8 {
         match self.wilson {
-            Some((low, high)) if low > 500 => 1,
+            Some((low, _)) if low > 500 => 1,
             Some((_, high)) if high < 500 => -1,
             _ => 0,
         }
@@ -905,7 +905,6 @@ pub fn interaction_did(
             plan.variants.len()
         ));
     }
-    let base = plan.base();
     let delta_of = |variant_id: &str, pair_id: &str| -> Option<&PairedResult> {
         pairs
             .iter()

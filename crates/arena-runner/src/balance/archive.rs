@@ -369,7 +369,6 @@ pub struct ArchivedMap {
 pub fn write_maps(dir: &Path, plan: &ExperimentPlan) -> Result<Vec<ArchivedMap>, ArchiveError> {
     let maps_dir = dir.join("maps");
     fs::create_dir_all(&maps_dir)?;
-    let base = plan.base();
     let mut by_content: BTreeMap<String, String> = BTreeMap::new();
     let mut store = |map: arena_core::map::MapDefinition| -> (String, String) {
         let bytes = encode_map(&map);
