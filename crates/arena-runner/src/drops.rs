@@ -1128,37 +1128,39 @@ pub fn aggregate_balance_drop_reasons(
             continue;
         };
         let mut seen: BTreeSet<PolicyId> = BTreeSet::new();
-        let sides: [(PolicyId, &FactionDrops, u64, u64); 2] = [
-            (
-                record.policy_a,
-                &tally.enl,
-                record.stats.enl.commands_submitted,
-                record.stats.enl.commands_dropped,
-            ),
-            (
-                record.policy_b,
-                &tally.res,
-                record.stats.res.commands_submitted,
-                record.stats.res.commands_dropped,
-            ),
-        ];
-        // The tally's factions are the EXECUTION factions; map them onto
-        // the record's policy columns by the row's own faction assignment.
-        let sides = if record.policy_a_is_enl {
-            sides
-        } else {
+        // The tally's factions are the EXECUTION factions; map BOTH the
+        // re-executed tally AND the archived per-faction totals onto the
+        // record's policy columns by the row's own faction assignment (on
+        // leg 1 policy_a plays RES: its tally AND its archived counts are
+        // the res-side ones — never a mixed pairing).
+        let sides: [(PolicyId, &FactionDrops, u64, u64); 2] = if record.policy_a_is_enl {
             [
                 (
                     record.policy_a,
-                    &tally.res,
+                    &tally.enl,
                     record.stats.enl.commands_submitted,
                     record.stats.enl.commands_dropped,
                 ),
                 (
                     record.policy_b,
-                    &tally.enl,
+                    &tally.res,
                     record.stats.res.commands_submitted,
                     record.stats.res.commands_dropped,
+                ),
+            ]
+        } else {
+            [
+                (
+                    record.policy_a,
+                    &tally.res,
+                    record.stats.res.commands_submitted,
+                    record.stats.res.commands_dropped,
+                ),
+                (
+                    record.policy_b,
+                    &tally.enl,
+                    record.stats.enl.commands_submitted,
+                    record.stats.enl.commands_dropped,
                 ),
             ]
         };

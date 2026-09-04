@@ -827,8 +827,56 @@ fn drop_mechanism_table_sums_per_policy_from_hand_built_stats() {
     drops.res.reasons.insert("AttackNoEnemyPortalsInRange", 1);
     assert_eq!(verify_balance_cell_drops(&record_a, &drops), Ok(()));
 
+    // LEG 1 of the same unit (policy_a plays RES): the row's OWN faction
+    // assignment must attribute BOTH the re-executed tally and the
+    // archived per-faction totals to policy_a (the r1 official drop pass
+    // caught the swapped pairing here — mixed tally/archived sides — via
+    // its aggregation cross-check; this row pins the fix).
+    let mut record_b = record(
+        0,
+        "greedy-field--hybrid-builder-attack",
+        "greedy-field--hybrid-builder-attack#m000",
+        1,
+        PolicyId::GreedyField,
+        PolicyId::HybridBuilderAttack,
+        100,
+        10,
+        BalanceOutcome::Played(Outcome::EnlWin),
+        Some(Faction::Enl),
+        stats.clone(),
+        stats.clone(),
+    );
+    // leg 1: policy_a (greedy-field) is RES — distinct counts per side so
+    // any misattribution changes the sums.
+    record_b.stats.enl.commands_submitted = 70;
+    record_b.stats.enl.commands_ok = 65;
+    record_b.stats.enl.commands_dropped = 5;
+    record_b.stats.res.commands_submitted = 40;
+    record_b.stats.res.commands_ok = 36;
+    record_b.stats.res.commands_dropped = 4;
+    let mut drops_b = BalanceCellDrops {
+        index: 0,
+        pair_tag: record_b.pair_tag.clone(),
+        policy_a: record_b.policy_a,
+        policy_b: record_b.policy_b,
+        policy_a_is_enl: false,
+        enl: arena_runner::drops::FactionDrops::default(),
+        res: arena_runner::drops::FactionDrops::default(),
+        final_state_hash: [0u8; 32],
+    };
+    drops_b.enl.submitted = 70;
+    drops_b.enl.ok = 65;
+    drops_b.enl.dropped = 5;
+    drops_b.enl.reasons.insert("LinkAlreadyExists", 5);
+    drops_b.res.submitted = 40;
+    drops_b.res.ok = 36;
+    drops_b.res.dropped = 4;
+    drops_b.res.reasons.insert("CaptureTargetNotNeutral", 4);
+    assert_eq!(verify_balance_cell_drops(&record_b, &drops_b), Ok(()));
+
     let summaries =
-        aggregate_balance_drop_reasons(&[record_a], &[Some(drops)]).expect("aggregates");
+        aggregate_balance_drop_reasons(&[record_a, record_b], &[Some(drops), Some(drops_b)])
+            .expect("aggregates");
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].pair_tag, "greedy-field--hybrid-builder-attack");
     assert_eq!(summaries[0].policies.len(), 2);
@@ -837,22 +885,28 @@ fn drop_mechanism_table_sums_per_policy_from_hand_built_stats() {
         .iter()
         .find(|p| p.policy == PolicyId::GreedyField)
         .unwrap();
-    assert_eq!(greedy.archived_dropped, 10);
-    assert_eq!(greedy.reason_sum(), 10);
-    assert_eq!(greedy.reasons.get("CaptureTargetNotNeutral"), Some(&7));
+    // Leg 0 as ENL (10 drops) + leg 1 as RES (4 drops): the archived and
+    // re-executed sums follow the policy across the faction swap.
+    assert_eq!(greedy.matches, 2);
+    assert_eq!(greedy.archived_submitted, 100 + 40);
+    assert_eq!(greedy.archived_dropped, 10 + 4);
+    assert_eq!(greedy.reason_sum(), 10 + 4);
+    assert_eq!(greedy.reasons.get("CaptureTargetNotNeutral"), Some(&11));
     let attack_arm = summaries[0]
         .policies
         .iter()
         .find(|p| p.policy == PolicyId::HybridBuilderAttack)
         .unwrap();
-    assert_eq!(attack_arm.reason_sum(), 1);
+    assert_eq!(attack_arm.matches, 2);
+    assert_eq!(attack_arm.archived_dropped, 1 + 5);
+    assert_eq!(attack_arm.reason_sum(), 1 + 5);
     // The TSV carries explicit zero rows and a TOTAL per policy.
     let tsv = balance_drop_reasons_tsv(&summaries);
     assert!(tsv.contains(
-        "greedy-field--hybrid-builder-attack\tgreedy-field\tCaptureTargetNotNeutral\t7\n"
+        "greedy-field--hybrid-builder-attack\tgreedy-field\tCaptureTargetNotNeutral\t11\n"
     ));
     assert!(tsv.contains("greedy-field--hybrid-builder-attack\tgreedy-field\tLinkSelfLoop\t0\n"));
-    assert!(tsv.contains("greedy-field--hybrid-builder-attack\tgreedy-field\tTOTAL\t10\n"));
+    assert!(tsv.contains("greedy-field--hybrid-builder-attack\tgreedy-field\tTOTAL\t14\n"));
 
     // The aggregate belt-and-braces cross-check: a tally whose per-reason
     // sum cannot equal the archived drop total is refused.
