@@ -24,7 +24,7 @@
 //!   proc-macros, `links =`, and staticlib/cdylib crate types FAIL;
 //!   native code inside the dependency closure is REPORTED with a
 //!   verdict: SANCTIONED (blake3 build.rs + cc-built C intrinsics,
-//!   libc build.rs — ADR-0013) or UNKNOWN (any other native capability
+//!   libc build.rs —) or UNKNOWN (any other native capability
 //!   that has not been separately audited and approved). Since D94 the
 //!   repo carries no vendored closure: the lockfile half still reports
 //!   the sanctioned cc build-dep of blake3, and a `vendor/` directory,
@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 
 /// The frozen sanctioned external dependency set: exactly the 15
 /// external crates of the committed Cargo.lock closure (blake3 +
-/// planus and their transitive deps — ADR-0013).
+/// planus and their transitive deps —).
 pub const ALLOWED_EXTERNAL: [&str; 15] = [
     "allocator-api2",
     "array-init-cursor",
@@ -67,7 +67,7 @@ pub const ALLOWED_EXTERNAL: [&str; 15] = [
     "shlex",
 ];
 
-/// External crates whose native code is sanctioned (ADR-0013): blake3
+/// External crates whose native code is sanctioned: blake3
 /// (build.rs compiling C/asm intrinsics via cc) and libc (build.rs).
 /// Consulted only by the vendor-source scan — dormant since D94 (the
 /// repo resolves via mirror; the lockfile half is

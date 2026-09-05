@@ -638,7 +638,7 @@ fn net_tokens_flag_the_canonical_import() {
     assert!(contains_substring(&code, "TcpStream"));
 }
 
-/// The frozen external list is exactly 15 names (D73 / ADR-0013).
+/// The frozen external list is exactly 15 names (D73 /).
 #[test]
 fn allowlist_shape() {
     assert_eq!(ALLOWED_EXTERNAL.len(), 15);

@@ -3,7 +3,7 @@
 //! in-process match runner. The frozen m6 `BatchConfig` path is untouched
 //! and keeps serving the frozen M6 batches. `pairs.tsv` carries integer
 //! pair deltas only; the plan-section-9 offline statistics live in
-//! `analysis` (B3, ADR-0017) and never feed back into any match, Game
+//! `analysis` (B3,) and never feed back into any match, Game
 //! Result, Replay Hash or settlement.
 
 #![forbid(unsafe_code)]

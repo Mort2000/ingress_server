@@ -1,5 +1,5 @@
 //! Experiment plans, config variants and the frozen R2 seed sets (B1,
-//! `docs/balance/ai-balance-plan.md` sections 5.3 and 8.1, ADR-0014): what a
+//! `docs/balance/ai-balance-plan.md` sections 5.3 and 8.1,): what a
 //! balance experiment runs — its stage, seed set, complete config
 //! variants, policy specs, matchups and acceptance gates — plus the frozen
 //! R2 seed derivations. Nothing here executes matches; the frozen m6
@@ -11,7 +11,7 @@ use arena_core::config::GameConfig;
 use crate::policy::BucketPolicy;
 
 // ---------------------------------------------------------------------
-// Frozen R2 seed sets (plan section 8.1, ADR-0014)
+// Frozen R2 seed sets (plan section 8.1,)
 // ---------------------------------------------------------------------
 
 /// The frozen master seed of the Development set (300 maps; `'r' '2' 'd'`
@@ -22,10 +22,10 @@ pub const R2_DEVELOPMENT_MASTER_SEED: u64 = 0x0072_3264_0000_0300;
 pub const R2_VALIDATION_MASTER_SEED: u64 = 0x0072_3276_0000_0100;
 
 /// The frozen master seed of the Holdout set (200 maps; maps are NEVER
-/// generated or run before the B5 Confirm stage — ADR-0014).
+/// generated or run before the B5 Confirm stage —).
 pub const R2_HOLDOUT_MASTER_SEED: u64 = 0x0072_3268_0000_0200;
 
-/// R2 seed domain labels (ADR-0014): disjoint from every m5/m6/m9/conflict
+/// R2 seed domain labels: disjoint from every m5/m6/m9/conflict
 /// label; the tests also prove value-level disjointness.
 pub const R2_MAP_SEED_LABEL: &[u8] = b"ingress-arena-r2-map";
 pub const R2_GAME_SEED_LABEL: &[u8] = b"ingress-arena-r2-game";
@@ -41,7 +41,7 @@ pub enum SeedSet {
     /// 100 maps for choosing policy parameters and candidate configs.
     Validation,
     /// 200 maps, only for final confirmation after the plan is frozen.
-    /// Viewing holdout results downgrades the set (ADR-0014 discipline).
+    /// Viewing holdout results downgrades the set (discipline).
     Holdout,
 }
 
@@ -69,7 +69,7 @@ impl SeedSet {
         }
     }
 
-    /// The frozen master seed (ADR-0014).
+    /// The frozen master seed.
     pub const fn master_seed(self) -> u64 {
         match self {
             SeedSet::Development => R2_DEVELOPMENT_MASTER_SEED,
@@ -78,7 +78,7 @@ impl SeedSet {
         }
     }
 
-    /// The set's frozen map count (ADR-0014).
+    /// The set's frozen map count.
     pub const fn map_count(self) -> u32 {
         match self {
             SeedSet::Development => 300,
@@ -90,7 +90,7 @@ impl SeedSet {
 
 /// `seed_set_tag || master_seed_le64 || suffix` — the common payload head
 /// of every R2 derivation (the set tag and master seed always travel
-/// together, ADR-0014).
+/// together,).
 fn seed_set_payload(set: SeedSet, suffix: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(set.tag().len() + 4 + suffix.len());
     payload.extend_from_slice(set.tag().as_bytes());
@@ -140,7 +140,7 @@ pub fn schedule_seed(experiment_id: &str, set: SeedSet) -> u64 {
     crate::derive_seed(R2_SCHEDULE_SEED_LABEL, &payload)
 }
 
-/// The exact map-seed derivation formula (manifest echo, ADR-0014).
+/// The exact map-seed derivation formula (manifest echo,).
 pub fn map_seed_derivation() -> String {
     "LE-u64(blake3(\"ingress-arena-r2-map\" || seed_set_tag || master_seed_le64 || k_le32))"
         .to_string()
@@ -216,7 +216,7 @@ fn config_words(cfg: &GameConfig) -> [u32; arena_core::codec::CONFIG_U32_COUNT] 
 }
 
 /// The six config fields `arena_core::map::generate_map` reads — the
-/// fields that DEFINE the generated MapDefinition (ADR-0018). A variant
+/// fields that DEFINE the generated MapDefinition. A variant
 /// declaring (proven by `validate_contrast` to actually change) any of
 /// them is a MAP-REGIME variant: it regenerates its own map from the
 /// same map_seed instead of byte-sharing the base map.
@@ -276,9 +276,9 @@ impl ConfigVariant {
     }
 
     /// Whether this variant changes (declares) at least one
-    /// map-defining field (ADR-0018): such variants generate their OWN
+    /// map-defining field: such variants generate their OWN
     /// MapDefinition from the same map_seed; all others must byte-share
-    /// the base map (ADR-0014, executor-verified).
+    /// the base map (, executor-verified).
     pub fn is_map_regime(&self) -> bool {
         self.declared_changed_fields
             .iter()
@@ -467,7 +467,7 @@ impl ExperimentPlan {
                 self.seed_set.tag()
             ));
         }
-        // Holdout discipline (plan 8.1 / ADR-0014): holdout maps exist only
+        // Holdout discipline (plan 8.1 /): holdout maps exist only
         // at the Confirm stage.
         if self.seed_set == SeedSet::Holdout && self.stage != Stage::Confirm {
             return Err(format!(
@@ -493,7 +493,7 @@ impl ExperimentPlan {
                 }
                 Stage::Interaction => {
                     // Plan 7.4 small factorial experiments: base, A, B, A+B
-                    // — at most two declared fields per variant (ADR-0018).
+                    // — at most two declared fields per variant.
                     if changed > 2 {
                         return Err(format!(
                             "stage interaction declares at most two fields: variant {} declares {:?}",
@@ -697,7 +697,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Frozen R2 seed derivations (ADR-0014)
+    // Frozen R2 seed derivations
     // ---------------------------------------------------------------
 
     #[test]
@@ -887,10 +887,10 @@ mod tests {
         assert_eq!(plan.validate(), Ok(()));
     }
 
-    // B4 map-regime classification (ADR-0018): exactly the six
+    // B4 map-regime classification: exactly the six
     // generate_map-read fields make a variant regenerate its own
     // MapDefinition from the same map_seed; rule-only fields keep the
-    // ADR-0014 byte-shared base map.
+    //byte-shared base map.
     #[test]
     fn map_regime_is_exactly_the_map_defining_declarations() {
         // The frozen default values of the six map-defining fields (the
@@ -934,7 +934,7 @@ mod tests {
             assert_eq!(
                 variant.is_map_regime(),
                 regime,
-                "{field} classification (ADR-0018)"
+                "{field} classification"
             );
         };
         for field in MAP_DEFINING_FIELDS {

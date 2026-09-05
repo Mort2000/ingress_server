@@ -1,10 +1,10 @@
-# B2 测量工具就绪报告（plan §10.1 / ADR-0016）
+# B2 测量工具就绪报告（plan §10.1 /）
 
 - 状态：Accepted（8/8 就绪门槛通过）
 - 官方运行：`runs/balance/b2-readiness-rr-r3/`、`runs/balance/b2-readiness-idle-r3/`、`runs/balance/b2-readiness-block-r3/`（base commit `9af267a610cbfe52c6bd842720b39ce7eac92955`，12 workers，release）
 - 日期：2026-09-04
 
-本报告为 `docs/balance/ai-balance-plan.md` 第 14 行 B2 里程碑的验收记录。六个 R2 策略（`greedy-coordinated-r2`、`builder-defender-r2`、`builder-disruptor-r2`、`logistics-builder-r2`、`blocker-builder-r2`、`adaptive-hybrid-r2`，版本 `r2.0`，标识/参数/随机流命名空间见 ADR-0015/0016）在默认 `GameConfig`、Development 地图集、`Flat(0)` bucket 下验证测量工具就绪性。逐场记录按 plan §10.1 第 6 条完整携带每个策略的独立版本与全值参数序列化（`policy_a/b_parameters` 列，与 `policies.tsv` 逐行一致）。默认配置未改动；冻结的 m6.0 行为与 `runs/` 历史产物未触碰（`-r1`/`-r2` 目录原样保留）。
+本报告为 `docs/balance/ai-balance-plan.md` 第 14 行 B2 里程碑的验收记录。六个 R2 策略（`greedy-coordinated-r2`、`builder-defender-r2`、`builder-disruptor-r2`、`logistics-builder-r2`、`blocker-builder-r2`、`adaptive-hybrid-r2`，版本 `r2.0`，标识/参数/随机流命名空间见/0016）在默认 `GameConfig`、Development 地图集、`Flat(0)` bucket 下验证测量工具就绪性。逐场记录按 plan §10.1 第 6 条完整携带每个策略的独立版本与全值参数序列化（`policy_a/b_parameters` 列，与 `policies.tsv` 逐行一致）。默认配置未改动；冻结的 m6.0 行为与 `runs/` 历史产物未触碰（`-r1`/`-r2` 目录原样保留）。
 
 ## 实验设计（冻结于运行之前）
 
@@ -61,7 +61,7 @@ Transfer 使用明细：仅 `logistics-builder-r2` 使用 Transfer（1200/1200�
 2. **idle 门槛参与判定缺陷**：原以“score2=0 且 fields=0 则跳过”判定参与，静默漏掉了失败场次（报 331/331 而实为 600 场）。已改为按记录两侧 policy tag 判定参与；修复后 600/600。
 3. **Mirror 单例带碰撞**：当地图最大三角严格超出 near-equal 带时，双方都会规范化选它（种子 tie-break 无带可破）。修复：`CoreParams.spawn_jitter_cm`（默认 1000）——驻点分配不变，出生坐标加入阵营键控的 recorded 抖动（运营半径内）。`-r1` RR 中 8/96 腿碰撞 → `r2` 0/672 → `r3` 0/672。
 4. **已知外观缺陷（已随 `-r3` 消除）**：`-r2` 三个目录 manifest 的 `reproduce` 行写作 `balance-b1`（B1 归档代码的硬编码，生成于修复前）；归档不可改写，当时在此记录。`-r3` 的 manifest 已写正确的 `balance-b2` 命令。
-5. **第二轮评审修正（`-r2` → `-r3`）：逐场记录缺少参数列**。plan §10.1 第 6 条要求"每个策略的独立版本和参数完整进入逐场记录"，ADR-0016 门槛 7 冻结为"`matches.tsv` 每行的 policy version 与 parameters 与 `policies.tsv` 一致"；`-r2` 的 balance `matches.tsv` 只携带 id/family/version（参数仅存在于 `policies.tsv`），门槛 7 的 parameters 半边因此空转，且 B4/B5 Retuned-policy 模式下同 id+version 行将无法逐行区分参数集。修复：`BalanceMatchRecord` 增加 `policy_a/b_parameters`（类型化 `PolicyParameters`，全值规范序列化写入逐场行、严格解析回读——篡改的参数串解析不回任何参数集），`records_gate` 补齐对计划注册表（`policies.tsv` 来源）的逐行 parameters 比对；冻结的 m6 `matches.tsv` 字节格式不动（balance 为独立格式）。官方三批以新 experiment id `-r3` 重跑：map/game/bot seed 均不依赖 experiment id，`-r3` 与 `-r2` 的 4,200 行逐场结果、比分、final_state_hash 与全部统计列完全一致（仅 experiment_id/schedule_seed 回显、elapsed 与新增参数列不同；pilot 336/336 行同样一致；`pairs.tsv`、`replays.tsv` 与 `-r2` 逐字节相同）。`-r2` 目录按不覆盖历史原则保留。
+5. **第二轮评审修正（`-r2` → `-r3`）：逐场记录缺少参数列**。plan §10.1 第 6 条要求"每个策略的独立版本和参数完整进入逐场记录"，门槛 7 冻结为"`matches.tsv` 每行的 policy version 与 parameters 与 `policies.tsv` 一致"；`-r2` 的 balance `matches.tsv` 只携带 id/family/version（参数仅存在于 `policies.tsv`），门槛 7 的 parameters 半边因此空转，且 B4/B5 Retuned-policy 模式下同 id+version 行将无法逐行区分参数集。修复：`BalanceMatchRecord` 增加 `policy_a/b_parameters`（类型化 `PolicyParameters`，全值规范序列化写入逐场行、严格解析回读——篡改的参数串解析不回任何参数集），`records_gate` 补齐对计划注册表（`policies.tsv` 来源）的逐行 parameters 比对；冻结的 m6 `matches.tsv` 字节格式不动（balance 为独立格式）。官方三批以新 experiment id `-r3` 重跑：map/game/bot seed 均不依赖 experiment id，`-r3` 与 `-r2` 的 4,200 行逐场结果、比分、final_state_hash 与全部统计列完全一致（仅 experiment_id/schedule_seed 回显、elapsed 与新增参数列不同；pilot 336/336 行同样一致；`pairs.tsv`、`replays.tsv` 与 `-r2` 逐字节相同）。`-r2` 目录按不覆盖历史原则保留。
 6. **第 4 条的补充更正（B3 评审发现）：`-r1`..`-r3` 的 `report.md` 与 manifest `note=` 仍带 B1 模板残文**。第 4 条只修了 manifest 的 `reproduce=` 行；共享模板 `report_text`/`manifest_text` 的其余文案仍硬编码 B1——全部九个 B2 目录（rr/idle/block × `-r1`/`-r2`/`-r3`）的 `report.md` Reproduce 行写作 `balance-b1`（照它会重跑 B1 冒烟实验；正确命令 `balance-b2`，本文件"复现"节）、Gates 节写作 "None registered — B1 …"（与同目录 `manifest.txt` 的 gate 计数及 `gates.txt` 的实测结论矛盾——各目录的门均已评估且全部通过），`manifest.txt` 的 `note=` 指向 `docs/balance/balance-b1-smoke.md`（B2 报告与内容哈希的承载文件是本文件）。历史 `runs/` 永不覆盖，残文按缺陷原样冻结；权威指针为各 `manifest.txt` 的 `reproduce=` 行（`-r1`/`-r2` 的同样错误并已由第 4 条记录，`-r3` 正确写 `balance-b2`）、`gates.txt`（门评估）与本文件。模板已随 B3 修复改为按 stage 渲染并以回归测试钉住（详见 `docs/balance/balance-b3-ablation.md` 过程记录第 8 条）。
 
 ## 归档与内容哈希（plan §12；`runs/` 未跟踪）

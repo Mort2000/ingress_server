@@ -1,4 +1,4 @@
-//! Plan-section-9 offline statistics (B3, ADR-0017): the frozen analysis
+//! Plan-section-9 offline statistics (B3,): the frozen analysis
 //! definitions behind the default-config ablation report — per-pair W-D-L
 //! with Wilson 95% intervals, per-map paired score-delta quantiles
 //! (nearest-rank), score share with both-zero counts, checkpoint
@@ -26,7 +26,7 @@ use crate::balance::record::{BalanceMatchRecord, BalanceOutcome};
 use crate::metrics::{CHECKPOINTS, Outcome};
 
 // ---------------------------------------------------------------------
-// Wilson 95% interval (frozen definition, ADR-0017)
+// Wilson 95% interval (frozen definition,)
 // ---------------------------------------------------------------------
 
 /// The Wilson 95% interval of `wins/(wins+losses)` in permille: z = 1.96
@@ -52,14 +52,14 @@ pub fn wilson_permille(wins: u64, decisive: u64) -> Option<(u64, u64)> {
 }
 
 /// Whether a side's W/(W+L) meets the frozen DOMINATION standard
-/// (ADR-0017, aligned with plan 10.3): Wilson 95% lower bound >= 900
+/// (, aligned with plan 10.3): Wilson 95% lower bound >= 900
 /// permille.
 pub fn is_domination(wins: u64, decisive: u64) -> bool {
     matches!(wilson_permille(wins, decisive), Some((low, _)) if low >= 900)
 }
 
 // ---------------------------------------------------------------------
-// Nearest-rank quantiles (frozen definition, ADR-0017)
+// Nearest-rank quantiles (frozen definition,)
 // ---------------------------------------------------------------------
 
 /// The q-quantile (`q` in permille) of `values` under the frozen
@@ -158,7 +158,7 @@ impl CheckpointContingency {
     }
 }
 
-/// One pair's complete raw-count summary (ADR-0017 statistics 1-4, 7).
+/// One pair's complete raw-count summary (statistics 1-4, 7).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PairSummary {
     pub pair_tag: String,
@@ -323,7 +323,7 @@ pub fn pair_summaries(
 }
 
 // ---------------------------------------------------------------------
-// Per-policy mechanics (ADR-0017 statistics 5-6)
+// Per-policy mechanics (statistics 5-6)
 // ---------------------------------------------------------------------
 
 /// One policy's pooled raw mechanics over the matches it played.
@@ -408,7 +408,7 @@ pub fn policy_mechanics(
 }
 
 // ---------------------------------------------------------------------
-// Mirror statistics (ADR-0017 statistic 8)
+// Mirror statistics (statistic 8)
 // ---------------------------------------------------------------------
 
 /// One mirror pair's spawn-collision and outcome-symmetry counts.
@@ -589,7 +589,7 @@ fn ladder_step(
     step
 }
 
-/// The frozen seven-step domination-decomposition ladder (ADR-0017):
+/// The frozen seven-step domination-decomposition ladder:
 /// greedy-field -> gc-r2 -> hybrid-builder-only -> hybrid-builder-attack
 /// -> hybrid, plus the cross-era totals hybrid vs gc-r2 and greedy-field
 /// vs gc-canonical.
@@ -687,7 +687,7 @@ pub fn plan72_contrasts(records: &[BalanceMatchRecord]) -> Vec<LadderStep> {
 }
 
 // ---------------------------------------------------------------------
-// Plan-section-11 classification (mechanical rules, ADR-0017)
+// Plan-section-11 classification (mechanical rules,)
 // ---------------------------------------------------------------------
 
 /// One applied plan-section-11 rule: the classification, the follow-up
@@ -701,7 +701,7 @@ pub struct Plan11Classification {
 }
 
 /// Applies the frozen mechanical plan-11 rules to the matrix records and
-/// mirror statistics (ADR-0017): the domination standard is a Wilson 95%
+/// mirror statistics: the domination standard is a Wilson 95%
 /// lower bound >= 900 permille of W/(W+L).
 pub fn plan11_classification(
     records: &[BalanceMatchRecord],
@@ -913,7 +913,7 @@ fn policy_score_fields(record: &BalanceMatchRecord, policy: PolicyId) -> Option<
 }
 
 /// Renders the complete `analysis.txt` document of one B3 run: every
-/// ADR-0017 statistic with its integer raw counts (derived permille
+///statistic with its integer raw counts (derived permille
 /// printed next to, never instead of, the counts). Pure over its inputs.
 pub fn analysis_text(
     plan: &ExperimentPlan,
@@ -948,7 +948,7 @@ pub fn analysis_text(
         replays.len()
     ));
 
-    // Records integrity (the ADR-0016 gate 7 check, reused over this run).
+    // Records integrity (thegate 7 check, reused over this run).
     let integrity = crate::balance::readiness::records_gate(records, plan);
     out.push_str(&format!(
         "records-integrity: {}/{} family/version/parameters rows match policies.tsv (passed={})\n\n",
@@ -1146,7 +1146,7 @@ pub fn analysis_text(
         }
         out.push('\n');
         // Plan-11 classification.
-        out.push_str("## Plan-section-11 classification (mechanical rules, ADR-0017)\n\n");
+        out.push_str("## Plan-section-11 classification (mechanical rules,)\n\n");
         for class in plan11_classification(records, &mirrors) {
             out.push_str(&format!(
                 "- rule: {}\n  classification: {}\n  action: {}\n  evidence: {}\n",

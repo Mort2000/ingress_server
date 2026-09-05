@@ -36,7 +36,7 @@ use crate::common::owners;
 /// The structured thresholds of the value model (plan 6.3). These are the
 /// RECORDED r2.0 initial values — the policy layer carries them verbatim
 /// into its `PolicySpec` parameters, and any change to them is a policy
-/// version change, never an in-place edit of behavior (ADR-0015).
+/// version change, never an in-place edit of behavior.
 ///
 /// [`ValueParams::tag`] serializes every field canonically so records
 /// round-trip (`policies.tsv` carries all strategy parameters).

@@ -5,8 +5,8 @@
 //! match), catching panics as `Crash` records that stay in the result set.
 //! Variants that cannot honor the unit's shared Map Definition are
 //! recorded as `config-failure` cells, never silently skipped (plan
-//! section 7.3). ADR-0014's shared-map boundary holds for rule-only
-//! variants (byte-verified per map); ADR-0018's MAP-REGIME variants —
+//! section 7.3).'s shared-map boundary holds for rule-only
+//! variants (byte-verified per map);'s MAP-REGIME variants —
 //! declaring a map-defining field — generate their OWN MapDefinition from
 //! the SAME map_seed, and an infeasible variant map is that variant's
 //! config-failure cells, never a batch abort (base infeasibility still
@@ -115,7 +115,7 @@ pub struct CellSetup {
 /// Builds a cell's setup from the plan's policy specs (the default
 /// factory): one era-agnostic `PolicyPlayer` per side (frozen m6.0
 /// baselines delegate 1:1 to the untouched `make_bot`; R2 policies are
-/// built from their own parameters — ADR-0016), ENL spawns chosen first,
+/// built from their own parameters —), ENL spawns chosen first,
 /// the bucket policy applied AFTER the strategy returns (D56, m6
 /// construction order).
 pub fn default_cell_setup(
@@ -207,9 +207,9 @@ pub fn run_balance_batch(
 /// The full executor: expands the plan, generates the per-variant map
 /// pools — the base pool first (infeasible BASE map aborts the batch as a
 /// config defect), then every variant's own pool: rule-only variants are
-/// byte-verified against the base pool (ADR-0014; a mismatch becomes that
+/// byte-verified against the base pool (; a mismatch becomes that
 /// variant's `config-failure` cells), map-regime variants generate their
-/// OWN MapDefinition from the same map_seed (ADR-0018; an infeasible
+/// OWN MapDefinition from the same map_seed (; an infeasible
 /// variant map likewise becomes config-failure cells, never an abort) —
 /// then runs every cell on a stride-partitioned worker pool and merges
 /// results in cell order.
@@ -250,12 +250,12 @@ pub fn run_balance_batch_with(
             if variant.variant_id == plan.base_variant {
                 maps.push(Some(pool[k as usize].clone()));
             } else if map_regime {
-                // ADR-0018: the variant's mechanism IS the map regime —
+                //: the variant's mechanism IS the map regime —
                 // same seed stream, its own derived map; infeasible
                 // generation is a per-variant config failure.
                 maps.push(generate_map(seed, &variant.config).ok().map(Arc::new));
             } else {
-                // ADR-0014: byte-share verification against the base pool;
+                //: byte-share verification against the base pool;
                 // a mismatch is that variant's config-failure cells.
                 let shares =
                     generate_map(seed, &variant.config).is_ok_and(|map| map == *pool[k as usize]);

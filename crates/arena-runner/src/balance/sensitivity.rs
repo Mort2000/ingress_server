@@ -1,5 +1,5 @@
 //! The B4 single-variable sensitivity experiments
-//! (`docs/balance/ai-balance-plan.md` sections 7.3/7.4/8.3, ADR-0018): the
+//! (`docs/balance/ai-balance-plan.md` sections 7.3/7.4/8.3,): the
 //! frozen plan-7.3 candidate grid as DATA (13 single-field variants
 //! beside the untouched default — candidates are Pilot starting points,
 //! not preset conclusions), the six frozen competitive matchups at FIXED
@@ -14,9 +14,9 @@ use crate::balance::plan::{ConfigVariant, ExperimentPlan, PolicyMatchup, SeedSet
 use crate::balance::schedule::MatchCell;
 use crate::policy::BucketPolicy;
 
-/// The frozen experiment ids (archive directory names; ADR-0018). `-r1`
+/// The frozen experiment ids (archive directory names;). `-r1`
 /// of the pilot was superseded by the stability-rule CLARIFICATION
-/// (ADR-0018: condition (c) operationalizes plan 10.3's ">= 3 pairs with
+/// (: condition (c) operationalizes plan 10.3's ">= 3 pairs with
 /// the same direction", NOT unanimity of every one-sided pair — the
 /// first implementation required unanimity, structurally impassable
 /// where the builder-disruptor pairs flip sign); raw per-match records
@@ -39,11 +39,11 @@ pub const B4_FULL_VAL_MAP_COUNT: u32 = 100;
 pub const B4_PILOT_SCRATCH_MAP_COUNT: u32 = 8;
 
 /// Replays are sampled from leg 0 of the first N maps per
-/// (variant, pair) — B3's 25-map precedent (ADR-0018).
+/// (variant, pair) — B3's 25-map precedent.
 pub const B4_REPLAY_MAPS: u32 = 25;
 
 // ---------------------------------------------------------------------
-// The frozen candidate grid (plan section 7.3, ADR-0018)
+// The frozen candidate grid (plan section 7.3,)
 // ---------------------------------------------------------------------
 
 /// One row of the plan-7.3 grid: a single-field candidate variant.
@@ -167,7 +167,7 @@ pub fn candidate_variant(candidate: &B4Candidate) -> ConfigVariant {
 }
 
 /// The frozen factor short codes of interaction experiment ids
-/// (ADR-0018): `b4-interaction-<a>-<b>-r1`.
+///: `b4-interaction-<a>-<b>-r1`.
 pub fn factor_code(field: &str) -> &'static str {
     match field {
         "move_budget_cm" => "mb",
@@ -191,7 +191,7 @@ pub const B4_INTERACTION_PRIORITY: [(&str, &str); 4] = [
 ];
 
 // ---------------------------------------------------------------------
-// The frozen roster (ADR-0018)
+// The frozen roster
 // ---------------------------------------------------------------------
 
 /// The six frozen matchups over `PolicyId::R2_COMPETITIVE` (>= 3
@@ -235,7 +235,7 @@ pub fn b4_matchups() -> Vec<PolicyMatchup> {
 
 /// The B4 policy registry: the six competitive R2 policies at their
 /// FIXED r2_spec() parameters (version r2.0, full-value records per
-/// ADR-0016 — plan 7.3's fixed-R2-parameter clause).
+///— plan 7.3's fixed-R2-parameter clause).
 pub fn b4_policies() -> Vec<arena_bots::policy::PolicySpec> {
     PolicyId::R2_COMPETITIVE
         .iter()
@@ -243,7 +243,7 @@ pub fn b4_policies() -> Vec<arena_bots::policy::PolicySpec> {
         .collect()
 }
 
-/// The B4 acceptance gates (plan sections 10.1/10.2, ADR-0018).
+/// The B4 acceptance gates (plan sections 10.1/10.2,).
 pub fn b4_gates() -> Vec<crate::balance::plan::Gate> {
     vec![
         crate::balance::plan::Gate::Pending {
@@ -296,7 +296,7 @@ pub fn b4_pilot_plan(map_count: u32, experiment_id: &str) -> ExperimentPlan {
 
 /// The Full plan over one seed set: base plus the STABLE candidates
 /// derived from pilot data by the frozen stability rule
-/// (`effects::stable_candidates` is the only bridge — ADR-0018). One
+/// (`effects::stable_candidates` is the only bridge —). One
 /// seed set per plan, so Full = two runs (Development 300, Validation
 /// 100). Refuses an empty or unknown stable set with the recorded
 /// reason.
@@ -342,7 +342,7 @@ pub fn b4_full_plan(
 }
 
 /// The frozen interaction plan of two factors (plan 7.4 small factorial
-/// experiment, ADR-0018): `[base, A, B, A+B]` — the A+B arm declares
+/// experiment,): `[base, A, B, A+B]` — the A+B arm declares
 /// exactly the two factor fields. `a` and `b` are the candidates chosen
 /// by the frozen arm rule (largest |pooled margin_delta sum|, tie ->
 /// lexicographically smaller variant_id).
@@ -383,7 +383,7 @@ pub fn b4_interaction_plan(
     }
 }
 
-/// The interaction experiment id of two factor fields (ADR-0018 short
+/// The interaction experiment id of two factor fields (short
 /// codes): `b4-interaction-<a-code>-<b-code>-r1`.
 pub fn interaction_experiment_id(a_field: &str, b_field: &str) -> String {
     format!(
@@ -393,7 +393,7 @@ pub fn interaction_experiment_id(a_field: &str, b_field: &str) -> String {
     )
 }
 
-/// The B4 replay sampling (ADR-0018): leg 0 of the first
+/// The B4 replay sampling: leg 0 of the first
 /// [`B4_REPLAY_MAPS`] maps per (variant, pair) — 14 x 6 x 25 = 2,100
 /// IARP replays on the official pilot.
 pub fn b4_replay_sample(cell: &MatchCell) -> bool {
@@ -404,7 +404,7 @@ pub fn b4_replay_sample(cell: &MatchCell) -> bool {
 /// `balance-b4 runs <commit>` re-runs the PILOT, so a Full archive must
 /// name `--full <pilot archive>` (the only code path that builds
 /// base + a proper subset of the frozen grid — the stable-roster
-/// bridge, ADR-0018) and an interaction archive must name
+/// bridge,) and an interaction archive must name
 /// `--interaction <full archives>`. A sensitivity shape no CLI mode
 /// produces renders a VISIBLE marker rather than a silently wrong
 /// command; non-B4 stages carry no mode.
@@ -505,7 +505,7 @@ mod tests {
             assert_eq!(
                 variant.is_map_regime(),
                 spec.field == "portal_count",
-                "{}: only the portal-count arms are map-regime (ADR-0018)",
+                "{}: only the portal-count arms are map-regime",
                 spec.variant_id
             );
         }
@@ -788,7 +788,7 @@ use crate::run::MAX_WORKERS;
 /// Runs ONE B4 experiment end to end: executes the batch with the B4
 /// replay sampling, computes the paired integer results, archives the
 /// complete section-12 artifact set into a NEW
-/// `runs/balance/<experiment-id>/` directory, renders the ADR-0018
+/// `runs/balance/<experiment-id>/` directory, renders the
 /// `effects.txt` over the archived maps and folds its content hash into
 /// `hashes.txt`. Returns the archive directory, the crash and
 /// config-failure counts (the exit-status inputs) and the derived Full
@@ -863,7 +863,7 @@ pub fn read_pairs_tsv(dir: &Path) -> Result<Vec<PairedResult>, String> {
     crate::balance::pairs::parse_pairs_tsv(&text)
 }
 
-/// The frozen interaction arm rule (ADR-0018): of a factor's stable
+/// The frozen interaction arm rule: of a factor's stable
 /// arms, the one with the larger |pooled margin_delta sum| (computed
 /// from the source run's own pairs rows); ties break to the
 /// lexicographically smaller variant_id — mechanical, auditable.

@@ -14,7 +14,7 @@ use arena_bots::rng::kind_tag as m6_kind_tag;
 use arena_core::types::Faction;
 
 // ---------------------------------------------------------------------
-// R2 RNG namespace (plan 5.1 "reproducible seeded tie-break"; ADR-0015:
+// R2 RNG namespace (plan 5.1 "reproducible seeded tie-break";:
 // kind-tag bytes 1-5 belong permanently to the frozen m6 kinds, R2
 // policies take fresh bytes >= 6 on the SAME frozen D53 key shape)
 // ---------------------------------------------------------------------
@@ -65,7 +65,7 @@ fn r2_stream_tags_are_exactly_6_to_12_and_disjoint_from_m6_kinds() {
         );
     }
     // One registry, eight streams: the six plan-6.1 policies, idle, and
-    // the B3 canonical ablation arm (kind tag 13, ADR-0017).
+    // the B3 canonical ablation arm (kind tag 13,).
     assert_eq!(R2Stream::ALL.len(), 8);
 }
 
@@ -1532,7 +1532,7 @@ fn near_equal_sampling_is_seed_sensitive_across_streams() {
             total += 1;
         }
     }
-    // 8 streams (B3 appended the canonical arm, ADR-0017) x 16 seeds.
+    // 8 streams (B3 appended the canonical arm,) x 16 seeds.
     assert_eq!(total, 128);
     assert!(
         picks_of_first > 0 && picks_of_first < total,

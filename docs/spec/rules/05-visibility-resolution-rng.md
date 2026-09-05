@@ -83,6 +83,6 @@ Client 不提供任意 `stream_id`、排序 nonce 或其他 Tie-break 输入。�
 | `hack` | Round、Agent ID、Portal ID、成功 Hack 序号 |
 | `reinforcement` | Epoch 及坐标轴 |
 
-XOF 输出映射到有限整数范围时必须使用固定 rejection sampling，禁止直接 `% n` 引入 modulo bias。新增、删除或重排其他随机调用不得改变既有地址的输出；失败 Hack 不产生可观察样本。`rng_version`、地址编码、字节序与 Golden Vectors 属于规则版本的一部分，详见 [ADR-0011](../../adr/0011-domain-separated-blake3-random-oracle.md)。
+XOF 输出映射到有限整数范围时必须使用固定 rejection sampling，禁止直接 `% n` 引入 modulo bias。新增、删除或重排其他随机调用不得改变既有地址的输出；失败 Hack 不产生可观察样本。`rng_version`、地址编码、字节序与 Golden Vectors 属于规则版本的一部分，详见 [](../../adr/0011-domain-separated-blake3-random-oracle.md)。
 
 地图生成不属于该 Random Oracle 或 Replay 状态转换；Replay Header 直接保存冻结的完整 Map Definition。确定性重放还要求记录首个提交与被忽略的重复提交，并固定运行期 RNG、序列化和 Server 版本；这些元数据必须进入 Replay Header。

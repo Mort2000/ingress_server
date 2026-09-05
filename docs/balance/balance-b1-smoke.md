@@ -12,14 +12,14 @@ The B1 completion condition made executable: 两配置×两策略×同图换边�
 batch over TWO config variants and TWO policies with same-map faction swap that reproduces
 byte-identically. The frozen plan (`arena_runner::balance::smoke::b1_smoke_plan`):
 
-- Stage `smoke`, seed set `development` (ADR-0014, master seed `0x0072326400000300`), first 8 maps.
+- Stage `smoke`, seed set `development` (, master seed `0x0072326400000300`), first 8 maps.
 - Variants: `default` (the untouched `GameConfig::default()`) contrasted with
   `move-budget-240m` (`move_budget_cm` 20 000 -> 24 000, the plan section 7.3 grid's 240 m
   candidate; the single declared changed field is verified at plan-build time and the variant is
   executor-verified to share the identical Map Definition).
 - Policies: `greedy-field` (FieldBuilder) and `hybrid` (AdaptiveHybrid), both `m6.0` / `frozen-m6`
-  (ADR-0015) — the frozen M6 algorithms driving through the new policy identity layer.
-- Pairing (ADR-0014): each comparable unit (map, game_seed, bot_seed, policy pair, bucket policy)
+— the frozen M6 algorithms driving through the new policy identity layer.
+- Pairing: each comparable unit (map, game_seed, bot_seed, policy pair, bucket policy)
   is played twice per variant — leg 0 `greedy-field` as ENL, leg 1 as RES — and both variants
   reuse the identical unit seeds (common random numbers).
 - `Flat(0)` virtual buckets; 12 workers; 2 variants x 8 maps x 2 legs = 32 matches.

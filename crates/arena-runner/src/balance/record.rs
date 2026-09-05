@@ -66,7 +66,7 @@ pub struct BalanceMatchRecord {
     /// serialization ([`PolicyParameters::tag`]) enters the row, so a
     /// re-tuned policy (plan 7.5) is disambiguated per row even when id
     /// and version repeat, and the records-integrity gate can compare
-    /// every row against `policies.tsv` (ADR-0016 gate 7).
+    /// every row against `policies.tsv` (gate 7).
     pub policy_a_parameters: PolicyParameters,
     pub policy_b: PolicyId,
     pub policy_b_family: PolicyFamily,
@@ -316,7 +316,7 @@ fn parse_balance_record(map: &BTreeMap<&str, &str>) -> Result<BalanceMatchRecord
     };
     // Identity-sensitive: the full-value parameter serialization parses
     // back strictly, so an edited parameter value never silently parses
-    // to a different (e.g. default) set (ADR-0016).
+    // to a different (e.g. default) set.
     let parameters = |name: &str| -> Result<PolicyParameters, String> {
         PolicyParameters::from_tag(map.get(name).copied().unwrap_or(""))
             .ok_or_else(|| format!("{name} tag"))

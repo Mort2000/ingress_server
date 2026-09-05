@@ -3,7 +3,7 @@
 //! (P4-CAPABILITY): the syscalls (`shm_open`/`shm_unlink`/`ftruncate`/
 //! `mmap`/`munmap`/`close`, plus `getsockopt(SO_PEERCRED)` for the
 //! connection-identity probe below) are declared via `extern "C"` — no
-//! libc crate (ADR-0013) — and wrapped in safe types with the
+//! libc crate— and wrapped in safe types with the
 //! invariants written below. Everything else in this crate stays safe.
 //!
 //! # Region layout

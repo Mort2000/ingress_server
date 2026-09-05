@@ -1,5 +1,5 @@
 //! The B3 default-config ablation experiments (plan sections 7.1/7.2,
-//! 8.2/8.3, 16; ADR-0017): the frozen same-map faction-swap matrix over
+//! 8.2/8.3, 16;): the frozen same-map faction-swap matrix over
 //! the eight ablation-relevant policies and the idle benchmark of the
 //! three new arms, plus the operator entry that runs, archives and
 //! appends the plan-section-9 `analysis.txt` (hash folded into
@@ -18,7 +18,7 @@ use crate::balance::schedule::MatchCell;
 use crate::policy::BucketPolicy;
 use crate::run::MAX_WORKERS;
 
-/// The frozen experiment ids (archive directory names; ADR-0017). `-r1`
+/// The frozen experiment ids (archive directory names;). `-r1`
 /// was superseded by a rendering defect in its archived `analysis.txt`
 /// (ok and dropped counts printed without a separator); `-r2` was
 /// superseded by a mechanics-pooling defect (mirror records contributed
@@ -42,10 +42,10 @@ pub const B3_PILOT_MATRIX_MAP_COUNT: u32 = 8;
 pub const B3_PILOT_IDLE_MAP_COUNT: u32 = 4;
 
 /// Mirror cells on the first N maps capture BOTH legs' replays (the
-/// mirror statistics read spawn sets from replay headers; ADR-0017).
+/// mirror statistics read spawn sets from replay headers;).
 pub const B3_MIRROR_REPLAY_MAPS: u32 = 25;
 
-/// The frozen eight-policy matrix roster (ADR-0017): the two m6.0
+/// The frozen eight-policy matrix roster: the two m6.0
 /// baselines involved in the domination, the r2 coordinated baseline, the
 /// three B3 arms, and the two r2 policies carrying the plan-7.2 role row
 /// and the B2-flagged dominant (`builder-disruptor-r2`).
@@ -170,7 +170,7 @@ pub fn b3_idle_plan(map_count: u32, experiment_id: &str) -> ExperimentPlan {
     }
 }
 
-/// The matrix replay sampling (ADR-0017): every leg-0 cell plus BOTH legs
+/// The matrix replay sampling: every leg-0 cell plus BOTH legs
 /// of mirror cells on the first [`B3_MIRROR_REPLAY_MAPS`] maps.
 pub fn b3_replay_sample(cell: &MatchCell) -> bool {
     cell.leg == 0 || (cell.policy_a == cell.policy_b && cell.map_index < B3_MIRROR_REPLAY_MAPS)

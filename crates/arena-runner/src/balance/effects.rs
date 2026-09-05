@@ -1,5 +1,5 @@
 //! The B4 effects statistics (`docs/balance/ai-balance-plan.md` sections 9.1/9.3/
-//! 10.3, ADR-0018): per-(variant, pair) paired effects on the integer
+//! 10.3,): per-(variant, pair) paired effects on the integer
 //! `pairs.tsv` deltas, map-clustered accounting with the fixed-seed
 //! per-map bootstrap, side-effect guardrails vs base, the ONE frozen
 //! geometry stratification, the mechanical stability rule that gates the
@@ -186,7 +186,7 @@ impl Default for VariantPairEffect {
 // Map-clustered accounting + fixed-seed per-map bootstrap (plan 9.3)
 // ---------------------------------------------------------------------
 
-/// The frozen bootstrap size and algorithm version (ADR-0018).
+/// The frozen bootstrap size and algorithm version.
 pub const BOOTSTRAP_ITERATIONS: u64 = 10_000;
 pub const BOOTSTRAP_ALGORITHM: &str = "b4-map-clustered-bootstrap-v1";
 const BOOTSTRAP_LABEL: &[u8] = b"ingress-arena-r2-b4boot";
@@ -601,7 +601,7 @@ pub struct GeometryRow {
     pub zero: u64,
 }
 
-/// The frozen geometry stratification (ADR-0018): tercile cut points from
+/// The frozen geometry stratification: tercile cut points from
 /// the BASE maps' nearest-neighbor features (nearest-rank p333/p667),
 /// each variant's units classified by ITS OWN archived map's feature
 /// (map-regime variants stratify on their own maps), direction counts of
@@ -615,7 +615,7 @@ pub struct GeometryStrata {
 
 /// Loads the archived maps of a run directory: `(variant_id, map_index,
 /// MapDefinition)` per `maps.tsv` row (base rows plus map-regime rows —
-/// ADR-0018's variant dimension).
+///'s variant dimension).
 pub fn load_archived_maps(dir: &Path) -> Result<Vec<(String, u32, MapDefinition)>, String> {
     let text =
         std::fs::read_to_string(dir.join("maps.tsv")).map_err(|e| format!("maps.tsv: {e}"))?;
@@ -719,7 +719,7 @@ pub fn geometry_strata(
 // The frozen stability rule (plan 7.1/8.3; the ONLY bridge pilot -> Full)
 // ---------------------------------------------------------------------
 
-/// One candidate's mechanical stability verdict (ADR-0018): stable :=
+/// One candidate's mechanical stability verdict: stable :=
 /// zero crashes AND zero config failures AND pooled drop < 50 permille
 /// AND >= 3 pair_tags with the margin-direction Wilson 95% entirely on
 /// one side of 500 permille, all agreeing AND pooled median
@@ -871,7 +871,7 @@ pub fn stability_from_effects(
 
 /// The Full-roster derivation: the stable variant ids in plan
 /// declaration order — the ONLY bridge from pilot data to the Full
-/// experiment (pre-registered and auditable, ADR-0018).
+/// experiment (pre-registered and auditable,).
 pub fn stable_candidates(verdicts: &[StabilityVerdict]) -> Vec<String> {
     verdicts
         .iter()
@@ -881,7 +881,7 @@ pub fn stable_candidates(verdicts: &[StabilityVerdict]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------
-// Interaction difference-in-differences (plan 7.4, ADR-0018)
+// Interaction difference-in-differences (plan 7.4,)
 // ---------------------------------------------------------------------
 
 /// One pair's DiD table over its units: sign counts of
@@ -1174,7 +1174,7 @@ pub fn effects_text(
         }
         let id = variant.variant_id.as_str();
         let map_regime_note = if variant.is_map_regime() {
-            " — MAP-REGIME variant: paired deltas include the map-regime change (ADR-0018)"
+            " — MAP-REGIME variant: paired deltas include the map-regime change"
         } else {
             ""
         };

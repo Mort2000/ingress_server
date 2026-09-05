@@ -1,5 +1,5 @@
 //! B2 readiness-layer tests (`docs/balance/ai-balance-plan.md` sections 10.1 and
-//! 13.2/13.3, ADR-0016): the Stage::Readiness plan rules, every gate
+//! 13.2/13.3,): the Stage::Readiness plan rules, every gate
 //! evaluator on hand-built passing AND failing fixtures, the frozen
 //! active-blocking proxy over a hand-scripted replay with known truth,
 //! the mirror spawn gate over real replay headers, the Transfer fold
@@ -365,7 +365,7 @@ fn records_gate_detects_family_version_and_parameter_mismatches() {
     assert!(!records_gate(&[wrong_version], &plan).passed);
     // Same policy_id, same version, RETUNED parameters: the frozen gate's
     // parameters half must flag the row (the B4/B5 retuned-policy case —
-    // ADR-0016 gate 7).
+    //gate 7).
     let mut wrong_parameters = ok;
     wrong_parameters.policy_a_parameters = arena_bots::PolicyParameters::BlockerBuilder(
         arena_bots::r2::blocker_builder::BlockerBuilderParams {

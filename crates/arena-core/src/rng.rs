@@ -1,4 +1,4 @@
-//! Domain-separated BLAKE3 random oracle (R-RNG-01 / ADR-0011).
+//! Domain-separated BLAKE3 random oracle (R-RNG-01 /).
 //!
 //! The oracle has NO mutable cursor: every query re-hashes its address from
 //! scratch, so the order and number of other queries can never influence a

@@ -14,4 +14,4 @@ blake3 = "1.8"
 # Provenance tooling is operator-side (P4-BUILD): it hashes the audited
 # tree, lockfile, toolchain identity, and build products so every match
 # binary is traceable to the exact audited inputs (ADR-0005). blake3 is
-# the sanctioned dependency (ADR-0013); everything else is std.
+# the sanctioned dependency; everything else is std.

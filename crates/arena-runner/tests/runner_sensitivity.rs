@@ -1,10 +1,10 @@
 //! B4 sensitivity integration tests (`docs/balance/ai-balance-plan.md` sections
-//! 7.3/8.3, ADR-0018): map-regime config variants in the executor — a
+//! 7.3/8.3,): map-regime config variants in the executor — a
 //! variant declaring a map-defining field generates its OWN MapDefinition
 //! from the same map_seed (pairing keys unchanged), an infeasible
 //! variant map becomes that variant's config-failure cells (never a
 //! skip, never a batch abort), and non-map-regime variants keep the
-//! ADR-0014 byte-shared base map.
+//!byte-shared base map.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -128,14 +128,14 @@ fn map_regime_variants_play_on_their_own_regenerated_maps() {
     );
     assert_eq!(
         base_hash, control_hash,
-        "rule-only variants byte-share the base map (ADR-0014)"
+        "rule-only variants byte-share the base map"
     );
     assert_ne!(
         base_hash, regime_hash,
         "the map-regime map differs from the base map (same seed, own config)"
     );
 
-    // Pairing keys unchanged (ADR-0018): same unit seeds and pair_id
+    // Pairing keys unchanged: same unit seeds and pair_id
     // across the contrast — the paired delta stays well defined.
     let base_row = run
         .records
@@ -268,7 +268,7 @@ mod b4_end_to_end {
         assert_eq!(crashes, 0);
         assert_eq!(
             config_failures, 0,
-            "pc-80 maps generate (map-regime, ADR-0018)"
+            "pc-80 maps generate (map-regime,)"
         );
         assert_eq!(dir, root.join("balance").join("b4-tiny-e2e"));
 

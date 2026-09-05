@@ -1,4 +1,4 @@
-//! The diagnostic `idle` policy (plan section 10.1, ADR-0016): a
+//! The diagnostic `idle` policy (plan section 10.1,): a
 //! first-class RECORDED opponent for the readiness idle gate — every R2
 //! policy must score stably against it. Family `idle` is diagnostic: it
 //! never enters competitive-balance aggregation. Spawns stand on map

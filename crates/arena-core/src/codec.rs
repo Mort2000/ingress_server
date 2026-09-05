@@ -1,4 +1,4 @@
-//! Shared canonical codec primitives (D44/D51, ADR-0010): the fixed-width
+//! Shared canonical codec primitives (D44/D51,): the fixed-width
 //! little-endian encodings used by BOTH the M5 canonical state hash
 //! (`arena-replay` canon) and the IARP replay file header, so the two can
 //! never drift apart. Everything here is pure byte mapping — no validation,

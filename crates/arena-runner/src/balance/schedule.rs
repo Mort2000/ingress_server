@@ -1,5 +1,5 @@
 //! Paired scheduling (B1, `docs/balance/ai-balance-plan.md` section 8.2,
-//! ADR-0014): expands an [`ExperimentPlan`] into the deterministic list of
+//!): expands an [`ExperimentPlan`] into the deterministic list of
 //! match cells. The comparable unit is `(map, game_seed, bot_seed, policy
 //! pair, bucket policy)`; every unit appears EXACTLY TWICE per variant
 //! with opposite faction assignments (leg 0 = policy_a as ENL, leg 1 =

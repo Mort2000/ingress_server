@@ -2845,7 +2845,7 @@ mod tests {
     }
 
     // Checklist 5: golden vectors through the resolver — a fully hardcoded
-    // literal plus independent in-test oracle derivations (ADR-0011).
+    // literal plus independent in-test oracle derivations.
     #[test]
     fn hack_golden_vectors_through_the_resolver() {
         let mut cfg = base_config();
@@ -2871,7 +2871,7 @@ mod tests {
         advance_to(&mut state, 10);
         let report = run_with(GOLDEN_SEED, &mut state, &[hack_stream(10, AgentId(7), 17)]);
         let (_, keys_gained, _, supply_after) = hacked(&report.execution_order[0].outcomes[0]);
-        assert_eq!(keys_gained, 3, "hardcoded golden literal (ADR-0011)");
+        assert_eq!(keys_gained, 3, "hardcoded golden literal");
         assert_eq!(keys_gained, oracle_keys(GOLDEN_SEED, 10, 7, 17, 1));
         assert_eq!(supply_after, 22);
 
@@ -4765,7 +4765,7 @@ mod tests {
     }
 
     // Checklist 37: both factions' new agents sit at the oracle-recomputed
-    // shared position (golden cross-check, ADR-0011).
+    // shared position (golden cross-check,).
     #[test]
     fn reinforcement_position_matches_oracle_golden() {
         let game_seed = 0xA11CE;

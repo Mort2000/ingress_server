@@ -1,15 +1,15 @@
 # B4 参数敏感度报告（阶段 B：Pilot → Full → 交互判定）
 
-本文件承载 B4 单变量参数敏感度全记录（`docs/balance/ai-balance-plan.md` 7.3/7.4/8.3/9/10.3 节，ADR-0018）：Pilot（§1–6，`b4-sensitivity-pilot-r2`）、稳定臂的 Full 扩展（§7，`b4-sensitivity-full-dev-r1`/`-val-r1`）、交互实验判定（§8）与里程碑结论（§10）。`runs/` 不入库；按第 12 节，manifest 摘要与全部产物内容 hash 在此提交。全部统计为非权威离线分析：整数原始计数齐备，permille 仅为展示，不进入 Game Result、Replay Hash 或规则结算。
+本文件承载 B4 单变量参数敏感度全记录（`docs/balance/ai-balance-plan.md` 7.3/7.4/8.3/9/10.3 节，）：Pilot（§1–6，`b4-sensitivity-pilot-r2`）、稳定臂的 Full 扩展（§7，`b4-sensitivity-full-dev-r1`/`-val-r1`）、交互实验判定（§8）与里程碑结论（§10）。`runs/` 不入库；按第 12 节，manifest 摘要与全部产物内容 hash 在此提交。全部统计为非权威离线分析：整数原始计数齐备，permille 仅为展示，不进入 Game Result、Replay Hash 或规则结算。
 
-## 1. 设计（运行前冻结于 ADR-0018）
+## 1. 设计（运行前冻结于）
 
 - **网格**：plan 7.3 的七个参数、十三个单字段候选（全部非默认档；`RECHARGE_COST` 只有一档），每个候选相对未改动的 `GameConfig::default()`（config hash `0x9ead052219fa7ff3`，测试钉住）恰声明一个变更字段。候选值是 Pilot 起点，不是预设结论。
 - **名单**：六个冻结对阵 × `PolicyId::R2_COMPETITIVE`，固定 `r2_spec()` 参数（版本 r2.0、逐行全值记录；plan 7.3"固定 R2 策略参数"条款）；无 mirror（阵营偏差由换边双臂覆盖）、无 m6 基线（跨代桥接是 B3 的 ladder）。
-- **配对**：每可比较单元（map, game_seed, bot_seed, pair, bucket policy）在全部 14 个 variant 下以相同单元种子打双腿换边（共同随机数，ADR-0014）。
-- **地图机制臂**（`portal-count-80/160`，ADR-0018）：从同一 map_seed、在自身 config 下生成自己的地图；其配对差**包含地图机制变化**（该参数的机制即地图）。规则型臂逐图字节共享 base 地图（执行器验证）。
+- **配对**：每可比较单元（map, game_seed, bot_seed, pair, bucket policy）在全部 14 个 variant 下以相同单元种子打双腿换边（共同随机数，）。
+- **地图机制臂**（`portal-count-80/160`，）：从同一 map_seed、在自身 config 下生成自己的地图；其配对差**包含地图机制变化**（该参数的机制即地图）。规则型臂逐图字节共享 base 地图（执行器验证）。
 - **规模**：base + 13 候选 × 6 对阵 × 100 张 Development 地图 × 2 腿 = 16,800 场；replay 采样 = 每 (variant, pair) 前 25 图的 leg-0 = 2,100 份 IARP。
-- **稳定规则**（pilot→Full 的唯一机械桥梁，ADR-0018）：零 crash/config-failure 且合并 drop < 50‰ 且（c）Wilson 95% 整体单侧的对阵中**同方向 ≥3 个且严格多于反方向**（3+3 平局无方向；反方向单侧对阵逐个记录为异议，plan 10.3 门槛非全体一致）且合并 margin_delta 中位数 ≠ 0。不满足即"停止该方向并记录"（plan 7.1 else 分支）。
+- **稳定规则**（pilot→Full 的唯一机械桥梁，）：零 crash/config-failure 且合并 drop < 50‰ 且（c）Wilson 95% 整体单侧的对阵中**同方向 ≥3 个且严格多于反方向**（3+3 平局无方向；反方向单侧对阵逐个记录为异议，plan 10.3 门槛非全体一致）且合并 margin_delta 中位数 ≠ 0。不满足即"停止该方向并记录"（plan 7.1 else 分支）。
 
 ## 2. Pilot 溯源（manifest 摘要）
 
@@ -23,7 +23,7 @@
 | 地图 | `maps.tsv` 301 行 = base 100 + portal-count-80 自有 100 + portal-count-160 自有 100（内容寻址去重） |
 | 场次 | 16,800（12 workers，release，12,105.9 s）；replay 2,100 份 |
 | base_commit | `411ad1a`（reproduce：`cargo run --release -p arena-runner -- balance-b4 runs 411ad1a`） |
-| 种子推导 | map/game/bot/schedule 见 manifest（ADR-0014 公式；schedule_seed 含 experiment id，其余不含） |
+| 种子推导 | map/game/bot/schedule 见 manifest（公式；schedule_seed 含 experiment id，其余不含） |
 
 ## 3. Pilot 实验完整性门槛（`effects.txt` gates，原始分子/分母）
 
@@ -52,7 +52,7 @@ Pooled = 六对阵合并的 `margin_delta_vs_base` 符号计数（每候选 600 
 | recharge-cost-2 | 25/26/549 | 0/0 | 0 | 停止（同上；549/600 单元 delta=0） |
 | initial-supply-10 | 7/17/576 | 0/1 | 0 | 停止（同上） |
 | initial-supply-40 | 0/2/598 | 0/0 | 0 | 停止（同上；598/600 单元 delta=0——该参数在这些对阵中几乎从不改变轨迹） |
-| portal-count-80 | 319/281/0 | 2/2 | +1,983,254,145,256 | 停止（<3 同向；含地图机制变化，ADR-0018 注记） |
+| portal-count-80 | 319/281/0 | 2/2 | +1,983,254,145,256 | 停止（<3 同向；含地图机制变化，注记） |
 | portal-count-160 | 290/310/0 | 1/2 | −1,347,871,954,043 | 停止（同上） |
 
 **稳定臂细节**（全部原始计数在 `effects.txt`）：
@@ -88,7 +88,7 @@ Pooled = 六对阵合并的 `margin_delta_vs_base` 符号计数（每候选 600 
 
 ## 7. Full 运行（`b4-sensitivity-full-dev-r1` / `b4-sensitivity-full-val-r1`，稳定臂扩展）
 
-名单由 pilot 数据经冻结稳定规则机械派生（`--full` 在运行前独立重放 pilot 归档并复现 `full_roster: max-link-1500m,max-link-2500m`），Full 重跑全部地图而非并入 pilot 行（自包含归档，ADR-0018）。两 run 同一 variant 集（base + 两 mld 臂，`configs.tsv` 逐字节相同）、同一六对阵、固定 `r2_spec()` 参数。
+名单由 pilot 数据经冻结稳定规则机械派生（`--full` 在运行前独立重放 pilot 归档并复现 `full_roster: max-link-1500m,max-link-2500m`），Full 重跑全部地图而非并入 pilot 行（自包含归档，）。两 run 同一 variant 集（base + 两 mld 臂，`configs.tsv` 逐字节相同）、同一六对阵、固定 `r2_spec()` 参数。
 
 ### 7.1 溯源（manifest 摘要）
 
@@ -179,7 +179,7 @@ plan 10.3 硬告警带（P(win|led@R100) > 90%，竞争对适用）：dev 上 ma
 
 ## 8. 交互实验判定（plan 7.4）
 
-Full 归档复核后由 CLI 机械判定（`--interaction runs/balance/b4-sensitivity-full-dev-r1,runs/balance/b4-sensitivity-full-val-r1`）：两个 Full run 均复现两 mld 臂 STABLE（dev 中位 ±10.3e12/−11.3e12、val +9.1e12/−12.9e12），其余因子无任何稳定臂。plan 7.4 的四个优先因子对（`mb×mld`、`ad×ra`、`ad×rc`、`pc×mld`）**均不满足"两因子均有稳定主效应"的前置**（ADR-0018：只对两因子均稳定者运行）——判定输出 `no plan-7.4 factor pair has two stable arms — nothing to run`，退出码 0。**B4 不运行任何交互实验**；这是记录在案的诚实停止，不是遗漏。交互层（DiD + 反转判定，ADR-0018 §7）已实现并留有 pin 测试，供 B5 或后续阶段在出现双稳定因子时使用。
+Full 归档复核后由 CLI 机械判定（`--interaction runs/balance/b4-sensitivity-full-dev-r1,runs/balance/b4-sensitivity-full-val-r1`）：两个 Full run 均复现两 mld 臂 STABLE（dev 中位 ±10.3e12/−11.3e12、val +9.1e12/−12.9e12），其余因子无任何稳定臂。plan 7.4 的四个优先因子对（`mb×mld`、`ad×ra`、`ad×rc`、`pc×mld`）**均不满足"两因子均有稳定主效应"的前置**（：只对两因子均稳定者运行）——判定输出 `no plan-7.4 factor pair has two stable arms — nothing to run`，退出码 0。**B4 不运行任何交互实验**；这是记录在案的诚实停止，不是遗漏。交互层（DiD + 反转判定，§7）已实现并留有 pin 测试，供 B5 或后续阶段在出现双稳定因子时使用。
 
 ## 9. Full 产物清单与内容 hash（plan 第 12 节）
 
@@ -210,9 +210,9 @@ Full 归档复核后由 CLI 机械判定（`--interaction runs/balance/b4-sensit
 
 ## Honesty log
 
-1. ADR-0018 初稿把网格写作"14 个候选"；冻结实现清点为 13（`RECHARGE_COST` 只有一个非默认档）。已在同一提交内修正；候选值本身未变。
-2. **稳定规则 (c) 的首次实现错误地要求"全部单侧对阵一致"**，比 ADR 句意的自然读法与 plan 10.3 原门槛（"至少三个独立策略对同向"）更严，且在 builder-disruptor 对阵系统性反向的结构下不可通过。首发官方批 `b4-sensitivity-pilot-r1`（0 crash/0 config-failure，原始数据正确）以严格版规则归档、判定全停；随后澄清 ADR-0018（任何 Full 运行之前）、修正实现（同向 ≥3 且严格多于反向；异议逐对阵记录）并以 `-r2` 重发。**逐场轨迹等价已验证**：16,800 行 matches.tsv 除 experiment_id/schedule_seed/elapsed_ms 外全同，8,400 行 pairs.tsv 逐字节相同；`-r1` 目录保留为历史。
+1.初稿把网格写作"14 个候选"；冻结实现清点为 13（`RECHARGE_COST` 只有一个非默认档）。已在同一提交内修正；候选值本身未变。
+2. **稳定规则 (c) 的首次实现错误地要求"全部单侧对阵一致"**，比 ADR 句意的自然读法与 plan 10.3 原门槛（"至少三个独立策略对同向"）更严，且在 builder-disruptor 对阵系统性反向的结构下不可通过。首发官方批 `b4-sensitivity-pilot-r1`（0 crash/0 config-failure，原始数据正确）以严格版规则归档、判定全停；随后澄清（任何 Full 运行之前）、修正实现（同向 ≥3 且严格多于反向；异议逐对阵记录）并以 `-r2` 重发。**逐场轨迹等价已验证**：16,800 行 matches.tsv 除 experiment_id/schedule_seed/elapsed_ms 外全同，8,400 行 pairs.tsv 逐字节相同；`-r1` 目录保留为历史。
 3. -r2 渲染层遗留一个展示小缺陷：无决定性单元的对阵其 Wilson 列印作 `0 0`（规则本身读 `Option`，不受影响；独立复核脚本曾被该显示误导后以原始 up/down 计数纠正）。渲染已改为 `-`；-r2 归档按"不覆写历史"保持原样。
-4. 后台任务包装器在 ~60 分钟处杀掉了第一次 -r1 尝试（未写任何产物）；改用 setsid 分离重跑完成。scratch pilot `b4-sensitivity-pilot-r1-pilot-r0`（8 图、1,344 场、706 产物）为探索性运行，不作为任何判定证据（ADR-0018 惯例）。
-5. Full chunk 过程记录（2026-09-05）：(a) 批次本身 setsid 分离运行（dev 6,449 s + val 2,136 s，一次进程顺序产出，退出码 0），但**监控用**的后台 watcher 任务再次在 ~60 分钟处被工具包装器杀掉——批次不受影响，后续改为前台轮询；(b) §7 的滚雪球表**不在** ADR-0018 冻结的 `effects.txt` 统计集内（那七项不含 checkpoint 列联），由独立 scratch 脚本自 `matches.tsv` 的 `leader_r*`/`result` 列重算（plan 原则 8：逐场数据可重算一切汇总），整数分子/分母随表并列；(c) drop 原因未分解：两 run 合并 drop = 0‰（20,325/25,949,448 与 6,602/8,651,595），远低于 plan 10.1 的 5% 按因解释线，未触发该义务（需要时 `balance-drop-reasons` 可对归档重执行）。
+4. 后台任务包装器在 ~60 分钟处杀掉了第一次 -r1 尝试（未写任何产物）；改用 setsid 分离重跑完成。scratch pilot `b4-sensitivity-pilot-r1-pilot-r0`（8 图、1,344 场、706 产物）为探索性运行，不作为任何判定证据（惯例）。
+5. Full chunk 过程记录（2026-09-05）：(a) 批次本身 setsid 分离运行（dev 6,449 s + val 2,136 s，一次进程顺序产出，退出码 0），但**监控用**的后台 watcher 任务再次在 ~60 分钟处被工具包装器杀掉——批次不受影响，后续改为前台轮询；(b) §7 的滚雪球表**不在**冻结的 `effects.txt` 统计集内（那七项不含 checkpoint 列联），由独立 scratch 脚本自 `matches.tsv` 的 `leader_r*`/`result` 列重算（plan 原则 8：逐场数据可重算一切汇总），整数分子/分母随表并列；(c) drop 原因未分解：两 run 合并 drop = 0‰（20,325/25,949,448 与 6,602/8,651,595），远低于 plan 10.1 的 5% 按因解释线，未触发该义务（需要时 `balance-drop-reasons` 可对归档重执行）。
 6. **两个 Full 归档的 `manifest.txt`/`report.md` reproduce 行是泛化形式**（`balance-b4 runs <base_commit>`，不带模式旗标）——照抄会重跑 Pilot 而非本实验。权威命令是本报告 §7.1 的 `--full runs/balance/b4-sensitivity-pilot-r2`（与 `-val` 同进程产出）。渲染已按 e8b553d 先例修向前：`b4_reproduce_mode` 由计划形状机械推导（pilot 形状=裸命令；base+网格真子集=`--full <pilot 归档>`；Interaction=`--interaction <两个 Full 归档>`；非任何冻结形状=可见 `MODE-NOT-DERIVABLE` 标记），manifest 与 report 两处接线并有 pin 测试。冻结归档不覆写，本条即为指针更正记录。

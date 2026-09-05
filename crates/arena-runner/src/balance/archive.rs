@@ -253,7 +253,7 @@ pub fn manifest_text(
             "-".to_string()
         } else {
             format!(
-                "{} (own MapDefinition from the same map_seed, ADR-0018; paired deltas include the map-regime change)",
+                "{} (own MapDefinition from the same map_seed,; paired deltas include the map-regime change)",
                 regime.join(",")
             )
         }
@@ -352,7 +352,7 @@ pub fn policies_tsv(plan: &ExperimentPlan) -> String {
 }
 
 /// One archived map: the variant it belongs to (base rows carry the base
-/// variant id; map-regime variants carry their own — ADR-0018), its
+/// variant id; map-regime variants carry their own —), its
 /// content hash and file name.
 pub struct ArchivedMap {
     pub variant_id: String,
@@ -364,7 +364,7 @@ pub struct ArchivedMap {
 
 /// Encodes, content-addresses and writes the plan's maps into `maps/`
 /// (each distinct content once): the base-variant maps plus, for every
-/// MAP-REGIME variant (ADR-0018 — a variant declaring a map-defining
+/// MAP-REGIME variant (— a variant declaring a map-defining
 /// field), that variant's own map per map seed (its cells ran on it).
 /// An infeasible variant map has no row — its cells are the archive's
 /// `config-failure` records, never a silent skip. Rule-only variants
@@ -434,7 +434,7 @@ pub fn write_maps(dir: &Path, plan: &ExperimentPlan) -> Result<Vec<ArchivedMap>,
 }
 
 /// The `maps.tsv` index body (the base format plus the trailing
-/// `variant_id` column — ADR-0018).
+/// `variant_id` column —).
 pub fn maps_tsv(maps: &[ArchivedMap]) -> String {
     let mut text = String::from("map_id\tmap_seed\tcontent_hash\tfile\tvariant_id\n");
     for map in maps {
@@ -580,7 +580,7 @@ pub fn report_text(
             spec.parameters.tag()
         ));
     }
-    out.push_str("\nPairing: each comparable unit (map, game_seed, bot_seed, policy pair, bucket policy) is played twice per variant with opposite faction assignments; variants reuse the identical unit seeds (common random numbers, ADR-0014).\n\n");
+    out.push_str("\nPairing: each comparable unit (map, game_seed, bot_seed, policy pair, bucket policy) is played twice per variant with opposite faction assignments; variants reuse the identical unit seeds (common random numbers,).\n\n");
     out.push_str("## Results (integer raw counts)\n\n");
     out.push_str("| Variant | Units | a_wins | b_wins | draws | crashes | config_failures | margin_sum | outcome_delta_vs_base | margin_delta_vs_base |\n|---|---|---|---|---|---|---|---|---|---|\n");
     for summary in summaries {
@@ -627,7 +627,7 @@ pub fn report_text(
     }
     out.push_str("## Archive\n\n");
     out.push_str(&format!(
-        "- {} map index row(s) over content-addressed files under `maps/` (one file per distinct Map Definition; rule-only variants share the base file by construction and by executor verification, map-regime variants add their own rows — ADR-0018)\n",
+        "- {} map index row(s) over content-addressed files under `maps/` (one file per distinct Map Definition; rule-only variants share the base file by construction and by executor verification, map-regime variants add their own rows —)\n",
         maps.len()
     ));
     out.push_str(&format!(
@@ -729,7 +729,7 @@ pub fn write_balance_artifacts(
 mod tests {
     use super::*;
 
-    // maps.tsv carries the variant dimension (ADR-0018): base rows plus
+    // maps.tsv carries the variant dimension: base rows plus
     // one row per map-regime variant map, content-addressed and deduped
     // by content; a rule-only variant shares the base row by construction.
     #[test]
@@ -882,7 +882,7 @@ mod tests {
         // The B4 reproduce line carries the CLI MODE next to the
         // subcommand: a Full plan (base + a proper subset of the frozen
         // grid) only exists through `--full <pilot-archive>` (the
-        // stable-roster bridge, ADR-0018) and an interaction plan only
+        // stable-roster bridge,) and an interaction plan only
         // through `--interaction <full-archives>` — a bare `balance-b4
         // runs <commit>` re-runs the PILOT, never this experiment.
         let full = crate::balance::sensitivity::b4_full_plan(

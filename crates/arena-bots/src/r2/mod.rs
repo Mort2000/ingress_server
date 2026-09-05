@@ -4,7 +4,7 @@
 //!
 //! - [`rng`]: the R2 policy RNG namespace — the frozen D53 key shape with
 //!   FRESH stream kind-tag bytes 6..=12, disjoint from the frozen m6
-//!   kind tags 1..=5 (ADR-0015);
+//!   kind tags 1..=5;
 //! - [`value`]: the interpretable INTEGER value model of plan 6.2 (field /
 //!   attack / recharge-defense / transfer / block value and field
 //!   candidate generation), pure over the legal `Observation` and public
@@ -23,7 +23,7 @@
 //! [`logistics_builder`], [`blocker_builder`], [`adaptive_hybrid_r2`],
 //! plus the DIAGNOSTIC [`idle`] opponent of the plan-10.1 idle gate.
 //! Policy identity does NOT live here: ids, families, versions and the
-//! serialized parameter records are [`crate::policy`] (ADR-0015/0016);
+//! serialized parameter records are [`crate::policy`] (/0016);
 //! every B2 policy carries the fixed version tag [`R2_VERSION`].
 
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
@@ -54,7 +54,7 @@ use crate::bot::Bot;
 
 /// A B2 R2 policy: the minimal strategy interface WITHOUT the frozen
 /// `Bot` trait's `kind() -> BotKind` (the five-variant `BotKind` registry
-/// is frozen read-only, ADR-0015/0016). A policy's identity — id, family,
+/// is frozen read-only,/0016). A policy's identity — id, family,
 /// version, parameters — lives entirely in its constructing
 /// [`crate::policy::PolicySpec`]; the executable object is just
 /// `choose_spawns` + `submit_round`.
@@ -86,7 +86,7 @@ impl RoundStrategy for R2Strategy {
     }
 }
 
-/// One constructed policy of a balance experiment, era-agnostic (ADR-0016):
+/// One constructed policy of a balance experiment, era-agnostic:
 /// either a frozen m6.0 baseline (delegated 1:1 to the untouched
 /// `make_bot` — the B1 lockstep pin) or an [`R2Policy`]. The balance
 /// executor addresses both through this one type and never branches on

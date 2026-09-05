@@ -1,10 +1,10 @@
-# B3 默认配置消融报告（plan §7.2 / ADR-0017）
+# B3 默认配置消融报告（plan §7.2 /）
 
 - 状态：Accepted（7,500 场官方批次 0 crash、0 config failure；记录完整性 15,000/15,000；Drop 重执行 3,000/3,000 验证一致）
 - 官方运行：`runs/balance/b3-ablation-matrix-r3/`、`runs/balance/b3-ablation-idle-r3/`、`runs/balance/b3-drop-reasons-matrix-r3/`（base commit `c7aa6777193a742c0f08421f2ae89fe5143f66b7`，12 workers，release；`-r1`/`-r2` 目录为被 `analysis.txt` 两个渲染/聚合缺陷否决的首次尝试，原样保留，见过程记录 1-2）
 - 日期：2026-09-04
 
-本报告为 `docs/balance/ai-balance-plan.md` 第 14 行 B3 里程碑（阶段 A 默认配置消融）的验收记录：量化 m6.0 Hybrid 100% 支配（以及 B2 记录的 `builder-disruptor-r2` 强支配）的来源。**未触碰任何规则参数**（`Stage::Ablation` 拒绝一切配置差异，plan §7.2；默认 `GameConfig` 全程不变，config hash `9ead052219fa7ff3`），五个冻结 `BotKind` 行为与既有 `runs/` 历史产物不动。三个测量臂（`hybrid-builder-only` / `hybrid-builder-attack`，版本 `b3.0`；`greedy-coordinated-canonical`，版本 `r2.0` + 流 kind-tag 13，族 `ablation`，诊断类）在官方运行之前由 ADR-0017 冻结；`hybrid-builder-attack` 在防御分派永不触发的整场对局与冻结 HybridBot **逐字节相同**（可执行 pin 于 `crates/arena-bots/tests/ablation_fixtures.rs`）。
+本报告为 `docs/balance/ai-balance-plan.md` 第 14 行 B3 里程碑（阶段 A 默认配置消融）的验收记录：量化 m6.0 Hybrid 100% 支配（以及 B2 记录的 `builder-disruptor-r2` 强支配）的来源。**未触碰任何规则参数**（`Stage::Ablation` 拒绝一切配置差异，plan §7.2；默认 `GameConfig` 全程不变，config hash `9ead052219fa7ff3`），五个冻结 `BotKind` 行为与既有 `runs/` 历史产物不动。三个测量臂（`hybrid-builder-only` / `hybrid-builder-attack`，版本 `b3.0`；`greedy-coordinated-canonical`，版本 `r2.0` + 流 kind-tag 13，族 `ablation`，诊断类）在官方运行之前由冻结；`hybrid-builder-attack` 在防御分派永不触发的整场对局与冻结 HybridBot **逐字节相同**（可执行 pin 于 `crates/arena-bots/tests/ablation_fixtures.rs`）。
 
 ## 结论（支配来源分解）
 
@@ -18,14 +18,14 @@
    - 第 5 步（出生对照）：`greedy-coordinated-canonical`（确定性出生）对 `greedy-coordinated-r2`（seeded top-K）112-88-0（490..628，非支配）——出生确定性对正面胜负无可检出的效应；其效应全部体现在 mirror 伪影（见下）；
    - 第 6 步（角色对照）：冻结 Hybrid 的固定角色 199-1-0 击败 `adaptive-hybrid-r2` 的动态角色切换——动态切换也不解释支配。
 3. **同一攻击 overlay 加在 r2 核心上支配一切**：`builder-disruptor-r2` 对全部 7 个互异对手 7×200-0-0（每对 Wilson 下界 981‰，支配）——含 Hybrid（200-0-0，中位分差 +12.3e12）与 `hybrid-builder-attack`。攻击/破坏在默认参数下对每个建场者都是全胜策略。
-4. **Plan §11 机械化分类**（domination = W/(W+L) 的 Wilson95 下界 ≥ 900‰，ADR-0017）：
+4. **Plan §11 机械化分类**（domination = W/(W+L) 的 Wilson95 下界 ≥ 900‰，）：
    - 行 1（协同修正消除支配）：**未消除**（Hybrid 对 gc-r2 仍支配）→ 残差按阶梯归因于角色/出生，喂给 B4；
    - 行 7（多个近似最佳响应仍单一支配）：**触发（规则风险）**——Hybrid 支配 5 个互异对手、`builder-disruptor-r2` 支配 7 个；后续动作：继续参数实验（B4，优先 `ATTACK_DAMAGE`/`RECHARGE_*` 方向），参数空间无解时再讨论机制变更；
    - 行 6（mirror 偏差仅在确定性出生下出现）：**触发（策略对称伪影）**——canonical 臂 mirror 出生冲突 125/125 腿 vs gc-r2 0/125；修正动作即 B2 已落实的 seeded tie-break（本臂为测量有意重建该伪影）。
 
 按 plan §7.1 总体流程：**支配未被协同修正消除 ⇒ 不据此修正或降级策略，进入 B4 单变量敏感度**；Hybrid 100% 支配的"主要来源"答案是：Hybrid 的攻击角色 × 默认规则参数（规则风险），而非 Greedy 的实现缺陷（它只是另一个受害者）或 Hybrid 的建造/防御/出生。
 
-## 实验设计（冻结于官方运行之前，ADR-0017）
+## 实验设计（冻结于官方运行之前，）
 
 | 实验 | experiment id | 内容 | 场次 | 用时 |
 |---|---|---|---|---|

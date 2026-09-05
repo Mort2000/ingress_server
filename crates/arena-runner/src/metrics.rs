@@ -398,7 +398,7 @@ pub struct MatchRecord {
     pub matchup_tag: String,
     pub j: u32,
     /// Policy tag of side A (m6 batches carry `BotKind` tags; balance
-    /// cells any registered policy tag — ADR-0016).
+    /// cells any registered policy tag —).
     pub bot_a: String,
     /// Policy tag of side B.
     pub bot_b: String,

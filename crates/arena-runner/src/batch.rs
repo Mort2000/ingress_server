@@ -155,7 +155,7 @@ pub struct MatchDescriptor {
     pub j: u32,
     /// Policy tag of side A (the frozen m6 batches carry `BotKind` tags
     /// byte-identically; balance cells carry any registered policy tag —
-    /// ADR-0016).
+    ///).
     pub bot_a: String,
     /// Policy tag of side B.
     pub bot_b: String,

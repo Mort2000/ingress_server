@@ -1,5 +1,5 @@
 //! R2 policy RNG namespace (B2, `docs/balance/ai-balance-plan.md` sections 5.1 and
-//! 6.3; ADR-0015). R2 policies draw their tie-break randomness through
+//! 6.3;). R2 policies draw their tie-break randomness through
 //! the SAME frozen D53 key shape as the m6 baselines —
 //! `b"ABOT" || u32 BOT_RNG_VERSION || u64 bot_seed || u8 faction_tag ||
 //! u8 kind_tag`, fixed-width LE integers — but with FRESH stream kind-tag
@@ -13,7 +13,7 @@
 //! permanently to `greedy-coordinated-r2`, …, 11 to `adaptive-hybrid-r2`
 //! (plan section 6.1 declaration order), 12 to the diagnostic idle policy.
 //! Future policies append new bytes >= 13; existing bytes are never
-//! reassigned (version semantics are additive, ADR-0015).
+//! reassigned (version semantics are additive,).
 
 use arena_core::rng::uniform_from_words;
 use arena_core::types::Faction;
@@ -22,7 +22,7 @@ use crate::rng::{BOT_RNG_DOMAIN, BOT_RNG_VERSION, faction_tag};
 
 /// One R2 policy's RNG stream identity: the six plan-6.1 policies, the
 /// diagnostic idle opponent, and the B3 canonical ablation arm
-/// (ADR-0017). Declaration order freezes the kind-tag bytes 6..=13.
+///. Declaration order freezes the kind-tag bytes 6..=13.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum R2Stream {
     /// `greedy-coordinated-r2` (kind tag 6).
@@ -41,7 +41,7 @@ pub enum R2Stream {
     /// opponent for the plan-10.1 idle gate, never a competitive policy.
     Idle,
     /// The diagnostic `greedy-coordinated-canonical` ablation arm (kind
-    /// tag 13, ADR-0017) — the r2 core configured for canonical
+    /// tag 13,) — the r2 core configured for canonical
     /// deterministic spawns; the first B3 stream under the "append bytes
     /// >= 13" freeze rule.
     GreedyCoordinatedCanonical,
@@ -172,7 +172,7 @@ mod tests {
         }
         assert_eq!(R2Stream::from_tag("greedy-coordinated"), None);
         // Declaration order is the kind-tag order 6..=13 (the B3 canonical
-        // ablation arm appended byte 13, ADR-0017).
+        // ablation arm appended byte 13,).
         let tags: Vec<u8> = R2Stream::ALL.iter().map(|s| s.kind_tag()).collect();
         assert_eq!(tags, vec![6, 7, 8, 9, 10, 11, 12, 13]);
     }

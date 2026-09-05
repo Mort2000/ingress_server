@@ -142,7 +142,7 @@ fn panicking_bot_is_recorded_as_crash_and_batch_completes() {
     assert_eq!(all.iter().filter(|r| r.result == Outcome::Crash).count(), 1);
 }
 
-// B2 (ADR-0016): MatchRecord bot fields are POLICY TAG strings — a record
+// B2: MatchRecord bot fields are POLICY TAG strings — a record
 // carrying an R2 tag no BotKind maps to round-trips through matches.tsv
 // verbatim, so balance cells are recorded honestly.
 #[test]

@@ -1,5 +1,5 @@
 //! B3 ablation gates (`docs/balance/ai-balance-plan.md` sections 7.2, 9, 12,
-//! 13.2, 16.5; ADR-0017): the frozen experiment plans, the plan-section-9
+//! 13.2, 16.5;): the frozen experiment plans, the plan-section-9
 //! statistics on hand-built records, the plan-section-11 classification
 //! rules, the verified balance-cell re-execution behind the per-reason
 //! drop tally, and one end-to-end scratch-root run.

@@ -1,4 +1,4 @@
-//! The B3 default-config ablation arms (ADR-0017,
+//! The B3 default-config ablation arms (,
 //! `docs/balance/ai-balance-plan.md` section 7.2): measurement policies that
 //! decompose the frozen m6.0 `HybridBot`'s roles and the r2 core's spawn
 //! determinism into separately versioned strategies. Every arm is
@@ -41,11 +41,11 @@ use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 use crate::r2::rng::R2Stream;
 
-/// Fixed version tag of the two Hybrid ablation arms (ADR-0017; the
+/// Fixed version tag of the two Hybrid ablation arms (; the
 /// canonical arm is the r2 core and keeps `r2.0`).
 pub const B3_VERSION: &str = "b3.0";
 
-/// Which roles of the frozen Hybrid the arm keeps (ADR-0017).
+/// Which roles of the frozen Hybrid the arm keeps.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum HybridAblationRoles {
     /// Every agent builds (its own observation-index station offset over
@@ -76,7 +76,7 @@ impl HybridAblationRoles {
 }
 
 /// The recorded parameters of the Hybrid ablation arms (plan 6.3,
-/// ADR-0017): every threshold is data, serialized in full by
+///): every threshold is data, serialized in full by
 /// [`HybridAblationParams::tag`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HybridAblationParams {
@@ -139,7 +139,7 @@ impl HybridAblationParams {
     }
 }
 
-/// The frozen-Hybrid role ablation (ADR-0017): the frozen round body
+/// The frozen-Hybrid role ablation: the frozen round body
 /// minus the toggled-off role branches, composed from the frozen bots'
 /// own pieces. The spawn set is the frozen Hybrid's seed-triangle spawn
 /// (ladder steps differ by roles only).
@@ -291,7 +291,7 @@ impl R2Policy for HybridAblation {
 }
 
 /// The frozen canonical `CoreParams` of `greedy-coordinated-canonical`
-/// (ADR-0017): the r2 core with `near_equal_permille = 0` (only exact
+///: the r2 core with `near_equal_permille = 0` (only exact
 /// ties of the best value stay eligible) and `spawn_jitter_cm = 0`
 /// (spawns exactly on the chosen triangle's vertices).
 pub fn canonical_core_params() -> CoreParams {

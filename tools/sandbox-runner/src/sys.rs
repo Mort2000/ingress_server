@@ -1,6 +1,6 @@
 //! THE ONLY MODULE WITH `unsafe` in sandbox-runner (P4-CAPABILITY):
 //! raw Linux syscall bindings via `extern "C"` (no libc crate,
-//! ADR-0013) — `setrlimit`, `prctl(PR_SET_NO_NEW_PRIVS)`, `open` with
+//!) — `setrlimit`, `prctl(PR_SET_NO_NEW_PRIVS)`, `open` with
 //! `O_PATH`, and the three landlock syscalls (444/445/446). Everything
 //! else in the crate is safe Rust and a stray `unsafe` fails the build.
 //!

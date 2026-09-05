@@ -1,5 +1,5 @@
 //! Independent policy identity (B1, `docs/balance/ai-balance-plan.md` section 5.1,
-//! ADR-0015): balance experiments address strategies as POLICIES with their
+//!): balance experiments address strategies as POLICIES with their
 //! own `policy_id`, `family`, `version` and structured parameters — not as
 //! the frozen P2 `BotKind` registry. This module is a PARALLEL type: for
 //! the five frozen m6.0 baselines it delegates construction to the
@@ -8,10 +8,10 @@
 //! The five [`PolicyId`]s that mirror the m6.0 baselines reuse the
 //! `BotKind::tag` strings (artifact vocabulary continuity with
 //! `runs/m6-r1/`); their stream kind-tags are permanently bytes 1..=5.
-//! B2 (ADR-0016) adds the six competitive R2 policies of plan section 6.1
+//! B2adds the six competitive R2 policies of plan section 6.1
 //! plus the DIAGNOSTIC `idle` opponent — fresh tags, version `r2.0`,
 //! fresh stream kind-tag bytes 6..=12 — with their parameters recorded in
-//! full-value canonical form ([`PolicyParameters::tag`]). B3 (ADR-0017)
+//! full-value canonical form ([`PolicyParameters::tag`]). B3
 //! appends the three DIAGNOSTIC ablation arms (version `b3.0` for the
 //! Hybrid arms, `r2.0` + stream kind-tag 13 for the canonical arm). The
 //! m6 mapping stays total and injective over [`PolicyId::MIRRORED`]; R2
@@ -36,11 +36,11 @@ use crate::r2::greedy_coordinated::GreedyCoordinated;
 use crate::r2::idle::IdlePolicy;
 use crate::r2::logistics_builder::{LogisticsBuilder, LogisticsBuilderParams};
 
-/// A strategy's identity in a balance experiment (ADR-0015/0016/0017). The
+/// A strategy's identity in a balance experiment (/0016/0017). The
 /// five `MIRRORED` ids map one-to-one onto the frozen m6.0 baselines
 /// (total and injective, pinned by the tests); the seven R2 ids are the
 /// six plan-6.1 policies plus the diagnostic idle opponent; the three
-/// ablation ids are the B3 measurement arms (ADR-0017).
+/// ablation ids are the B3 measurement arms.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PolicyId {
     Random,
@@ -73,7 +73,7 @@ impl PolicyId {
     ];
 
     /// The six competitive R2 policies of plan section 6.1, declaration
-    /// order (the bot-RNG stream kind-tag order 6..=11, ADR-0016).
+    /// order (the bot-RNG stream kind-tag order 6..=11,).
     pub const R2_COMPETITIVE: [PolicyId; 6] = [
         PolicyId::GreedyCoordinatedR2,
         PolicyId::BuilderDefenderR2,
@@ -83,7 +83,7 @@ impl PolicyId {
         PolicyId::AdaptiveHybridR2,
     ];
 
-    /// The B3 ablation-arm registry (ADR-0017), declaration order.
+    /// The B3 ablation-arm registry, declaration order.
     pub const ABLATION: [PolicyId; 3] = [
         PolicyId::HybridBuilderOnly,
         PolicyId::HybridBuilderAttack,
@@ -111,7 +111,7 @@ impl PolicyId {
 
     /// Stable lowercase tag. The mirrored ids reuse the frozen
     /// `BotKind::tag` strings; the R2 ids carry the plan section 6.1 tags;
-    /// the ablation ids carry the ADR-0017 arm tags.
+    /// the ablation ids carry thearm tags.
     pub fn tag(self) -> &'static str {
         match self {
             PolicyId::Random => "random",
@@ -155,7 +155,7 @@ impl PolicyId {
     }
 
     /// The frozen m6.0 bot this policy executes (`None` for R2 policies,
-    /// which are not `Bot` implementations — ADR-0016). Total and
+    /// which are not `Bot` implementations —). Total and
     /// injective over [`PolicyId::MIRRORED`] (pinned by the tests).
     pub fn bot_kind(self) -> Option<BotKind> {
         match self {
@@ -248,7 +248,7 @@ impl PolicyId {
         }
     }
 
-    /// The default B3 ablation-arm spec of an ABLATION id (ADR-0017):
+    /// The default B3 ablation-arm spec of an ABLATION id:
     /// version `b3.0` for the two Hybrid arms, `r2.0` for the canonical
     /// arm (it IS the r2 core); family always `ablation` (diagnostic).
     pub fn ablation_spec(self) -> PolicySpec {
@@ -301,7 +301,7 @@ pub enum PolicyFamily {
     Blocker,
     /// Diagnostic: the plan-10.1 idle opponent (B2).
     Idle,
-    /// Diagnostic: the B3 default-config ablation arms (ADR-0017) —
+    /// Diagnostic: the B3 default-config ablation arms—
     /// measurement policies never enter competitive summaries.
     Ablation,
 }
@@ -371,7 +371,7 @@ impl PolicyFamily {
     }
 }
 
-/// A policy's structured parameters (plan sections 5.1/6.3, ADR-0016).
+/// A policy's structured parameters (plan sections 5.1/6.3,).
 /// Every threshold of every policy lives in its variant — nowhere else —
 /// and [`PolicyParameters::tag`] serializes the COMPLETE value set
 /// canonically, so `policies.tsv` carries every strategy parameter and
@@ -379,7 +379,7 @@ impl PolicyFamily {
 /// string parses back to a different parameter set, never silently to
 /// the defaults).
 ///
-/// Version semantics are additive (ADR-0015): new behavior arrives as a
+/// Version semantics are additive: new behavior arrives as a
 /// NEW variant, never as an edit of `FrozenM6` or of an existing R2
 /// parameter set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -400,7 +400,7 @@ pub enum PolicyParameters {
     /// `adaptive-hybrid-r2`: core + phase/score/threat role switching.
     AdaptiveHybridR2(AdaptiveHybridParams),
     /// The B3 Hybrid ablation arms (`hybrid-builder-only` /
-    /// `hybrid-builder-attack`, ADR-0017): the frozen round body minus the
+    /// `hybrid-builder-attack`,): the frozen round body minus the
     /// toggled-off role branches.
     HybridAblation(HybridAblationParams),
     /// The diagnostic idle opponent: no parameters.
@@ -471,8 +471,8 @@ impl PolicyParameters {
 /// Everything a balance experiment needs to know about one strategy (plan
 /// section 5.3): independent identity, family, fixed version and
 /// structured parameters. The single global `BOT_VERSION` keeps
-/// representing ONLY the m6.0 baselines (ADR-0015); every R2 policy
-/// carries `crate::r2::R2_VERSION` (ADR-0016).
+/// representing ONLY the m6.0 baselines; every R2 policy
+/// carries `crate::r2::R2_VERSION`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PolicySpec {
     pub policy_id: PolicyId,
@@ -577,7 +577,7 @@ pub fn frozen_m6_specs() -> Vec<PolicySpec> {
 }
 
 /// The seven B2 R2 policy specs (six competitive + the diagnostic idle),
-/// declaration order (plan section 6.1 / ADR-0016).
+/// declaration order (plan section 6.1 /).
 pub fn r2_specs() -> Vec<PolicySpec> {
     PolicyId::R2_COMPETITIVE
         .iter()
@@ -586,7 +586,7 @@ pub fn r2_specs() -> Vec<PolicySpec> {
         .collect()
 }
 
-/// The three B3 ablation-arm specs (ADR-0017), declaration order.
+/// The three B3 ablation-arm specs, declaration order.
 pub fn ablation_specs() -> Vec<PolicySpec> {
     PolicyId::ABLATION
         .iter()
@@ -695,7 +695,7 @@ mod tests {
         }
         assert_eq!(PolicyId::Idle.r2_spec().family, PolicyFamily::Idle);
         assert!(PolicyFamily::Idle.is_diagnostic());
-        // B3 (ADR-0017): the three ablation arms register with their own
+        // B3: the three ablation arms register with their own
         // versions and validate.
         let ablation = ablation_specs();
         assert_eq!(ablation.len(), 3);
@@ -761,7 +761,7 @@ mod tests {
         tags.dedup();
         assert_eq!(tags.len(), PolicyId::ALL.len(), "policy tags distinct");
         // Diagnostic families are exactly the three m6 probes, Idle and
-        // the B3 ablation family (ADR-0017).
+        // the B3 ablation family.
         let diagnostic: Vec<PolicyFamily> = PolicyFamily::ALL
             .iter()
             .copied()
@@ -789,7 +789,7 @@ mod tests {
 
     // R2 parameter records carry the full value set and parse back
     // exactly; an edited record parses to different parameters or not at
-    // all (identity sensitivity, ADR-0016).
+    // all (identity sensitivity,).
     #[test]
     fn r2_parameter_records_round_trip_with_identity_sensitivity() {
         for spec in r2_specs() {
@@ -831,7 +831,7 @@ mod tests {
     // (c) PolicyId -> BotKind is total and injective over the MIRRORED
     // registry (and None everywhere else), and the mirrored kinds own the
     // frozen bot-RNG kind-tag bytes 1..=5 while the R2 ids own 6..=12
-    // (ADR-0015/0016 namespace rule).
+    // (/0016 namespace rule).
     #[test]
     fn policy_id_maps_total_and_injectively_onto_bot_kinds() {
         let mut kinds = Vec::new();
@@ -866,7 +866,7 @@ mod tests {
             assert_eq!(id.tag(), stream.tag());
         }
         assert_eq!(PolicyId::Idle.tag(), crate::r2::rng::R2Stream::Idle.tag());
-        // The canonical ablation arm owns stream kind tag 13 (ADR-0017);
+        // The canonical ablation arm owns stream kind tag 13;
         // the two Hybrid arms draw no randomness and own no stream.
         assert_eq!(
             PolicyId::GreedyCoordinatedCanonical.tag(),

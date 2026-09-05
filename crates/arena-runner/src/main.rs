@@ -313,7 +313,7 @@ fn main() {
         }
         Some("balance-b3") => {
             // B3 default-config ablation (docs/balance/ai-balance-plan.md section
-            // 7.2, ADR-0017): the frozen 8-policy same-map faction-swap
+            // 7.2,): the frozen 8-policy same-map faction-swap
             // matrix + the idle benchmark of the three arms, archived with
             // the plan-section-9 analysis.txt.
             let mut rest = args.iter().skip(2).cloned();
@@ -332,10 +332,10 @@ fn main() {
         }
         Some("balance-b4") => {
             // B4 parameter sensitivity (docs/balance/ai-balance-plan.md sections
-            // 7.3/7.4/8.3, ADR-0018): the frozen 13-candidate single-grid
+            // 7.3/7.4/8.3,): the frozen 13-candidate single-grid
             // pilot (default), the scratch pilot, the Full runs over the
             // stability-derived roster, and the plan-7.4 interaction
-            // experiments — each archived with the ADR-0018 effects.txt.
+            // experiments — each archived with theeffects.txt.
             let mut rest = args.iter().skip(2).cloned();
             let output_root = std::path::PathBuf::from(
                 rest.next()
@@ -402,7 +402,7 @@ fn main() {
         }
         Some("balance-b2") => {
             // B2 readiness runs (docs/balance/ai-balance-plan.md section 10.1,
-            // ADR-0016): the frozen round-robin / idle / blocking-probe
+            //): the frozen round-robin / idle / blocking-probe
             // validation batches with gate evaluation.
             let mut rest = args.iter().skip(2).cloned();
             let output_root = std::path::PathBuf::from(

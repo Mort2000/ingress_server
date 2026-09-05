@@ -1,5 +1,5 @@
 //! Canonical replay-state encoding and the BLAKE3-256 state hash
-//! (D44/D45, P1-HASH, P5-REPLAY, ADR-0010).
+//! (D44/D45, P1-HASH, P5-REPLAY,).
 //!
 //! The encoding is the frozen 8-section layout of D44: fixed-width
 //! little-endian integers (D2), collections length-prefixed with u32 counts
@@ -7,7 +7,7 @@
 //! portals are dense by id). The hash covers EXACTLY the data that affects
 //! future deterministic transitions plus the config identity; public
 //! events, diagnostics, derived caches, wall-clock, and the D47 settle
-//! guard are excluded (see ADR-0010). The hash point is frozen by D45:
+//! guard are excluded (see). The hash point is frozen by D45:
 //! immediately after round r is fully closed (`run_round` + reinforcement
 //! + `advance_round` incl. the epoch sweep), so `state.round() == r+1` and
 //! the hash covers exactly what round r+1 reads.
@@ -16,7 +16,7 @@ use arena_core::codec;
 use arena_core::state::GameState;
 use arena_core::types::{Faction, Score2};
 
-/// Domain-separation label of the state hash (P5-REPLAY, ADR-0010).
+/// Domain-separation label of the state hash (P5-REPLAY,).
 pub const STATE_HASH_DOMAIN: &[u8] = b"ingress-arena-state-v0.1";
 
 /// Version of THIS canonical state encoding; replay headers carry it and
@@ -41,7 +41,7 @@ pub const STATE_ENCODING_VERSION: u32 = 1;
 /// 7. scores — enl u128, res u128 (16 LE bytes each);
 /// 8. `next_agent_id` — u32.
 ///
-/// Excluded (ADR-0010): `events` + `event_seq` (public log — replay
+/// Excluded: `events` + `event_seq` (public log — replay
 /// compares them as records instead), round trackers (`major_used` /
 /// `move_spent` are reset by `advance_round` before any next-round command
 /// reads them), the link-graph field/adjacency caches (pure functions of
@@ -480,7 +480,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Exclusions (ADR-0010): events, event_seq, round trackers, and the
+    // Exclusions: events, event_seq, round trackers, and the
     // derived caches never enter the hash.
     // ------------------------------------------------------------------
 

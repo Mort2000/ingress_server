@@ -214,7 +214,7 @@ fn balance_records_tsv_round_trips_exactly() {
     assert_eq!(parsed[0].policy_a_family, PolicyFamily::FieldBuilder);
     assert_eq!(parsed[0].policy_a_version, "m6.0");
     // The complete parameter sets ride in their own per-side columns
-    // (plan 10.1 bullet 6; ADR-0016 gate 7 reads them back).
+    // (plan 10.1 bullet 6;gate 7 reads them back).
     assert!(balance_columns().contains(&"policy_a_parameters".to_string()));
     assert!(balance_columns().contains(&"policy_b_parameters".to_string()));
     assert_eq!(parsed[0].policy_a_parameters, PolicyParameters::FrozenM6);
@@ -674,7 +674,7 @@ mod smoke_gates {
         assert_ne!(rows[0][32], rows[1][32], "config hashes differ");
 
         // maps.tsv: one row per base map (the smoke plan has no map-regime
-        // variant, so every row belongs to the base variant — ADR-0018
+        // variant, so every row belongs to the base variant —
         // added the trailing variant column); map files are
         // content-addressed and decode back to the identical MapDefinition.
         let maps_text = std::fs::read_to_string(dir.join("maps.tsv")).expect("read");

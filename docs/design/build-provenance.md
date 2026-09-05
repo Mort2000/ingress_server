@@ -8,7 +8,7 @@ integrity basis, and the operator runbook.
 
 ## 1. Dependency policy and the frozen closure
 
-Policy (ADR-0013 mirror adoption, amended M7): the sanctioned external
+Policy (mirror adoption, amended M7): the sanctioned external
 set is exactly **blake3 + planus**; everything else is std-only. The
 committed `Cargo.lock` pins precisely this closure — 15 external
 crates, no more:

@@ -1,5 +1,5 @@
 //! The B2 readiness layer (`docs/balance/ai-balance-plan.md` section 10.1,
-//! ADR-0016): the three frozen measurement-tool validation experiments
+//!): the three frozen measurement-tool validation experiments
 //! (round-robin of the six R2 policies including mirrors, idle
 //! benchmark, blocking probe with full replay capture) and the SEVEN
 //! gate evaluators as pure functions over `BalanceMatchRecord`s (plus
@@ -25,14 +25,14 @@ use crate::metrics::Outcome;
 use crate::policy::BucketPolicy;
 
 // ---------------------------------------------------------------------
-// The frozen readiness experiment plans (ADR-0016)
+// The frozen readiness experiment plans
 // ---------------------------------------------------------------------
 
 /// The frozen experiment ids (archive directory names). `-r1` is the
 /// first official attempt, superseded by the standby-deadlock fix; `-r2`
 /// was superseded because its `matches.tsv` predates the per-row policy
 /// parameter columns, leaving the parameters half of the frozen
-/// records-integrity gate (ADR-0016 gate 7) without archived per-match
+/// records-integrity gate (gate 7) without archived per-match
 /// evidence — both stay on disk as history, never overwritten; `-r3` is
 /// the current official run of the same frozen plans. The pilot runs
 /// append `-pilot-r0` and are exploratory only — never gate evidence.
@@ -554,7 +554,7 @@ fn sorted_spawns(
     out
 }
 
-/// Gate 7 — records integrity (plan 10.1, frozen as ADR-0016 gate 7):
+/// Gate 7 — records integrity (plan 10.1, frozen asgate 7):
 /// every match record's policy version AND parameters agree with the
 /// plan's policy registry (`policies.tsv` is generated from the same
 /// registry, one row per `PolicySpec` — family, version and the
@@ -628,7 +628,7 @@ pub fn records_gate(records: &[BalanceMatchRecord], plan: &ExperimentPlan) -> Ga
 }
 
 // ---------------------------------------------------------------------
-// The active-blocking geometric proxy (ADR-0016, frozen definition)
+// The active-blocking geometric proxy (, frozen definition)
 // ---------------------------------------------------------------------
 
 /// Counts `blocker`'s ACTIVE BLOCKS in one replay: own `LinkCreated`

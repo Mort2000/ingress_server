@@ -168,7 +168,7 @@ pub fn reexecute_archived_match(
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Same construction order as run::run_match: one bot per faction
         // from the shared bot_seed, ENL spawns chosen first. The frozen m6
-        // archive carries `BotKind` tags (ADR-0016: the tag->enum mapping
+        // archive carries `BotKind` tags (: the tag->enum mapping
         // lives here, at the m6 consumer).
         let enl_tag = if record.bot_a_is_enl {
             &record.bot_a
@@ -356,7 +356,7 @@ pub fn aggregate_drop_reasons(
             continue;
         };
         // Mirror slots of one BotKind pool into a single entry. The m6
-        // archive carries `BotKind` tags (ADR-0016 mapping at the consumer).
+        // archive carries `BotKind` tags (mapping at the consumer).
         let enl_kind = BotKind::from_tag(if record.bot_a_is_enl {
             &record.bot_a
         } else {
@@ -1298,7 +1298,7 @@ pub fn balance_drop_reasons_summary(pairs: &[BalanceDropSummary], source_rows: u
 /// policy tag is in `policy_filter`), and writes the tally artifacts into
 /// a NEW `runs/balance/<experiment-id>/` directory. The experiment id is
 /// `b3-drop-reasons-<name>` where `<name>` is the source run's directory
-/// name minus any `b3-ablation-` prefix (ADR-0017). Returns the process
+/// name minus any `b3-ablation-` prefix. Returns the process
 /// exit code.
 pub fn run_balance_drop_reasons(
     run_dir: &Path,
