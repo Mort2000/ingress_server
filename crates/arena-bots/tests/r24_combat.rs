@@ -103,7 +103,12 @@ fn the_last_round_still_allows_one_move_and_a_profitable_recharge() {
         policy.decision_trace()
     );
     assert_eq!(
-        commands[0].commands,
+        commands[0]
+            .commands
+            .iter()
+            .filter(|c| !matches!(c, Command::Hack { .. }))
+            .cloned()
+            .collect::<Vec<_>>(),
         vec![
             Command::Move {
                 destination: Coord::new(4_000, 4_000)
@@ -274,7 +279,7 @@ fn defender_moves_and_recharges_before_this_rounds_fatal_attack() {
         BuilderDefenderParams::default(),
     );
     let submissions = policy.submit_round(&obs);
-    assert!(submissions.iter().any(|s| matches!(s.commands.as_slice(), [Command::Move { .. }, Command::Recharge { portal }] if *portal == PortalId(0))),
+    assert!(submissions.iter().any(|s| matches!(s.commands.iter().filter(|c| !matches!(c, Command::Hack { .. })).cloned().collect::<Vec<_>>().as_slice(), [Command::Move { .. }, Command::Recharge { portal }] if *portal == PortalId(0))),
         "the defender can arrive and rescue the field this round: {submissions:?}");
     world.step(submissions, CombatWorld::attacks(1));
     assert_eq!(world.state.portal(PortalId(0)).unwrap().hp, 15);
@@ -332,7 +337,10 @@ fn a_rescue_recruits_another_ready_defender_when_a_builder_wins_one_member() {
         0x2404,
         R2Stream::BuilderDefender,
         world.state.config(),
-        CoreParams::default(),
+        CoreParams {
+            combat_auxiliaries: false,
+            ..CoreParams::default()
+        },
     );
     core.refresh(&obs);
     let mut requests = defense_overlay(&core, &obs, 2);

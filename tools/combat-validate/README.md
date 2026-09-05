@@ -21,9 +21,11 @@ python3 tools/combat-validate/analyze.py runs/balance/NEW-factorial runs/balance
 | `factorial` | Defender cap 0/1/2 × Disruptor share 0/1000 | 在固定另一方参数时，估计攻击/防守开关的分差效果 |
 | `adaptive-defense` | Adaptive cap 0/2，对默认 Disruptor | 检查反攻策略加入防守的增量价值 |
 | `adaptive` | Adaptive opening/lead 为 300/550、300/0、0/0 | 隔离阶段门槛；`legacy` 只表示门槛值，不代表运行了旧版代码 |
+| `compound` | Defender / Disruptor 各自 `core.combat_auxiliaries` 开/关 | 固定防守 cap=2、攻击开启，隔离双方组合动作的交互效应 |
 
 除明确列出的参数外，使用构建版本的完整默认参数；完整展开值写入 `result.json`。
 复现历史版本须使用相应源码或冻结二进制，不能用当前默认参数冒充历史输入。
+从 r2.5 起，`combataux=1` 为默认；旧参数串缺失该字段时解析为 0，不能替旧档案开启新行为。
 
 输出包括 `manifest.txt`、`matches.jsonl`，以及每场的 `result.json`、`replay.iarp`
 和 `trace.jsonl`。同名场不能跨批次混用。分析器核对实验臂覆盖、初始化 hash、
@@ -33,6 +35,12 @@ seed、规则/决策验证标记、分数与逐轮收入、场生命周期收入
 `decision.commands` 和 `drop.reason` 是供人工阅读的诊断字符串，不是稳定的解析协议；
 分析指标只读取结构化任务字段及实际结算效果。`field-destroyed-by.side` 是破坏者，
 不是被破坏场的所有者。场归属须从本次生命周期的创建记录读取。
+
+r2.5 增加 `companion`（同一 Agent 的兼容任务）、`hack`、`link`、`actions` 记录。
+组合指标只计算**同一执行流内双方动作均成功**的 Recharge+Hack/Link/Move、
+Attack+Hack/Link，不把候选共存当作执行成功。`link.source/target` 表示无向边的规范端点，
+不表示实际消费 Key 的命令方向。`grants` 仍计主任务 Agent-round；任务分类包含 companion，
+因此分类之和可以大于 grants。不得用该和当作人数或投入轮数。
 
 攻击收益以攻击方视角的分差变化表示；防守收益以防守方视角表示，均拆分己方及
 对手得分变化。换边腿按地图汇总，报告描述性分布，不把相关腿当成独立样本作显著性检验。

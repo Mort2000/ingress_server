@@ -468,7 +468,12 @@ fn defense_deadline_includes_integer_movement_at_the_operation_boundary() {
     next.own_agents.retain(|agent| agent.id == AgentId(1));
     let commands = policy.submit_round(&next);
     assert_eq!(
-        commands[0].commands,
+        commands[0]
+            .commands
+            .iter()
+            .filter(|c| !matches!(c, Command::Hack { .. }))
+            .cloned()
+            .collect::<Vec<_>>(),
         vec![
             Command::Move {
                 destination: Coord::new(4_000, 4_000)

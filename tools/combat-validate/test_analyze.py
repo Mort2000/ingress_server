@@ -4,7 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from analyze import Match, contrast
+from dataclasses import asdict
+
+from analyze import AuxiliaryAudit, Match, contrast
 
 
 def match(arm: str, own: int, enemy: int) -> Match:
@@ -48,6 +50,32 @@ class AnalysisTests(unittest.TestCase):
             path.write_text(json.dumps({'kind': 'recharge', 'side': 0, 'before': 100, 'after': 100}))
             with self.assertRaises(AssertionError):
                 match('zero-heal', 0, 0).audit(path)
+
+    def test_compound_counts_use_settled_flags_not_command_text(self) -> None:
+        audit = AuxiliaryAudit()
+        audit.read_event({'kind': 'decision', 'commands': '[Recharge, Hack, Link]'})
+        self.assertTrue(all(value == 0 for value in asdict(audit).values()))
+        audit.read_event({'kind': 'actions', 'attack': False, 'recharge': True,
+                          'hack': True, 'link': False, 'move': True})
+        audit.read_event({'kind': 'actions', 'attack': True, 'recharge': False,
+                          'hack': False, 'link': True, 'move': False})
+        self.assertEqual(audit.recharge_hack, 1)
+        self.assertEqual(audit.recharge_move, 1)
+        self.assertEqual(audit.recharge_link, 0)
+        self.assertEqual(audit.attack_link, 1)
+        self.assertEqual(audit.attack_hack, 0)
+
+    def test_compound_total_mismatch_is_rejected(self) -> None:
+        row = match('wrong-combo', 0, 0)
+        row.stats.update(asdict(AuxiliaryAudit()))
+        row.stats['recharge_link'] = 1
+        events = [{'kind': 'income', 'round': r, 'enl': 0, 'res': 0}
+                  for r in range(1, 501)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'trace.jsonl'
+            path.write_text('\n'.join(json.dumps(e) for e in events))
+            with self.assertRaises(AssertionError):
+                row.audit(path)
 
 
 if __name__ == '__main__':

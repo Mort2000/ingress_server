@@ -32,6 +32,35 @@ class FieldLife:
 
 
 @dataclass
+class AuxiliaryAudit:
+    companions: int = 0
+    hacks: int = 0
+    supply_gained: int = 0
+    links: int = 0
+    recharge_hack: int = 0
+    recharge_link: int = 0
+    recharge_move: int = 0
+    attack_hack: int = 0
+    attack_link: int = 0
+
+    def read_event(self, event: dict) -> None:
+        """JSON input boundary; metrics never parse the diagnostic command string."""
+        if event['kind'] == 'companion':
+            self.companions += 1
+        elif event['kind'] == 'hack':
+            self.hacks += 1
+            self.supply_gained += event['supply']
+        elif event['kind'] == 'link':
+            self.links += 1
+        elif event['kind'] == 'actions':
+            self.recharge_hack += event['recharge'] and event['hack']
+            self.recharge_link += event['recharge'] and event['link']
+            self.recharge_move += event['recharge'] and event['move']
+            self.attack_hack += event['attack'] and event['hack']
+            self.attack_link += event['attack'] and event['link']
+
+
+@dataclass
 class Match:
     name: str
     arm: str
@@ -66,11 +95,14 @@ class Match:
         heal_count = [0, 0]
         damage = [0, 0]
         dropped = [0, 0]
+        auxiliary = [AuxiliaryAudit(), AuxiliaryAudit()]
         income_rounds: list[int] = []
         lifecycle_area_available = True
         for line in path.read_text().splitlines():
             event = json.loads(line)
             kind = event['kind']
+            if 'side' in event:
+                auxiliary[event['side']].read_event(event)
             if kind == 'field-created':
                 field = FieldId(*event['field'])
                 assert field not in live, (path, event)
@@ -112,6 +144,9 @@ class Match:
             assert heal_count[side] == stats['recharges'], path
             assert damage[side] == stats['damage'], path
             assert dropped[side] == stats['drops'], path
+            if 'companions' in stats:
+                for name, value in asdict(auxiliary[side]).items():
+                    assert value == stats[name], (path, name, value, stats[name])
 
 
 @dataclass
@@ -163,6 +198,7 @@ def analyze(directory: Path) -> dict:
         'factorial': {f'def{d}-atk{a}' for d in range(3) for a in range(2)},
         'adaptive-defense': {'adaptive-def0', 'adaptive-def2'},
         'adaptive': {'legacy', 'mid-open', 'all-open'},
+        'compound': {f'daux{d}-aaux{a}' for d in range(2) for a in range(2)},
     }[group]
     assert {r.arm for r in rows} == expected_arms
     expected_cases = {(m, leg) for m in range(int(manifest['maps'])) for leg in range(2)}
@@ -188,7 +224,10 @@ def analyze(directory: Path) -> dict:
             'subject_stats': {k: sum(r.stats[k] for r in selected) for k in selected[0].stats},
             'opponent_stats': {k: sum(r.opponent_stats[k] for r in selected) for k in selected[0].opponent_stats},
         }
-    if group == 'factorial':
+    if group == 'compound':
+        contrasts = [contrast(rows, f'daux0-aaux{a}', f'daux1-aaux{a}', 'subject') for a in range(2)]
+        contrasts += [contrast(rows, f'daux{d}-aaux0', f'daux{d}-aaux1', 'opponent') for d in range(2)]
+    elif group == 'factorial':
         contrasts = [contrast(rows, f'def{d}-atk0', f'def{d}-atk1', 'opponent') for d in range(3)]
         contrasts += [contrast(rows, f'def0-atk{a}', f'def{d}-atk{a}', 'subject')
                       for a in range(2) for d in [1, 2]]

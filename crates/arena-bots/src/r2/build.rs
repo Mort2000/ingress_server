@@ -89,6 +89,10 @@ pub struct CoreParams {
     /// second plan (the r2.0 behavior, also how pre-r2.1 parameter records
     /// parse back).
     pub second_plan_discount_permille: u32,
+    /// Combine compatible combat and construction tasks, plus bounded
+    /// opportunistic Hack. False keeps single-task command generation;
+    /// historical replay still requires the recorded policy version.
+    pub combat_auxiliaries: bool,
     /// The shared value model's thresholds (inlined into the record).
     pub value: ValueParams,
 }
@@ -101,16 +105,17 @@ impl Default for CoreParams {
             fallback_priority: 1,
             spawn_jitter_cm: 1_000,
             second_plan_discount_permille: 750,
+            combat_auxiliaries: true,
             value: ValueParams::default(),
         }
     }
 }
 
-const CORE_PARAM_KEYS: [&str; 5] = ["nearequal", "retry", "fbpri", "jit", "sec2p"];
+const CORE_PARAM_KEYS: [&str; 6] = ["nearequal", "retry", "fbpri", "jit", "sec2p", "combataux"];
 
 impl CoreParams {
     /// Canonical serialization:
-    /// `nearequal=..;retry=..;fbpri=..;jit=..;sec2p=..|value=<ValueParams::tag>`.
+    /// `nearequal=..;retry=..;fbpri=..;jit=..;sec2p=..;combataux=..|value=<ValueParams::tag>`.
     pub fn tag(&self) -> String {
         let values = [
             self.near_equal_permille.to_string(),
@@ -118,6 +123,7 @@ impl CoreParams {
             self.fallback_priority.to_string(),
             self.spawn_jitter_cm.to_string(),
             self.second_plan_discount_permille.to_string(),
+            u8::from(self.combat_auxiliaries).to_string(),
         ];
         let mut tag = String::new();
         for (key, value) in CORE_PARAM_KEYS.iter().zip(values) {
@@ -133,20 +139,19 @@ impl CoreParams {
         tag
     }
 
-    /// Parses [`CoreParams::tag`] back — strictly canonical for r2.1
-    /// records (exactly the five keys). A pre-r2.1 record (the four keys
-    /// without `sec2p`) parses with `second_plan_discount_permille = 0`:
-    /// that IS the r2.0 behavior the record was produced with, so archived
-    /// experiments keep re-executing byte-identically instead of failing
-    /// to parse.
+    /// Parses [`CoreParams::tag`] back. The sixth key enables r2.5 action
+    /// composition; older records keep it disabled. A pre-r2.1 record (four keys
+    /// without `sec2p`) parses with `second_plan_discount_permille = 0`.
+    /// Parsing does not silently enable either new feature; reproducing
+    /// a historical experiment also requires its frozen policy version.
     pub fn from_tag(tag: &str) -> Option<CoreParams> {
         let (own, value) = tag.split_once('|')?;
         let value = value.strip_prefix("value=")?;
         let parts: Vec<&str> = own.split(';').collect();
-        if parts.len() != CORE_PARAM_KEYS.len() && parts.len() != CORE_PARAM_KEYS.len() - 1 {
+        if !(4..=CORE_PARAM_KEYS.len()).contains(&parts.len()) {
             return None;
         }
-        let mut values = [0i64; 5];
+        let mut values = [0i64; 6];
         // A legacy record's missing key defaults to 0 (disabled) — the
         // value the r2.0 core effectively ran with.
         values[4] = 0;
@@ -157,12 +162,16 @@ impl CoreParams {
             }
             values[index] = raw.parse().ok()?;
         }
+        if !(0..=1).contains(&values[5]) {
+            return None;
+        }
         Some(CoreParams {
             near_equal_permille: u32::try_from(values[0].max(0) as u64).ok()?,
             replan_retry_rounds: u32::try_from(values[1].max(0) as u64).ok()?,
             fallback_priority: values[2],
             spawn_jitter_cm: i32::try_from(values[3].clamp(0, 100_000)).ok()?,
             second_plan_discount_permille: u32::try_from(values[4].max(0) as u64).ok()?,
+            combat_auxiliaries: values[5] == 1,
             value: ValueParams::from_tag(value)?,
         })
     }
@@ -186,6 +195,8 @@ pub struct AgentDecision {
     /// Requests held back because the action is not available this round.
     pub unavailable_count: usize,
     pub grant: Option<Task>,
+    /// A compatible second task sharing this stream, not another Major Action.
+    pub companion: Option<Task>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -781,174 +792,215 @@ impl BuilderCore {
     /// observation-level pre-submit legality checks of plan 6.3 (execution
     /// races still record as normal Drops): approach stations with one
     /// Move, act when in range and the observation still supports the
-    /// action. Agents with no grant idle (an explicit PASS stream).
+    /// action. This preview is pure; Hack is booked only on emission.
+    pub(super) fn commands_for(
+        &self,
+        obs: &Observation,
+        me: &arena_core::observe::AgentPrivate,
+        task: Task,
+    ) -> CommandList {
+        let round = obs.round;
+        let cfg = &self.cfg;
+        let own = self.own;
+        let mut commands = CommandList::new();
+        match task {
+            Task::Capture { portal } => {
+                let target = common::portal(obs, portal);
+                if target.owner == arena_core::types::Owner::Neutral
+                    && in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                {
+                    commands.major(arena_core::types::Command::Capture { portal });
+                } else if target.owner != own {
+                    commands.mv(arena_core::types::Command::Move {
+                        destination: step_toward(me.position, target.position, cfg.move_budget_cm),
+                    });
+                } else {
+                    // Captured by a teammate in the same round's
+                    // race or an earlier round: farm a key instead.
+                    if me.keys.get(&portal).copied().unwrap_or(0) == 0
+                        && in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                        && self.ledger.available(round, cfg, me.id, portal)
+                    {
+                        commands.aux(arena_core::types::Command::Hack { portal });
+                    }
+                }
+            }
+            Task::KeyFarm { portal } => {
+                let target = common::portal(obs, portal);
+                if in_range(me.position, target.position, cfg.portal_operation_range_cm) {
+                    if self.ledger.available(round, cfg, me.id, portal) {
+                        commands.aux(arena_core::types::Command::Hack { portal });
+                    }
+                } else {
+                    commands.mv(arena_core::types::Command::Move {
+                        destination: step_toward(me.position, target.position, cfg.move_budget_cm),
+                    });
+                }
+            }
+            Task::Link { source, target } => {
+                let stand = common::portal(obs, source);
+                if let Some(position) =
+                    common::link_position_this_round(obs, own, cfg, me, source, target)
+                {
+                    if position != me.position {
+                        commands.aux(arena_core::types::Command::Move {
+                            destination: position,
+                        });
+                    }
+                    commands.aux(arena_core::types::Command::Link {
+                        source_portal: source,
+                        target_portal: target,
+                    });
+                } else if common::portal(obs, source).owner == own
+                    || common::portal(obs, source).owner == arena_core::types::Owner::Neutral
+                {
+                    commands.mv(arena_core::types::Command::Move {
+                        destination: step_toward(me.position, stand.position, cfg.move_budget_cm),
+                    });
+                }
+            }
+            Task::Attack { portal } => {
+                let target = common::portal(obs, portal);
+                let enemy = owners(self.faction).1;
+                if target.owner == enemy
+                    && in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                {
+                    commands.major(arena_core::types::Command::Attack);
+                } else if target.owner == enemy {
+                    let destination = step_toward(me.position, target.position, cfg.move_budget_cm);
+                    // Aux Move precedes the Major Action in the same stream.
+                    if in_range(destination, target.position, cfg.portal_operation_range_cm) {
+                        commands.aux(arena_core::types::Command::Move { destination });
+                        commands.major(arena_core::types::Command::Attack);
+                    } else {
+                        commands.mv(arena_core::types::Command::Move { destination });
+                    }
+                }
+            }
+            Task::Recharge { portal } => {
+                let target = common::portal(obs, portal);
+                // The overlay releases full-HP anchors. A stale grant
+                // also emits nothing; remote target Keys satisfy the
+                // position condition without being consumed.
+                let damaged = target.hp < cfg.portal_max_hp;
+                if target.owner == own
+                    && damaged
+                    && (in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                        || me.keys.get(&portal).copied().unwrap_or(0) > 0)
+                    && me.supply >= cfg.recharge_cost_supply
+                {
+                    commands.major(arena_core::types::Command::Recharge { portal });
+                } else if target.owner == own && damaged && me.supply >= cfg.recharge_cost_supply {
+                    let destination = step_toward(me.position, target.position, cfg.move_budget_cm);
+                    if in_range(destination, target.position, cfg.portal_operation_range_cm) {
+                        commands.aux(arena_core::types::Command::Move { destination });
+                        commands.major(arena_core::types::Command::Recharge { portal });
+                    } else {
+                        commands.mv(arena_core::types::Command::Move { destination });
+                    }
+                }
+            }
+            // Hold station at the portal: approach, then wait for the
+            // key delivery (the logistics overlay's rendezvous).
+            Task::Standby { portal } => {
+                let target = common::portal(obs, portal);
+                if !in_range(me.position, target.position, cfg.portal_operation_range_cm) {
+                    commands.mv(arena_core::types::Command::Move {
+                        destination: step_toward(me.position, target.position, cfg.move_budget_cm),
+                    });
+                }
+            }
+            // Transfer rendezvous: approach the receiver; the owning
+            // policy's payment step emits the payload once the
+            // receiver is inside TRANSFER_RANGE.
+            Task::Transfer { receiver, .. } => {
+                let Some(target) = obs.own_agents.iter().find(|me| me.id == receiver) else {
+                    return commands;
+                };
+                if !in_range(me.position, target.position, cfg.transfer_range_cm) {
+                    commands.mv(arena_core::types::Command::Move {
+                        destination: step_toward(me.position, target.position, cfg.move_budget_cm),
+                    });
+                }
+            }
+        }
+        commands
+    }
+
     pub fn execute(
         &mut self,
         obs: &Observation,
         grants: &BTreeMap<AgentId, Task>,
     ) -> BTreeMap<AgentId, CommandList> {
-        let round = obs.round;
-        let cfg = &self.cfg;
-        let own = self.own;
         let mut out = BTreeMap::new();
-        for me in obs.own_agents.iter() {
-            let Some(task) = grants.get(&me.id) else {
+        for me in &obs.own_agents {
+            let Some(&task) = grants.get(&me.id) else {
                 continue;
             };
-            let mut commands = CommandList::new();
-            match *task {
-                Task::Capture { portal } => {
-                    let target = common::portal(obs, portal);
-                    if target.owner == arena_core::types::Owner::Neutral
-                        && in_range(me.position, target.position, cfg.portal_operation_range_cm)
-                    {
-                        commands.major(arena_core::types::Command::Capture { portal });
-                    } else if target.owner != own {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
-                    } else {
-                        // Captured by a teammate in the same round's
-                        // race or an earlier round: farm a key instead.
-                        if me.keys.get(&portal).copied().unwrap_or(0) == 0
-                            && in_range(me.position, target.position, cfg.portal_operation_range_cm)
-                            && self.ledger.eligible(round, cfg, me.id, portal)
-                        {
-                            self.ledger.record(round, cfg, me.id, portal);
-                            commands.aux(arena_core::types::Command::Hack { portal });
-                        }
-                    }
-                }
-                Task::KeyFarm { portal } => {
-                    let target = common::portal(obs, portal);
-                    if in_range(me.position, target.position, cfg.portal_operation_range_cm) {
-                        if self.ledger.eligible(round, cfg, me.id, portal) {
-                            self.ledger.record(round, cfg, me.id, portal);
-                            commands.aux(arena_core::types::Command::Hack { portal });
-                        }
-                    } else {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
-                    }
-                }
-                Task::Link { source, target } => {
-                    let stand = common::portal(obs, source);
-                    if let Some(position) =
-                        common::link_position_this_round(obs, own, cfg, me, source, target)
-                    {
-                        if position != me.position {
-                            commands.aux(arena_core::types::Command::Move {
-                                destination: position,
-                            });
-                        }
-                        commands.aux(arena_core::types::Command::Link {
-                            source_portal: source,
-                            target_portal: target,
-                        });
-                    } else if common::portal(obs, source).owner == own
-                        || common::portal(obs, source).owner == arena_core::types::Owner::Neutral
-                    {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                stand.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
-                    }
-                }
-                Task::Attack { portal } => {
-                    let target = common::portal(obs, portal);
-                    let enemy = owners(self.faction).1;
-                    if target.owner == enemy
-                        && in_range(me.position, target.position, cfg.portal_operation_range_cm)
-                    {
-                        commands.major(arena_core::types::Command::Attack);
-                    } else if target.owner == enemy {
-                        let destination =
-                            step_toward(me.position, target.position, cfg.move_budget_cm);
-                        // Aux Move precedes the Major Action in the same stream.
-                        if in_range(destination, target.position, cfg.portal_operation_range_cm) {
-                            commands.aux(arena_core::types::Command::Move { destination });
-                            commands.major(arena_core::types::Command::Attack);
-                        } else {
-                            commands.mv(arena_core::types::Command::Move { destination });
-                        }
-                    }
-                }
-                Task::Recharge { portal } => {
-                    let target = common::portal(obs, portal);
-                    // The overlay releases full-HP anchors. A stale grant
-                    // also emits nothing; remote target Keys satisfy the
-                    // position condition without being consumed.
-                    let damaged = target.hp < cfg.portal_max_hp;
-                    if target.owner == own
-                        && damaged
-                        && (in_range(me.position, target.position, cfg.portal_operation_range_cm)
-                            || me.keys.get(&portal).copied().unwrap_or(0) > 0)
-                        && me.supply >= cfg.recharge_cost_supply
-                    {
-                        commands.major(arena_core::types::Command::Recharge { portal });
-                    } else if target.owner == own
-                        && damaged
-                        && me.supply >= cfg.recharge_cost_supply
-                    {
-                        let destination =
-                            step_toward(me.position, target.position, cfg.move_budget_cm);
-                        if in_range(destination, target.position, cfg.portal_operation_range_cm) {
-                            commands.aux(arena_core::types::Command::Move { destination });
-                            commands.major(arena_core::types::Command::Recharge { portal });
-                        } else {
-                            commands.mv(arena_core::types::Command::Move { destination });
-                        }
-                    }
-                }
-                // Hold station at the portal: approach, then wait for the
-                // key delivery (the logistics overlay's rendezvous).
-                Task::Standby { portal } => {
-                    let target = common::portal(obs, portal);
-                    if !in_range(me.position, target.position, cfg.portal_operation_range_cm) {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
-                    }
-                }
-                // Transfer rendezvous: approach the receiver; the owning
-                // policy's payment step emits the payload once the
-                // receiver is inside TRANSFER_RANGE.
-                Task::Transfer { receiver, .. } => {
-                    let Some(target) = obs.own_agents.iter().find(|me| me.id == receiver) else {
-                        continue;
-                    };
-                    if !in_range(me.position, target.position, cfg.transfer_range_cm) {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
-                    }
-                }
-            }
+            let commands = self.commands_for(obs, me, task);
+            self.record_hacks(obs.round, me.id, &commands.clone().build());
             if !commands.is_empty() {
                 out.insert(me.id, commands);
             }
         }
         out
+    }
+
+    fn record_hacks(
+        &mut self,
+        round: u32,
+        agent: AgentId,
+        commands: &[arena_core::types::Command],
+    ) {
+        for command in commands {
+            if let arena_core::types::Command::Hack { portal } = command {
+                self.ledger.record(round, &self.cfg, agent, *portal);
+            }
+        }
+    }
+
+    pub(super) fn hack_available(&self, round: u32, agent: AgentId, portal: PortalId) -> bool {
+        self.ledger.available(round, &self.cfg, agent, portal)
+    }
+
+    fn companion_grants(
+        &self,
+        obs: &Observation,
+        board: &mut TaskBoard,
+        primary: &BTreeMap<AgentId, Task>,
+        ready: &BTreeMap<AgentId, Vec<TaskRequest>>,
+    ) -> BTreeMap<AgentId, Task> {
+        if !self.params.combat_auxiliaries {
+            return BTreeMap::new();
+        }
+        let requests = obs
+            .own_agents
+            .iter()
+            .map(|me| {
+                let candidates = ready
+                    .get(&me.id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|request| {
+                        primary.get(&me.id).is_some_and(|&task| {
+                            crate::r2::compound::pair(self, obs, me, task, request.task).is_some()
+                        })
+                    })
+                    .copied()
+                    .collect();
+                (me.id, candidates)
+            })
+            .collect();
+        let agents: Vec<_> = primary.keys().copied().collect();
+        allocate_compatible(board, &agents, &requests, |agent, task, companions| {
+            let mut geometry = primary.clone();
+            for (&id, &companion) in companions {
+                if matches!(companion, Task::Link { .. }) {
+                    geometry.insert(id, companion);
+                }
+            }
+            self.compatible_link_grant(obs, agent, task, &geometry)
+        })
     }
 
     /// Links emitted this round share a geometric reservation as well as
@@ -1050,12 +1102,20 @@ impl BuilderCore {
             self.compatible_link_grant(obs, agent, task, granted)
         };
         let mut grants = allocate_compatible(&mut board, &agents, &ready, compatible);
+        let mut companions;
         // Construction or another combat task may win a required teammate.
         // Recheck actual cohorts until removing a failed plan no longer
         // changes the others. Each iteration removes at least one request.
         loop {
+            companions = self.companion_grants(obs, &mut board, &grants, &ready);
+            let combat_grants: BTreeMap<_, _> = grants
+                .iter()
+                .chain(companions.iter())
+                .filter(|(_, task)| crate::r2::compound::is_combat(**task))
+                .map(|(&agent, &task)| (agent, task))
+                .collect();
             let mut rejected = std::collections::BTreeSet::new();
-            let targets: std::collections::BTreeSet<_> = grants
+            let targets: std::collections::BTreeSet<_> = combat_grants
                 .values()
                 .filter_map(|task| {
                     if let Task::Attack { portal } = task {
@@ -1071,7 +1131,7 @@ impl BuilderCore {
                 let team: Vec<_> = obs
                     .own_agents
                     .iter()
-                    .filter(|agent| grants.get(&agent.id) == Some(&Task::Attack { portal }))
+                    .filter(|agent| combat_grants.get(&agent.id) == Some(&Task::Attack { portal }))
                     .filter_map(|agent| {
                         crate::r2::value::AttackArrival::for_agent(
                             agent,
@@ -1099,7 +1159,7 @@ impl BuilderCore {
                     rejected.insert(Task::Attack { portal });
                 }
             }
-            let rescue_targets: std::collections::BTreeSet<_> = grants
+            let rescue_targets: std::collections::BTreeSet<_> = combat_grants
                 .values()
                 .filter_map(|task| match task {
                     Task::Recharge { portal } => Some(*portal),
@@ -1116,7 +1176,7 @@ impl BuilderCore {
                     &economy,
                 );
                 for portal in rescue_targets {
-                    let team: Vec<_> = grants
+                    let team: Vec<_> = combat_grants
                         .iter()
                         .filter_map(|(&agent, task)| {
                             (*task == Task::Recharge { portal }).then_some(agent)
@@ -1190,6 +1250,7 @@ impl BuilderCore {
                     candidate_count: ready.get(&agent).map_or(0, Vec::len),
                     unavailable_count: unavailable[&agent],
                     grant: grants.get(&agent).copied(),
+                    companion: companions.get(&agent).copied(),
                 })
                 .collect(),
         }
@@ -1207,8 +1268,45 @@ impl BuilderCore {
             .iter()
             .filter_map(|agent| agent.grant.map(|task| (agent.agent, task)))
             .collect();
+        if !self.params.combat_auxiliaries {
+            self.last_decision = Some(decision);
+            return self.execute(obs, &grants);
+        }
+        let mut out = BTreeMap::new();
+        for agent in &decision.agents {
+            let Some(task) = agent.grant else {
+                continue;
+            };
+            let me = obs
+                .own_agents
+                .iter()
+                .find(|me| me.id == agent.agent)
+                .unwrap();
+            if crate::r2::compound::is_combat(task)
+                || agent.companion.is_some_and(crate::r2::compound::is_combat)
+            {
+                let mut commands = agent.companion.map_or_else(
+                    || self.commands_for(obs, me, task).build(),
+                    |companion| {
+                        crate::r2::compound::pair(self, obs, me, task, companion)
+                            .expect("the allocation preview validated this exact pair")
+                    },
+                );
+                crate::r2::compound::add_hack(self, obs, me, &mut commands);
+                self.record_hacks(obs.round, agent.agent, &commands);
+                if !commands.is_empty() {
+                    out.insert(agent.agent, CommandList::from_ordered(commands));
+                }
+            } else {
+                let commands = self.commands_for(obs, me, task);
+                self.record_hacks(obs.round, agent.agent, &commands.clone().build());
+                if !commands.is_empty() {
+                    out.insert(agent.agent, commands);
+                }
+            }
+        }
         self.last_decision = Some(decision);
-        self.execute(obs, &grants)
+        out
     }
 
     pub fn decision_trace(&self) -> Option<&DecisionTrace> {

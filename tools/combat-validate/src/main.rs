@@ -54,6 +54,25 @@ struct Arm {
 fn arms(group: &str) -> Result<Vec<Arm>> {
     let mut result = Vec::new();
     match group {
+        "compound" => {
+            for defense_aux in [false, true] {
+                for attack_aux in [false, true] {
+                    let mut subject = PolicyId::BuilderDefenderR2.r2_spec();
+                    let mut opponent = PolicyId::BuilderDisruptorR2.r2_spec();
+                    if let PolicyParameters::BuilderDefender(p) = &mut subject.parameters {
+                        p.core.combat_auxiliaries = defense_aux;
+                    }
+                    if let PolicyParameters::BuilderDisruptor(p) = &mut opponent.parameters {
+                        p.core.combat_auxiliaries = attack_aux;
+                    }
+                    result.push(Arm {
+                        tag: format!("daux{}-aaux{}", u8::from(defense_aux), u8::from(attack_aux)),
+                        subject,
+                        opponent,
+                    });
+                }
+            }
+        }
         "adaptive" => {
             for (tag, opening, lead) in [
                 ("legacy", 300, 550),
@@ -104,7 +123,7 @@ fn arms(group: &str) -> Result<Vec<Arm>> {
                 });
             }
         }
-        _ => return Err("group must be adaptive, factorial, or adaptive-defense".into()),
+        _ => return Err("group must be adaptive, factorial, adaptive-defense, or compound".into()),
     }
     for arm in &result {
         arm.subject.validate()?;
@@ -227,11 +246,20 @@ struct Stats {
     movement: u64,
     stationary: u64,
     build_tasks: u64,
+    companions: u64,
+    hacks: u64,
+    supply_gained: u64,
+    links: u64,
+    recharge_hack: u64,
+    recharge_link: u64,
+    recharge_move: u64,
+    attack_hack: u64,
+    attack_link: u64,
 }
 
 impl Stats {
     fn json(&self) -> String {
-        format!(
+        let base = format!(
             "{{\"agent_rounds\":{},\"grants\":{},\"empty_grants\":{},\"submitted\":{},\"attack_tasks\":{},\"defense_tasks\":{},\"attacks\":{},\"damage\":{},\"neutralized\":{},\"recharges\":{},\"hp\":{},\"supply\":{},\"fields\":{},\"drops\":{},\"no_ops\":{},\"movement\":{},\"stationary\":{},\"build_tasks\":{}}}",
             self.agent_rounds,
             self.grants,
@@ -251,6 +279,19 @@ impl Stats {
             self.movement,
             self.stationary,
             self.build_tasks
+        );
+        format!(
+            "{},\"companions\":{},\"hacks\":{},\"supply_gained\":{},\"links\":{},\"recharge_hack\":{},\"recharge_link\":{},\"recharge_move\":{},\"attack_hack\":{},\"attack_link\":{}}}",
+            base.trim_end_matches('}'),
+            self.companions,
+            self.hacks,
+            self.supply_gained,
+            self.links,
+            self.recharge_hack,
+            self.recharge_link,
+            self.recharge_move,
+            self.attack_hack,
+            self.attack_link
         )
     }
 }
@@ -358,11 +399,24 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                         me.supply,
                         decision.active.is_some()
                     )?;
-                    match agent.grant {
-                        Some(Task::Attack { .. }) => s.attack_tasks += 1,
-                        Some(Task::Recharge { .. }) => s.defense_tasks += 1,
-                        Some(_) => s.build_tasks += 1,
-                        None => {}
+                    if let Some(task) = agent.companion {
+                        s.companions += 1;
+                        let target = task
+                            .target_portal()
+                            .map_or("null".into(), |p| p.0.to_string());
+                        writeln!(
+                            trace,
+                            "{{\"kind\":\"companion\",\"round\":{round},\"side\":{i},\"agent\":{},\"task\":\"{}\",\"portal\":{target}}}",
+                            agent.agent.0,
+                            task.kind_tag()
+                        )?;
+                    }
+                    for task in [agent.grant, agent.companion].into_iter().flatten() {
+                        match task {
+                            Task::Attack { .. } => s.attack_tasks += 1,
+                            Task::Recharge { .. } => s.defense_tasks += 1,
+                            _ => s.build_tasks += 1,
+                        }
                     }
                 }
             }
@@ -394,6 +448,8 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
             let i = side(state.agent(executed.agent_id).unwrap().faction);
             let s = &mut stats[i];
             let mut changed = false;
+            let (mut attacked, mut recharged, mut hacked, mut linked, mut moved) =
+                (false, false, false, false, false);
             for outcome in &executed.outcomes {
                 match outcome {
                     CommandOutcome::Drop(reason) => {
@@ -408,6 +464,7 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                     }
                     CommandOutcome::Ok(effect) => match effect {
                         CommandEffect::Attacked { hits } => {
+                            attacked |= !hits.is_empty();
                             s.attacks += u64::from(!hits.is_empty());
                             changed |= !hits.is_empty();
                             for hit in hits {
@@ -428,6 +485,7 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                         } => {
                             portal_hp.insert(*portal, *hp_after);
                             let hp = hp_after - hp_before;
+                            recharged |= hp > 0;
                             s.recharges += 1;
                             s.hp += hp as u64;
                             s.supply += h.config.recharge_cost_supply as u64;
@@ -439,13 +497,40 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                             )?;
                         }
                         CommandEffect::Moved { from, to, .. } => {
+                            moved |= from != to;
                             s.movement += 1;
                             s.stationary += u64::from(from == to);
                             changed |= from != to;
                         }
-                        CommandEffect::Linked { fields, .. } => {
+                        CommandEffect::Hacked {
+                            portal,
+                            keys_gained,
+                            supply_granted,
+                            supply_after,
+                        } => {
+                            hacked = true;
+                            s.hacks += 1;
+                            s.supply_gained += *supply_granted as u64;
+                            changed |= *keys_gained > 0 || *supply_granted > 0;
+                            writeln!(
+                                trace,
+                                "{{\"kind\":\"hack\",\"round\":{round},\"side\":{i},\"agent\":{},\"portal\":{},\"keys\":{keys_gained},\"supply\":{supply_granted},\"supply_after\":{supply_after}}}",
+                                executed.agent_id.0, portal.0
+                            )?;
+                        }
+                        CommandEffect::Linked { link, fields } => {
+                            linked = true;
+                            s.links += 1;
                             s.fields += fields.len() as u64;
                             changed = true;
+                            writeln!(
+                                trace,
+                                "{{\"kind\":\"link\",\"round\":{round},\"side\":{i},\"agent\":{},\"source\":{},\"target\":{},\"fields\":{}}}",
+                                executed.agent_id.0,
+                                link.min.0,
+                                link.max.0,
+                                fields.len()
+                            )?;
                         }
                         CommandEffect::Captured { portal } => {
                             portal_hp.insert(*portal, h.config.portal_max_hp);
@@ -455,6 +540,16 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                     },
                 }
             }
+            s.recharge_hack += u64::from(recharged && hacked);
+            s.recharge_link += u64::from(recharged && linked);
+            s.recharge_move += u64::from(recharged && moved);
+            s.attack_hack += u64::from(attacked && hacked);
+            s.attack_link += u64::from(attacked && linked);
+            writeln!(
+                trace,
+                "{{\"kind\":\"actions\",\"round\":{round},\"side\":{i},\"agent\":{},\"attack\":{attacked},\"recharge\":{recharged},\"hack\":{hacked},\"link\":{linked},\"move\":{moved}}}",
+                executed.agent_id.0
+            )?;
             s.no_ops += u64::from(!changed);
         }
         for event in &state.events()[events_before..] {

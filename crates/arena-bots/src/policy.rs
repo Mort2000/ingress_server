@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(r2.len(), 7);
         for spec in &r2 {
             assert_eq!(spec.version, crate::r2::R2_VERSION);
-            assert_eq!(spec.version, "r2.4");
+            assert_eq!(spec.version, "r2.5");
             assert_eq!(spec.validate(), Ok(()));
             assert!(
                 spec.policy_id == PolicyId::Idle || !spec.family.is_diagnostic(),

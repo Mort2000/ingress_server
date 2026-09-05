@@ -214,16 +214,36 @@ impl HackLedger {
 /// agent's position, so each was validated against the round-start
 /// position). The structural caps (`<= 10` commands, `<= 1` major, D27)
 /// hold by construction: bots emit at most a handful of commands.
-#[derive(Default, Debug)]
+/// R2 compound plans use `from_ordered` to retain explicitly validated
+/// auxiliary commands after the Major Action; the M6 builder order is unchanged.
+#[derive(Clone, Default, Debug)]
 pub struct CommandList {
     aux: Vec<Command>,
     major: Option<Command>,
+    after_major: Vec<Command>,
     mv: Option<Command>,
 }
 
 impl CommandList {
     pub fn new() -> Self {
         CommandList::default()
+    }
+
+    /// Preserve an explicitly planned order, including auxiliary work after
+    /// a Major Action (e.g. Recharge before spending its last remote Key).
+    pub fn from_ordered(commands: Vec<Command>) -> Self {
+        let mut result = Self::new();
+        for command in commands {
+            if command.is_major() {
+                assert!(result.major.is_none(), "one major action per stream");
+                result.major = Some(command);
+            } else if result.major.is_some() {
+                result.after_major.push(command);
+            } else {
+                result.aux.push(command);
+            }
+        }
+        result
     }
 
     /// Appends an auxiliary (HACK-class) command; they run first, in
@@ -243,7 +263,10 @@ impl CommandList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.aux.is_empty() && self.major.is_none() && self.mv.is_none()
+        self.aux.is_empty()
+            && self.major.is_none()
+            && self.after_major.is_empty()
+            && self.mv.is_none()
     }
 
     /// The destination of the list's Move command, if any (read-only
@@ -267,6 +290,7 @@ impl CommandList {
         if let Some(command) = self.major {
             commands.push(command);
         }
+        commands.extend(self.after_major);
         if let Some(command) = self.mv {
             commands.push(command);
         }
@@ -280,6 +304,7 @@ impl CommandList {
     /// current bots never actually collide).
     pub fn merge(&mut self, other: CommandList) {
         self.aux.extend(other.aux);
+        self.after_major.extend(other.after_major);
         if self.major.is_none() {
             self.major = other.major;
         }

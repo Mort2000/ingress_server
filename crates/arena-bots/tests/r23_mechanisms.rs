@@ -981,7 +981,10 @@ fn allocation_releases_a_strike_when_its_required_teammate_builds_instead() {
         0x2317,
         R2Stream::BuilderDisruptor,
         &cfg,
-        Default::default(),
+        CoreParams {
+            combat_auxiliaries: false,
+            ..Default::default()
+        },
     );
     let requests = [
         (

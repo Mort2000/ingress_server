@@ -231,14 +231,18 @@ impl AdaptiveHybridR2 {
         decision: &crate::r2::build::DecisionTrace,
     ) -> RoleMix {
         use crate::r2::tasks::Task;
-        let defend = decision
-            .agents
-            .iter()
-            .any(|a| matches!(a.grant, Some(Task::Recharge { .. })));
-        let attack = decision
-            .agents
-            .iter()
-            .any(|a| matches!(a.grant, Some(Task::Attack { .. })));
+        let defend = decision.agents.iter().any(|a| {
+            [a.grant, a.companion]
+                .into_iter()
+                .flatten()
+                .any(|t| matches!(t, Task::Recharge { .. }))
+        });
+        let attack = decision.agents.iter().any(|a| {
+            [a.grant, a.companion]
+                .into_iter()
+                .flatten()
+                .any(|t| matches!(t, Task::Attack { .. }))
+        });
         match (self.phase(obs), defend, attack) {
             (RoleMix::Opening, true, _) => RoleMix::OpeningDefend,
             (RoleMix::Opening, false, _) => RoleMix::Opening,

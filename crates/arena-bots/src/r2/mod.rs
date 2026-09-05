@@ -29,18 +29,18 @@
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
 /// policies are registered in `crate::policy` with exactly this version).
 ///
-/// r2.4 (2026-09-05 combat review): default adaptive attacks compete from
-/// the opening and while behind; same-round Move + Recharge and explicitly
-/// coordinated rescues share a bounded defender budget. Actual combat
-/// cohorts are revalidated after allocation. Frozen M6 policies, rule
-/// defaults, and earlier experiment records retain their original versions.
-pub const R2_VERSION: &str = "r2.4";
+/// r2.5 (2026-09-05 compound combat): compatible construction and combat
+/// share a command stream, with ordered Key use and bounded auxiliary Hack.
+/// Actual cohorts and Link geometry remain reserved and revalidated.
+/// Frozen M6 policies, rules and earlier experiment records are unchanged.
+pub const R2_VERSION: &str = "r2.5";
 
 pub mod adaptive_hybrid_r2;
 pub mod blocker_builder;
 pub mod build;
 pub mod builder_defender;
 pub mod builder_disruptor;
+mod compound;
 pub mod greedy_coordinated;
 pub mod idle;
 pub mod logistics_builder;

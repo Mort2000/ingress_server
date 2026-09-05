@@ -1648,13 +1648,12 @@ fn defender_recharges_the_value_selected_anchor_only() {
     // once, as its single Major Action.
     let mut defender = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0001, &cfg, params);
     let commands = round_of(&mut defender, &world(40));
-    assert_eq!(
-        commands.get(&AgentId(0)).map(|c| c.as_slice()),
-        Some(
-            &[Command::Recharge {
+    assert!(
+        commands
+            .get(&AgentId(0))
+            .is_some_and(|c| c.contains(&Command::Recharge {
                 portal: PortalId(0)
-            }][..]
-        ),
+            })),
         "the value-selected urgent anchor is recharged by its standing agent"
     );
     let recharges = commands
@@ -2187,13 +2186,12 @@ fn execution_never_recharges_a_full_hp_anchor() {
     let obs = audited_anchor_world(52, 80, vec![enemy_attack(6, 51, 0, 80)]);
     let mut defender = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0AA1, &cfg, params);
     let commands = round_of(&mut defender, &obs);
-    assert_eq!(
-        commands.get(&AgentId(0)).map(|c| c.as_slice()),
-        Some(
-            &[Command::Recharge {
+    assert!(
+        commands
+            .get(&AgentId(0))
+            .is_some_and(|c| c.contains(&Command::Recharge {
                 portal: PortalId(0)
-            }][..]
-        ),
+            })),
         "a damaged urgent anchor under a survivable siege is recharged"
     );
 }
@@ -2360,17 +2358,18 @@ fn second_plan_gives_surplus_agents_work_and_zero_disables_it() {
 fn core_params_records_parse_legacy_and_current_forms() {
     let current = arena_bots::r2::build::CoreParams::default();
     let tag = current.tag();
-    assert!(tag.contains(";sec2p=750|value="), "{tag}");
+    assert!(tag.contains(";sec2p=750;combataux=1|value="), "{tag}");
     assert_eq!(
         arena_bots::r2::build::CoreParams::from_tag(&tag),
         Some(current)
     );
     // A legacy record: strip the fifth key; it must parse with sec2p = 0.
-    let legacy = tag.replace(";sec2p=750", "");
+    let legacy = tag.replace(";sec2p=750", "").replace(";combataux=1", "");
     assert_eq!(
         arena_bots::r2::build::CoreParams::from_tag(&legacy),
         Some(arena_bots::r2::build::CoreParams {
             second_plan_discount_permille: 0,
+            combat_auxiliaries: false,
             ..current
         }),
         "archived r2.0 records keep their exact semantics"

@@ -74,7 +74,7 @@ fn ablation_arm_specs_round_trip_and_validate() {
         "hybrid arms carry b3.0"
     );
     assert_eq!(by_tag["hybrid-builder-attack"].version, B3_VERSION);
-    assert_eq!(by_tag["greedy-coordinated-canonical"].version, "r2.4");
+    assert_eq!(by_tag["greedy-coordinated-canonical"].version, "r2.5");
     // The canonical arm's parameters are the r2 core with permille 0 and
     // no spawn jitter, everything else default.
     assert_eq!(

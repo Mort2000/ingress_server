@@ -986,7 +986,9 @@ impl<'a> DefenseModel<'a> {
     /// Remote Keys or one Move must make every member available now. Heals
     /// are interleaved with estimated pressure using faction initiative
     /// and an attack-first enemy queue (the actual future queue is unknown);
-    /// a dead anchor cannot be revived, and a redundant heal is rejected.
+    /// a dead anchor cannot be revived. Capacity is also bounded by the
+    /// observed missing HP: predicted hits are not guaranteed to occur
+    /// between allies (or at all), so they cannot justify a redundant heal.
     pub fn coordinated_value(&self, agents: &[AgentId], portal: PortalId) -> i64 {
         if self.cfg.attack_damage == 0 || self.cfg.recharge_amount == 0 {
             return 0;
@@ -1006,6 +1008,10 @@ impl<'a> DefenseModel<'a> {
             || target.owner != owners(self.faction).0
             || target.hp >= self.cfg.portal_max_hp
         {
+            return 0;
+        }
+        let missing_hp = self.cfg.portal_max_hp.saturating_sub(target.hp) as u128;
+        if (agents.len() - 1) as u128 * self.cfg.recharge_amount as u128 >= missing_hp {
             return 0;
         }
         let hp_low = target.hp as u64 * 1000
