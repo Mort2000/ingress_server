@@ -4,7 +4,7 @@ status: accepted
 
 # R2 Seed Set 主种子、推导域与同图换边配对（B1）
 
-依据 `docs/ai-balance-plan.md` 8.1/8.2，自本决策起冻结 R2 平衡实验的种子集合与推导（`arena-runner::balance::plan`）：
+依据 `docs/balance/ai-balance-plan.md` 8.1/8.2，自本决策起冻结 R2 平衡实验的种子集合与推导（`arena-runner::balance::plan`）：
 
 **主种子与集合大小（立即冻结，永不改值）**：Development 300 张地图，master seed `0x0072326400000300`；Validation 100 张，`0x0072327600000100`；Holdout 200 张，`0x0072326800000200`（低 32 位承载集合大小，便于肉眼核对）。三者的推导 payload 均含集合 tag（`development`/`validation`/`holdout`）与 master seed，故即使某个 label 被误用，不同集合的种子流也不相交（测试在 0..300 上逐 k 比较种子**值**）。
 

@@ -1,4 +1,4 @@
-//! R2 policy RNG namespace (B2, `docs/ai-balance-plan.md` sections 5.1 and
+//! R2 policy RNG namespace (B2, `docs/balance/ai-balance-plan.md` sections 5.1 and
 //! 6.3; ADR-0015). R2 policies draw their tie-break randomness through
 //! the SAME frozen D53 key shape as the m6 baselines —
 //! `b"ABOT" || u32 BOT_RNG_VERSION || u64 bot_seed || u8 faction_tag ||

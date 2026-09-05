@@ -11,7 +11,7 @@ source** (`bots/*`: every crate is `#![forbid(unsafe_code)]`, verified
 by the white-box audit, `tools/audit`). The operator builds the whole
 closure offline from the committed `vendor/` directory with a pinned
 toolchain and records every input and product hash
-(`docs/build-provenance.md`).
+(`docs/design/build-provenance.md`).
 
 **v0.1 does NOT claim safe execution of arbitrary untrusted code.**
 Verbatim from the P4 gate: 「支持任意不可信 Client 不属于 v0.1 Gate」

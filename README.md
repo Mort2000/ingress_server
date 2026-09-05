@@ -83,7 +83,7 @@ target/release/hybrid-client /tmp/match.s 12648430 &   # 后连者：RES
 
 ## 游戏机制速览
 
-完整规则见 [`规则文档`](./.scratch/ingress_arena_v0.1/rules/README.md)，这里只讲用户需要知道的部分：
+完整规则见 [`规则文档`](./docs/spec/rules/README.md)，这里只讲用户需要知道的部分：
 
 ```plantuml
 @startuml
@@ -107,7 +107,7 @@ v0.1 的唯一准入类型是 **Audited Client**：
 
 - 安全 Rust、只使用获批的冻结依赖闭包；源码与全部依赖可由主办方离线构建并接受白盒审计（[`tools/audit`](./tools/audit/)）；
 - 只能通过官方 [`arena-client-sdk`](./crates/arena-client-sdk/) 访问系统边界（只读共享内存快照、零拷贝观察视图、阶段门禁）；
-- 资源与文件系统隔离由沙箱强制（rlimits + landlock，禁网络等），见 [`tools/sandbox-runner`](./tools/sandbox-runner/) 与 [`docs/sandbox.md`](./docs/sandbox.md)；
+- 资源与文件系统隔离由沙箱强制（rlimits + landlock，禁网络等），见 [`tools/sandbox-runner`](./tools/sandbox-runner/) 与 [`docs/design/sandbox.md`](./docs/design/sandbox.md)；
 - 提交后即冻结，不允许重连或修改。
 
 入手路径：[`bots/`](./bots/) 下三个可运行示例（`nearest-client` / `hybrid-client` / `probe-client`）是冻结基线策略通过 SDK 的完整包装，`crates/arena-bots` 是实现这 5 个基线策略的库；复制一个示例改策略即可。
@@ -128,22 +128,22 @@ v0.1 的唯一准入类型是 **Audited Client**：
 | [`tools/`](./tools/) | 审计、溯源、沙箱、回放导出等 CLI 工具 |
 | [`docs/`](./docs/) | 里程碑进度、验收、报告与决策记录 |
 | [`scripts/`](./scripts/) | 离线构建证明、一键外部比赛等脚本 |
-| [`.scratch/ingress_arena_v0.1/`](./.scratch/ingress_arena_v0.1/) | 规则与 MVP 方案文档集 |
+| [`docs/spec/`](./docs/spec/) | 规则与 MVP 方案文档集 |
 
 ## 文档导航
 
 | 文档 | 内容 |
 |---|---|
-| [规则文档](.scratch/ingress_arena_v0.1/rules/README.md) | 游戏规则唯一事实源（按领域分章，编号 `R-*`） |
-| [MVP 方案](.scratch/ingress_arena_v0.1/mvp/README.md) | 分阶段实现方案与里程碑 M1–M10 |
+| [规则文档](docs/spec/rules/README.md) | 游戏规则唯一事实源（按领域分章，编号 `R-*`） |
+| [MVP 方案](docs/spec/mvp/README.md) | 分阶段实现方案与里程碑 M1–M10 |
 | [`CONTEXT.md`](./CONTEXT.md) | 统一术语表（Faction / Agent / Portal / Link / Field …） |
 | [ADR 索引](docs/adr/README.md) | 每条决策的取舍记录 |
 | [进度记录](docs/progress.md) | 里程碑日志与冻结的决策清单 |
-| [MVP 验收](docs/acceptance-mvp.md) | 验收结论与已知残余风险 |
-| [r1 锦标赛报告](docs/tournament-r1.md) | 首个排名锦标赛的结果与溯源 |
-| [平衡性报告](docs/balance-report-r1.md) | 10000 场自博弈的平衡分析 |
-| [观看器](docs/viewer.md)、[沙箱](docs/sandbox.md)、[构建溯源](docs/build-provenance.md) | 观看器格式、隔离机制、离线构建证明 |
+| [MVP 验收](docs/reports/acceptance-mvp.md) | 验收结论与已知残余风险 |
+| [r1 锦标赛报告](docs/reports/tournament-r1.md) | 首个排名锦标赛的结果与溯源 |
+| [平衡性报告](docs/balance/balance-report-r1.md) | 10000 场自博弈的平衡分析 |
+| [观看器](docs/design/viewer.md)、[沙箱](docs/design/sandbox.md)、[构建溯源](docs/design/build-provenance.md) | 观看器格式、隔离机制、离线构建证明 |
 
 ## 当前状态
 
-v0.1 MVP（M0–M10）已交付，全部测试在 debug 与 release 下通过。验收结论与**已知残余风险**（如平衡调参轮尚未执行、cgroup v2 未在本机委派等）见 [`docs/acceptance-mvp.md`](./docs/acceptance-mvp.md) 末节。
+v0.1 MVP（M0–M10）已交付，全部测试在 debug 与 release 下通过。验收结论与**已知残余风险**（如平衡调参轮尚未执行、cgroup v2 未在本机委派等）见 [`docs/reports/acceptance-mvp.md`](./docs/reports/acceptance-mvp.md) 末节。

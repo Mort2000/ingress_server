@@ -1,7 +1,7 @@
 //! Drop-reason tally over a FROZEN batch archive (B0 evidence pass,
-//! `docs/ai-balance-plan.md` principle 8 — raw data first).
+//! `docs/balance/ai-balance-plan.md` principle 8 — raw data first).
 //!
-//! `docs/balance-report-r1.md` quotes a per-reason breakdown of the
+//! `docs/balance/balance-report-r1.md` quotes a per-reason breakdown of the
 //! dropped commands in the Greedy x DestroyAnchor matchup. The frozen
 //! archive (`runs/m6-r1/matches.tsv`) stores per-faction drop TOTALS only,
 //! so the breakdown is re-derived here: every archived match is
@@ -46,7 +46,7 @@ use crate::run::MAX_WORKERS;
 
 /// Every `DropReason` variant as its exact Rust identifier, in enum
 /// declaration order — the canonical row order of the tally artifacts (the
-/// identifiers `docs/balance-report-r1.md` cites are these tags).
+/// identifiers `docs/balance/balance-report-r1.md` cites are these tags).
 pub const DROP_REASON_TAGS: [&str; 24] = [
     "MoveOutOfBounds",
     "MoveBudgetExceeded",
@@ -544,7 +544,7 @@ pub fn drop_reasons_manifest(
     line(
         &mut text,
         "purpose",
-        "re-derive per-DropReason command counts for docs/balance-report-r1.md (matches.tsv archives drop totals only)".to_string(),
+        "re-derive per-DropReason command counts for docs/balance/balance-report-r1.md (matches.tsv archives drop totals only)".to_string(),
     );
     line(&mut text, "source_dir", source_dir.display().to_string());
     line(&mut text, "source_matches", source_matches.to_string());

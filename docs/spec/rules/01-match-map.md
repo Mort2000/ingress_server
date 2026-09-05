@@ -62,7 +62,7 @@ RPC 到达时间与 Server 执行耗时只影响动作是否赶上截止时间�
 
 每个位置可以是地图闭边界内的任意整数坐标，不要求与 Portal 重合，多个 Agent 也可选择同一坐标。只有完整帧最后一字节在 `spawn_deadline` 前到达 Server 的集合才有资格进入赛前槽位。两方有效集合均就绪后，Server 立即结束赛前窗口、同时应用出生位置并进入 Round 1；在此之前任何一方都看不到对方选择。
 
-Server 先校验消息 framing、大小、协议版本和已认证 Faction；通过这些信封校验的首个集合立即冻结该方赛前槽位，随后才校验 Agent 集合与坐标。Agent 缺失、重复、未知或坐标越界均使该方 `SPAWN_FORFEIT`，不允许修正重提，也不自动分配兜底位置。赛前截止时仍未冻结槽位同样判负；若双方均失败，则比赛无有效结果且不进入 Elo。详见 [ADR-0004](../../../docs/adr/0004-first-command-stream-submission-is-final.md)。
+Server 先校验消息 framing、大小、协议版本和已认证 Faction；通过这些信封校验的首个集合立即冻结该方赛前槽位，随后才校验 Agent 集合与坐标。Agent 缺失、重复、未知或坐标越界均使该方 `SPAWN_FORFEIT`，不允许修正重提，也不自动分配兜底位置。赛前截止时仍未冻结槽位同样判负；若双方均失败，则比赛无有效结果且不进入 Elo。详见 [ADR-0004](../../adr/0004-first-command-stream-submission-is-final.md)。
 
 ## R-SPAWN-02 增援
 

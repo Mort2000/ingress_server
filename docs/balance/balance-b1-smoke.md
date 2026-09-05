@@ -1,6 +1,6 @@
 # B1 smoke run — `b1-smoke-r1`
 
-- 状态: done (B1 实验基础, `docs/ai-balance-plan.md` section 14 row B1)
+- 状态: done (B1 实验基础, `docs/balance/ai-balance-plan.md` section 14 row B1)
 - Run directory (untracked): `runs/balance/b1-smoke-r1/`
 - Base commit: `7400ecd3044f`
 - Reproduce: `cargo run --release -p arena-runner -- balance-b1 runs 7400ecd3044f`

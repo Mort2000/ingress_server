@@ -1,4 +1,4 @@
-//! R2 shared-capability decision unit tests (`docs/ai-balance-plan.md`
+//! R2 shared-capability decision unit tests (`docs/balance/ai-balance-plan.md`
 //! sections 5.1, 6.2, 6.3 and 13.1): the value-model scorers, the
 //! role/task allocator, seeded tie-break sampling and the R2 RNG namespace,
 //! all on hand-built fixture observations. Every scorer is a pure function

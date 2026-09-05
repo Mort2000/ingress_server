@@ -4,7 +4,7 @@ status: accepted
 
 # R2 策略组合与测量工具就绪门槛（B2）
 
-B2 交付 `docs/ai-balance-plan.md` 第 6.1 节的六个 R2 策略，并冻结第 10.1 节"测量工具就绪门槛"的统计定义与阈值。本 ADR 在官方就绪批次运行之前冻结以下内容；探索性 pilot 使用独立 experiment-id，不作为门槛证据。
+B2 交付 `docs/balance/ai-balance-plan.md` 第 6.1 节的六个 R2 策略，并冻结第 10.1 节"测量工具就绪门槛"的统计定义与阈值。本 ADR 在官方就绪批次运行之前冻结以下内容；探索性 pilot 使用独立 experiment-id，不作为门槛证据。
 
 ## 策略标识（扩展 ADR-0015）
 

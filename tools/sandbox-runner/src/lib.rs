@@ -73,7 +73,7 @@ impl SandboxConfig {
     /// plan's 64 — `RLIMIT_NPROC` is UID-WIDE, and this host's ambient
     /// per-uid count already sits near 64, which made even an `sh`
     /// pipeline's fork fail under a 64 cap (measured live); 256 stays
-    /// a bounded cap with headroom. Documented in docs/sandbox.md.
+    /// a bounded cap with headroom. Documented in docs/design/sandbox.md.
     pub fn new(wall_timeout: Duration, rw_dir: impl Into<PathBuf>) -> Self {
         let rw_dir = rw_dir.into();
         let mut ro_roots = default_ro_roots();

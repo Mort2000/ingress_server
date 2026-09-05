@@ -1,4 +1,4 @@
-//! B3 ablation-arm fixtures (ADR-0017, `docs/ai-balance-plan.md` section
+//! B3 ablation-arm fixtures (ADR-0017, `docs/balance/ai-balance-plan.md` section
 //! 7.2): the three measurement arms as first-class policies — identity
 //! round-trips, the spawn pin against the frozen Hybrid, the
 //! byte-identity pin of `hybrid-builder-attack` (defense branch removed

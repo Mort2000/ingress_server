@@ -1,6 +1,6 @@
 //! M10 export-pipeline consistency suite — the machine-tested half of the
 //! D93 split (the human-verified half — canvas rendering, keyboard feel,
-//! animation — is documented in docs/viewer.md). Every test reads the
+//! animation — is documented in docs/design/viewer.md). Every test reads the
 //! payload back OUT of the emitted HTML with the strict mini-JSON parser,
 //! so the assertions cover exactly what a browser would execute.
 
@@ -1124,7 +1124,7 @@ fn hostile_marker_tokens_cannot_subvert_assembly() {
 
 // ---------------------------------------------------------------------------
 // 13d. M-final review fix — viewer speed keys point the documented way
-// (docs/viewer.md: "+ / − speed up / slow down"). A static check: no browser
+// (docs/design/viewer.md: "+ / − speed up / slow down"). A static check: no browser
 // automation exists (D93), so the Rust side reads the asset and pins the
 // direction of the '+'/'-' key mapping.
 // ---------------------------------------------------------------------------
@@ -1171,10 +1171,10 @@ fn viewer_speed_keys_match_the_documented_direction() {
 
     // And the documented contract says the same thing.
     let viewer_doc =
-        std::fs::read_to_string(repo_relative("docs/viewer.md")).expect("docs/viewer.md");
+        std::fs::read_to_string(repo_relative("docs/design/viewer.md")).expect("docs/design/viewer.md");
     assert!(
         viewer_doc.contains("`+` / `−` | speed up / slow down"),
-        "docs/viewer.md documents the direction"
+        "docs/design/viewer.md documents the direction"
     );
 }
 
@@ -1185,7 +1185,7 @@ fn viewer_speed_keys_match_the_documented_direction() {
 #[test]
 fn docs_gate() {
     let viewer_doc =
-        std::fs::read_to_string(repo_relative("docs/viewer.md")).expect("docs/viewer.md");
+        std::fs::read_to_string(repo_relative("docs/design/viewer.md")).expect("docs/design/viewer.md");
     for section in [
         "View semantics",
         "ingress-viewer-v1",
@@ -1195,7 +1195,7 @@ fn docs_gate() {
     ] {
         assert!(
             viewer_doc.contains(section),
-            "docs/viewer.md lacks {section:?}"
+            "docs/design/viewer.md lacks {section:?}"
         );
     }
     let progress =

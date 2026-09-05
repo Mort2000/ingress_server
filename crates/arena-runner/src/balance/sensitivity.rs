@@ -1,5 +1,5 @@
 //! The B4 single-variable sensitivity experiments
-//! (`docs/ai-balance-plan.md` sections 7.3/7.4/8.3, ADR-0018): the
+//! (`docs/balance/ai-balance-plan.md` sections 7.3/7.4/8.3, ADR-0018): the
 //! frozen plan-7.3 candidate grid as DATA (13 single-field variants
 //! beside the untouched default — candidates are Pilot starting points,
 //! not preset conclusions), the six frozen competitive matchups at FIXED

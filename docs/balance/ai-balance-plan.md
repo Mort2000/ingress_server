@@ -2,7 +2,7 @@
 
 - 状态：Proposed
 - 适用阶段：MVP 完成后的 Balance R2
-- 现有基线：`arena-bots m6.0`、`runs/m6-r1/`、`docs/balance-report-r1.md`
+- 现有基线：`arena-bots m6.0`、`runs/m6-r1/`、`docs/balance/balance-report-r1.md`
 - 日期：2026-09-03
 
 ## 1. 决策摘要
@@ -453,7 +453,7 @@ Snowball 指标只在双方均具备稳定得分能力的竞争性策略对上�
 - `report.md`：人类可读结论、区间、图表和决策；
 - `replays/`：失败、异常值和预先抽样比赛的 IARP。
 
-最终确认报告同步到 `docs/balance-report-r2.md`，并记录原始运行目录、tree hash、策略版本和配置 hash。若 `runs/` 继续保持未跟踪，至少应提交报告、manifest 摘要和全部产物的内容 hash。
+最终确认报告同步到 `docs/balance/balance-report-r2.md`，并记录原始运行目录、tree hash、策略版本和配置 hash。若 `runs/` 继续保持未跟踪，至少应提交报告、manifest 摘要和全部产物的内容 hash。
 
 ## 13. 测试策略
 

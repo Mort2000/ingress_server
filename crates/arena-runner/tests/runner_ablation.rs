@@ -1,4 +1,4 @@
-//! B3 ablation gates (`docs/ai-balance-plan.md` sections 7.2, 9, 12,
+//! B3 ablation gates (`docs/balance/ai-balance-plan.md` sections 7.2, 9, 12,
 //! 13.2, 16.5; ADR-0017): the frozen experiment plans, the plan-section-9
 //! statistics on hand-built records, the plan-section-11 classification
 //! rules, the verified balance-cell re-execution behind the per-reason
@@ -1106,7 +1106,7 @@ fn b3_scratch_run_archives_analysis_and_refuses_existing_dirs() {
     assert!(!report.contains("balance-b1"));
     assert!(!report.contains("None registered — B1"));
     assert!(report.contains("None registered for this experiment."));
-    assert!(manifest.contains("docs/balance-b3-ablation.md carries"));
+    assert!(manifest.contains("docs/balance/balance-b3-ablation.md carries"));
     // An existing experiment directory is refused — nothing overwritten.
     let again = run_b3_plan(&root, &plan, &|_| false, Some("test-commit"));
     assert!(again.is_err(), "existing dir refused");

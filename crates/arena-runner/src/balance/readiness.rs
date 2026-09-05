@@ -1,4 +1,4 @@
-//! The B2 readiness layer (`docs/ai-balance-plan.md` section 10.1,
+//! The B2 readiness layer (`docs/balance/ai-balance-plan.md` section 10.1,
 //! ADR-0016): the three frozen measurement-tool validation experiments
 //! (round-robin of the six R2 policies including mirrors, idle
 //! benchmark, blocking probe with full replay capture) and the SEVEN

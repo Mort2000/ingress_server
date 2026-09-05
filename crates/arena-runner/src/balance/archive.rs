@@ -118,13 +118,13 @@ fn stage_subcommand(stage: Stage) -> &'static str {
 /// wrong file.
 fn stage_report_doc(stage: Stage) -> Option<&'static str> {
     match stage {
-        Stage::Smoke => Some("docs/balance-b1-smoke.md"),
-        Stage::Readiness => Some("docs/balance-b2-readiness.md"),
-        Stage::Ablation => Some("docs/balance-b3-ablation.md"),
-        Stage::Sensitivity | Stage::Interaction => Some("docs/balance-b4-sensitivity.md"),
+        Stage::Smoke => Some("docs/balance/balance-b1-smoke.md"),
+        Stage::Readiness => Some("docs/balance/balance-b2-readiness.md"),
+        Stage::Ablation => Some("docs/balance/balance-b3-ablation.md"),
+        Stage::Sensitivity | Stage::Interaction => Some("docs/balance/balance-b4-sensitivity.md"),
         // Plan section 12: the final confirmation report syncs to
-        // docs/balance-report-r2.md.
-        Stage::Confirm => Some("docs/balance-report-r2.md"),
+        // docs/balance/balance-report-r2.md.
+        Stage::Confirm => Some("docs/balance/balance-report-r2.md"),
         Stage::Retune => None,
     }
 }
@@ -805,7 +805,7 @@ mod tests {
     /// stage. Regression pin for the archived-B3/B2 defect: report.md
     /// carried the B1 smoke boilerplate (a `balance-b1` reproduce line,
     /// "None registered" gates contradicting the manifest's gate count,
-    /// and a note naming docs/balance-b1-smoke.md).
+    /// and a note naming docs/balance/balance-b1-smoke.md).
     #[test]
     fn manifest_and_report_are_stage_aware() {
         let run = BalanceRunResult {
@@ -827,7 +827,7 @@ mod tests {
                 "smoke",
                 crate::balance::smoke::b1_smoke_plan(1),
                 "balance-b1",
-                "docs/balance-b1-smoke.md",
+                "docs/balance/balance-b1-smoke.md",
                 0,
                 vec![],
             ),
@@ -835,7 +835,7 @@ mod tests {
                 "readiness",
                 crate::balance::readiness::b2_idle_plan(1, "stage-aware-pin"),
                 "balance-b2",
-                "docs/balance-b2-readiness.md",
+                "docs/balance/balance-b2-readiness.md",
                 1,
                 vec!["idle-scoring"],
             ),
@@ -843,7 +843,7 @@ mod tests {
                 "ablation-matrix",
                 crate::balance::ablation::b3_matrix_plan(1, "stage-aware-pin"),
                 "balance-b3",
-                "docs/balance-b3-ablation.md",
+                "docs/balance/balance-b3-ablation.md",
                 2,
                 vec!["records-integrity", "no-crashes"],
             ),
@@ -851,7 +851,7 @@ mod tests {
                 "ablation-idle",
                 crate::balance::ablation::b3_idle_plan(1, "stage-aware-pin"),
                 "balance-b3",
-                "docs/balance-b3-ablation.md",
+                "docs/balance/balance-b3-ablation.md",
                 1,
                 vec!["idle-scoring"],
             ),
@@ -859,7 +859,7 @@ mod tests {
                 "sensitivity-pilot",
                 crate::balance::sensitivity::b4_pilot_plan(1, "stage-aware-pin"),
                 "balance-b4",
-                "docs/balance-b4-sensitivity.md",
+                "docs/balance/balance-b4-sensitivity.md",
                 3,
                 vec!["records-integrity", "no-crashes", "command-drop"],
             ),
@@ -872,7 +872,7 @@ mod tests {
                     "stage-aware-pin",
                 ),
                 "balance-b4",
-                "docs/balance-b4-sensitivity.md",
+                "docs/balance/balance-b4-sensitivity.md",
                 3,
                 vec!["records-integrity", "no-crashes", "command-drop"],
             ),

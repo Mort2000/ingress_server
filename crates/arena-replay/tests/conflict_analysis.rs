@@ -535,7 +535,7 @@ fn unverified_log_is_refused_not_analyzed() {
 // ---------------------------------------------------------------------------
 // The archived r1 tournament replays (skip on a fresh clone, M9
 // convention): every one verifies and analyzes; the printed summaries are
-// the A-LATENCY acceptance evidence recorded in docs/acceptance-mvp.md.
+// the A-LATENCY acceptance evidence recorded in docs/reports/acceptance-mvp.md.
 // ---------------------------------------------------------------------------
 
 fn archived_iarps() -> Vec<std::path::PathBuf> {
@@ -579,7 +579,7 @@ fn archived_r1_replays_analyze() {
     eprintln!("TOTAL over {} replays: {}", paths.len(), totals.text());
     // Non-vacuity: the archived external matches really contain decisive
     // conflicts and pre-empted losers (the numbers are pinned in
-    // docs/acceptance-mvp.md).
+    // docs/reports/acceptance-mvp.md).
     assert!(
         totals.decisive > 0,
         "the r1 archive must contain decisive conflicts"

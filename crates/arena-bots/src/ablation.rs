@@ -1,5 +1,5 @@
 //! The B3 default-config ablation arms (ADR-0017,
-//! `docs/ai-balance-plan.md` section 7.2): measurement policies that
+//! `docs/balance/ai-balance-plan.md` section 7.2): measurement policies that
 //! decompose the frozen m6.0 `HybridBot`'s roles and the r2 core's spawn
 //! determinism into separately versioned strategies. Every arm is
 //! composed STRICTLY from already-visible pieces of the frozen bots —

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bot 单场回放审查"
+  short_description: "逐轮核对 Bot 决策、动作收益与闲置原因，定位统计掩盖的策略缺陷"
+  default_prompt: "使用 $review-bot-replay 抽查一至两场比赛，从逐轮行动和实际收益检查 Bot 是否符合策略设计，定位会误导平衡统计的问题。"

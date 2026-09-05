@@ -4,7 +4,7 @@ status: accepted
 
 # B3 默认配置消融：策略臂、实验与统计定义（ADR-0017）
 
-B3 交付 `docs/ai-balance-plan.md` 第 7.2 节（阶段 A）的默认配置消融报告：量化 m6.0 Hybrid 100% 支配（以及 B2 记录的 `builder-disruptor-r2` 强支配）的来源。本阶段不触碰任何规则参数（`Stage::Ablation` 已拒绝任何配置差异，belt-and-braces 见 `plan.rs` `validate()`），不修改默认 `GameConfig`，不改五个冻结 `BotKind` 的行为，不写任何既有 `runs/` 目录。本 ADR 在官方运行之前冻结消融策略臂、实验计划与第 9 节统计定义（第 14 节注：统计定义与策略身份/版本语义的扩展必须先有 ADR）。
+B3 交付 `docs/balance/ai-balance-plan.md` 第 7.2 节（阶段 A）的默认配置消融报告：量化 m6.0 Hybrid 100% 支配（以及 B2 记录的 `builder-disruptor-r2` 强支配）的来源。本阶段不触碰任何规则参数（`Stage::Ablation` 已拒绝任何配置差异，belt-and-braces 见 `plan.rs` `validate()`），不修改默认 `GameConfig`，不改五个冻结 `BotKind` 的行为，不写任何既有 `runs/` 目录。本 ADR 在官方运行之前冻结消融策略臂、实验计划与第 9 节统计定义（第 14 节注：统计定义与策略身份/版本语义的扩展必须先有 ADR）。
 
 ## 消融策略臂（扩展 ADR-0015/0016，只增不改）
 
@@ -56,7 +56,7 @@ B3 交付 `docs/ai-balance-plan.md` 第 7.2 节（阶段 A）的默认配置消�
 
 ## 产物
 
-每实验目录内 `analysis.txt`（上述全部统计的机器可重算文本，原始计数齐备）并折算内容 hash 入 `hashes.txt`；`docs/balance-b3-ablation.md` 携带 manifest 摘要与全部产物内容 hash（plan 第 12 节，`runs/` 不跟踪）。
+每实验目录内 `analysis.txt`（上述全部统计的机器可重算文本，原始计数齐备）并折算内容 hash 入 `hashes.txt`；`docs/balance/balance-b3-ablation.md` 携带 manifest 摘要与全部产物内容 hash（plan 第 12 节，`runs/` 不跟踪）。
 
 ## 不变式
 

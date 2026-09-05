@@ -1,4 +1,4 @@
-//! Independent policy identity (B1, `docs/ai-balance-plan.md` section 5.1,
+//! Independent policy identity (B1, `docs/balance/ai-balance-plan.md` section 5.1,
 //! ADR-0015): balance experiments address strategies as POLICIES with their
 //! own `policy_id`, `family`, `version` and structured parameters — not as
 //! the frozen P2 `BotKind` registry. This module is a PARALLEL type: for

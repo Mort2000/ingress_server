@@ -1,6 +1,6 @@
 # B4 参数敏感度报告（阶段 B：Pilot → Full → 交互判定）
 
-本文件承载 B4 单变量参数敏感度全记录（`docs/ai-balance-plan.md` 7.3/7.4/8.3/9/10.3 节，ADR-0018）：Pilot（§1–6，`b4-sensitivity-pilot-r2`）、稳定臂的 Full 扩展（§7，`b4-sensitivity-full-dev-r1`/`-val-r1`）、交互实验判定（§8）与里程碑结论（§10）。`runs/` 不入库；按第 12 节，manifest 摘要与全部产物内容 hash 在此提交。全部统计为非权威离线分析：整数原始计数齐备，permille 仅为展示，不进入 Game Result、Replay Hash 或规则结算。
+本文件承载 B4 单变量参数敏感度全记录（`docs/balance/ai-balance-plan.md` 7.3/7.4/8.3/9/10.3 节，ADR-0018）：Pilot（§1–6，`b4-sensitivity-pilot-r2`）、稳定臂的 Full 扩展（§7，`b4-sensitivity-full-dev-r1`/`-val-r1`）、交互实验判定（§8）与里程碑结论（§10）。`runs/` 不入库；按第 12 节，manifest 摘要与全部产物内容 hash 在此提交。全部统计为非权威离线分析：整数原始计数齐备，permille 仅为展示，不进入 Game Result、Replay Hash 或规则结算。
 
 ## 1. 设计（运行前冻结于 ADR-0018）
 

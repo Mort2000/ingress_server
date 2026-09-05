@@ -1,4 +1,4 @@
-//! B4 sensitivity integration tests (`docs/ai-balance-plan.md` sections
+//! B4 sensitivity integration tests (`docs/balance/ai-balance-plan.md` sections
 //! 7.3/8.3, ADR-0018): map-regime config variants in the executor — a
 //! variant declaring a map-defining field generates its OWN MapDefinition
 //! from the same map_seed (pairing keys unchanged), an infeasible

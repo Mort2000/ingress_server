@@ -596,7 +596,7 @@ fn tournament_json_echo_round_trips_and_records_provenance() {
 }
 
 // ---------------------------------------------------------------------------
-// (17) docs/tournament-r1.md consistency with runs/tournaments/r1.
+// (17) docs/reports/tournament-r1.md consistency with runs/tournaments/r1.
 // `docs/` is tracked; `runs/` is LOCAL evidence (gitignored — the M6
 // convention: reports under docs/ are committed, artifacts stay local).
 // The doc must always exist; the artifact cross-checks run whenever the
@@ -613,11 +613,11 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn committed_tournament_doc_matches_the_r1_artifacts() {
-    let doc = repo_root().join("docs/tournament-r1.md");
+    let doc = repo_root().join("docs/reports/tournament-r1.md");
     let standings = repo_root().join("runs/tournaments/r1/standings.txt");
     let doc_text = std::fs::read_to_string(&doc).unwrap_or_else(|error| {
         panic!(
-            "docs/tournament-r1.md must exist from an actual run ({}): {error}",
+            "docs/reports/tournament-r1.md must exist from an actual run ({}): {error}",
             doc.display()
         )
     });

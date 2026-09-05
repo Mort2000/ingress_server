@@ -1,4 +1,4 @@
-//! Match-level R2 behavior gates (`docs/ai-balance-plan.md` sections 10.1
+//! Match-level R2 behavior gates (`docs/balance/ai-balance-plan.md` sections 10.1
 //! and 13.3) on REAL matches through the harness: every R2 policy scores
 //! stably against an idle opponent, real Transfer usage appears in a
 //! competitive R2 pairing, identical inputs produce byte-identical

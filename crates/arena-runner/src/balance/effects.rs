@@ -1,4 +1,4 @@
-//! The B4 effects statistics (`docs/ai-balance-plan.md` sections 9.1/9.3/
+//! The B4 effects statistics (`docs/balance/ai-balance-plan.md` sections 9.1/9.3/
 //! 10.3, ADR-0018): per-(variant, pair) paired effects on the integer
 //! `pairs.tsv` deltas, map-clustered accounting with the fixed-seed
 //! per-map bootstrap, side-effect guardrails vs base, the ONE frozen

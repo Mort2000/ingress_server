@@ -1,7 +1,7 @@
 //! Standings + committed evidence (D85): the `standings.txt` table (rank
 //! = rating desc, tie-break entrant name asc — frozen), per-entrant
 //! ENL/RES splits that keep validating the no-faction-swap hypothesis
-//! (P5-SCHEDULING), and the `docs/tournament-r1.md` generator that turns
+//! (P5-SCHEDULING), and the `docs/reports/tournament-r1.md` generator that turns
 //! an ACTUAL run into the committed report. Integer fixed-point
 //! formatting only (the M6 conventions).
 
@@ -175,7 +175,7 @@ pub fn standings_text(cfg: &TournamentConfig, table: &EloTable, splits: &[Entran
 }
 
 // ---------------------------------------------------------------------------
-// docs/tournament-r1.md — committed evidence from an actual run
+// docs/reports/tournament-r1.md — committed evidence from an actual run
 // ---------------------------------------------------------------------------
 
 /// The committed report body for a finished tournament run (D85). All

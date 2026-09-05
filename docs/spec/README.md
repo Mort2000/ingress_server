@@ -9,7 +9,7 @@
 | 游戏规则 | 定义比赛中什么行为合法、如何结算；属于规则事实源 | [rules/README.md](./rules/README.md) |
 | MVP 方案 | 定义以什么顺序实现、验证和交付；不得覆盖规则 | [mvp/README.md](./mvp/README.md) |
 | 领域语言 | 统一规则与实现使用的核心名词 | [CONTEXT.md](../../CONTEXT.md) |
-| 决策记录 | 记录难以反转且存在真实取舍的决定 | [ADR 索引](../../docs/adr/README.md) |
+| 决策记录 | 记录难以反转且存在真实取舍的决定 | [ADR 索引](../adr/README.md) |
 
 ## 建议审阅顺序
 

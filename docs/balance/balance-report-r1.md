@@ -10,7 +10,7 @@ cross-bucket batch in `runs/m6-r1-crossbucket/`.
 > default-`GameConfig` diagnostic run, nothing more. No parameter tuning
 > has been performed and no `GameConfig` value has been changed; section 6
 > is an ordered list of investigation hypotheses, not evidence-based
-> tuning conclusions. Per `docs/ai-balance-plan.md`, default-value changes
+> tuning conclusions. Per `docs/balance/ai-balance-plan.md`, default-value changes
 > require isolating bot-implementation defects first (ablation), then
 > single-variable sensitivity with faction-swapped pairing and holdout
 > confirmation. Every matchup, win-rate and snowball number below was
@@ -240,7 +240,7 @@ station offsets — a measuring-tool fix, explicitly not a rules change).
 ## 6. Tuning recommendations (P2.5-TUNING order, one variable per round)
 
 (None of the below has been run. This ordering predates
-`docs/ai-balance-plan.md`; treat it as the hypothesis list that the
+`docs/balance/ai-balance-plan.md`; treat it as the hypothesis list that the
 plan's ablation-first stages (bot-defect isolation before any parameter
 change, faction-swapped pairing, holdout confirmation) are designed to
 test, not as a committed schedule.)

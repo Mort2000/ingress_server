@@ -1,4 +1,4 @@
-//! R2 shared capability layer (`docs/ai-balance-plan.md` sections 5.1,
+//! R2 shared capability layer (`docs/balance/ai-balance-plan.md` sections 5.1,
 //! 6.2 and 6.3): the deep, individually testable modules the six R2
 //! policies compose, instead of per-policy re-implementation.
 //!

@@ -1,4 +1,4 @@
-//! B2 readiness-layer tests (`docs/ai-balance-plan.md` sections 10.1 and
+//! B2 readiness-layer tests (`docs/balance/ai-balance-plan.md` sections 10.1 and
 //! 13.2/13.3, ADR-0016): the Stage::Readiness plan rules, every gate
 //! evaluator on hand-built passing AND failing fixtures, the frozen
 //! active-blocking proxy over a hand-scripted replay with known truth,

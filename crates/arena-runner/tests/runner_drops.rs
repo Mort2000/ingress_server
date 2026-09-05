@@ -2,7 +2,7 @@
 //! batch is archived to TSV, re-parsed, re-executed per archived record,
 //! verified against each archived row, and aggregated — the exact pipeline
 //! behind the `arena-runner drop-reasons` subcommand and the per-reason
-//! breakdown quoted in `docs/balance-report-r1.md`.
+//! breakdown quoted in `docs/balance/balance-report-r1.md`.
 
 use arena_bots::bot::BotKind;
 use arena_core::config::GameConfig;

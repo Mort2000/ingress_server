@@ -39,7 +39,7 @@ viewer --> replay
 
 ## P-ARCH-03 Rust 实现边界
 
-MVP 的权威 Game Core、Server、Runner、Replay、官方 SDK 和 Baseline Bots 使用 Rust。Viewer 不受此决定约束；对外协议和 Replay 格式必须语言无关，不得暴露 Rust ABI。协议 Payload 与 SHM Snapshot 使用 FlatBuffers Schema，v0.1 只正式提供和验收 Rust SDK，未来可在不修改比赛协议的前提下增加其他语言 SDK。决策背景见 [ADR-0001](../../../docs/adr/0001-rust-mvp-language-neutral-protocol.md) 与 [ADR-0009](../../../docs/adr/0009-flatbuffers-for-protocol-and-shm.md)。
+MVP 的权威 Game Core、Server、Runner、Replay、官方 SDK 和 Baseline Bots 使用 Rust。Viewer 不受此决定约束；对外协议和 Replay 格式必须语言无关，不得暴露 Rust ABI。协议 Payload 与 SHM Snapshot 使用 FlatBuffers Schema，v0.1 只正式提供和验收 Rust SDK，未来可在不修改比赛协议的前提下增加其他语言 SDK。决策背景见 [ADR-0001](../../adr/0001-rust-mvp-language-neutral-protocol.md) 与 [ADR-0009](../../adr/0009-flatbuffers-for-protocol-and-shm.md)。
 
 推荐 Workspace 如下：
 
@@ -70,11 +70,11 @@ trait Bot {
 
 进入 Round 循环前，SDK 通过独立的赛前初始化回调向 Bot 提供完整地图，并一次提交覆盖全部初始 Agent 的 Initial Spawn Set；该路径不复用或模拟批量动作接口。
 
-Runtime 中每个 Client 只建立一条持久化全双工 Unix Domain `SOCK_STREAM`；`u32` 大端长度前缀负责 framing，SDK 串行写帧。该连接同时承载赛前、Round 控制和动作消息，详见 [ADR-0008](../../../docs/adr/0008-single-ordered-unix-stream-per-client.md)。
+Runtime 中每个 Client 只建立一条持久化全双工 Unix Domain `SOCK_STREAM`；`u32` 大端长度前缀负责 framing，SDK 串行写帧。该连接同时承载赛前、Round 控制和动作消息，详见 [ADR-0008](../../adr/0008-single-ordered-unix-stream-per-client.md)。
 
 FlatBuffers Schema 至少定义 `ProtocolEnvelope`、`PublicSnapshot` 与 `PrivateSnapshot` 根类型。MVP 要求 Client 与 Server 的 Protocol、Public Snapshot 和 Private Snapshot 版本全部精确相等，不做兼容协商。所有 Client 输入先经 Verifier，再转换为 Core 自有的权威类型；SDK 也在暴露新 SHM View 前验证 Server 发布的 Buffer 与 Schema 版本。Verifier 只扫描字节，不把 Snapshot 复制成 Client 私有对象。
 
-Core 使用 `Coord(i32)` 表达坐标，合法值由非负闭区间 `MAP_WIDTH × MAP_HEIGHT` 约束；所有几何运算在减法前先提升到 `i64`，`Area2` 使用 `u64`，累计 `Score2` 使用 `u128`。全部运算 Checked，禁止依赖 Release 模式 Wrapping 或 Saturating；`GameConfig` 在比赛创建时验证数值上界。详见 [ADR-0007](../../../docs/adr/0007-fixed-width-integer-game-math.md)。
+Core 使用 `Coord(i32)` 表达坐标，合法值由非负闭区间 `MAP_WIDTH × MAP_HEIGHT` 约束；所有几何运算在减法前先提升到 `i64`，`Area2` 使用 `u64`，累计 `Score2` 使用 `u128`。全部运算 Checked，禁止依赖 Release 模式 Wrapping 或 Saturating；`GameConfig` 在比赛创建时验证数值上界。详见 [ADR-0007](../../adr/0007-fixed-width-integer-game-math.md)。
 
 ## P-ARCH-05 MVP 前置范围外
 

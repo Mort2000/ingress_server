@@ -295,7 +295,7 @@ fn main() {
             // archive (seeds read back from its matches.tsv), verify each
             // re-execution against the archived row, and tally DropReason
             // counts per BotKind into a NEW runs/balance/ directory — the
-            // per-reason breakdown behind docs/balance-report-r1.md.
+            // per-reason breakdown behind docs/balance/balance-report-r1.md.
             let usage =
                 "usage: arena-runner drop-reasons <frozen-run-dir> [output-root] [base-commit]";
             let Some(frozen) = args.get(2) else {
@@ -312,7 +312,7 @@ fn main() {
             ));
         }
         Some("balance-b3") => {
-            // B3 default-config ablation (docs/ai-balance-plan.md section
+            // B3 default-config ablation (docs/balance/ai-balance-plan.md section
             // 7.2, ADR-0017): the frozen 8-policy same-map faction-swap
             // matrix + the idle benchmark of the three arms, archived with
             // the plan-section-9 analysis.txt.
@@ -331,7 +331,7 @@ fn main() {
             ));
         }
         Some("balance-b4") => {
-            // B4 parameter sensitivity (docs/ai-balance-plan.md sections
+            // B4 parameter sensitivity (docs/balance/ai-balance-plan.md sections
             // 7.3/7.4/8.3, ADR-0018): the frozen 13-candidate single-grid
             // pilot (default), the scratch pilot, the Full runs over the
             // stability-derived roster, and the plan-7.4 interaction
@@ -401,7 +401,7 @@ fn main() {
             ));
         }
         Some("balance-b2") => {
-            // B2 readiness runs (docs/ai-balance-plan.md section 10.1,
+            // B2 readiness runs (docs/balance/ai-balance-plan.md section 10.1,
             // ADR-0016): the frozen round-robin / idle / blocking-probe
             // validation batches with gate evaluation.
             let mut rest = args.iter().skip(2).cloned();
@@ -419,7 +419,7 @@ fn main() {
             ));
         }
         Some("balance-b1") => {
-            // B1 smoke run (docs/ai-balance-plan.md section 14 row B1): the
+            // B1 smoke run (docs/balance/ai-balance-plan.md section 14 row B1): the
             // frozen two-variant x two-policy same-map faction-swap batch,
             // archived into a NEW runs/balance/b1-smoke-r1/ directory.
             let output_root =

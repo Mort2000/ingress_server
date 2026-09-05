@@ -26,7 +26,7 @@ res --> server : Action RPC
 @enduml
 ```
 
-Shared Memory 承担 Server → Client 的高频零拷贝只读 Observation；有序本机消息连接承担控制、动作与提交结果。两条路径均使用 FlatBuffers Schema，不把双方私有状态放入同一映射后只靠 SDK 隐藏字段，也不依赖 Rust ABI。详见 [ADR-0009](../../../docs/adr/0009-flatbuffers-for-protocol-and-shm.md)。
+Shared Memory 承担 Server → Client 的高频零拷贝只读 Observation；有序本机消息连接承担控制、动作与提交结果。两条路径均使用 FlatBuffers Schema，不把双方私有状态放入同一映射后只靠 SDK 隐藏字段，也不依赖 Rust ABI。详见 [ADR-0009](../../adr/0009-flatbuffers-for-protocol-and-shm.md)。
 
 ## P3-SHM 快照分区与双缓冲
 
@@ -40,7 +40,7 @@ Shared Memory 承担 Server → Client 的高频零拷贝只读 Observation；�
 
 ## P3-RPC 最小协议
 
-每个 Client 只允许一条持久化、全双工 Unix Domain `SOCK_STREAM`。所有消息使用 `u32` 大端 Payload 长度前缀，Payload 是以 `ProtocolEnvelope` 为根的 FlatBuffers Buffer；长度不含前缀本身，且硬限制为 `MAX_FRAME_PAYLOAD_BYTES = 65_536`。解码器必须在分配 Payload 前检查上限；超限时不排空帧而直接关闭连接，开赛后产生 `CLIENT_FORFEIT`。上限内的完整 Buffer 若 Verifier 失败，则作为可恢复的信封拒绝。SDK 串行写入完整帧，不允许通过多个连接并发提交。Server 在完整帧结束时记录 `received_at`，并依连接帧序分配 Faction `receive_seq`；随后通过 FlatBuffers Verifier 才读取 Envelope。详见 [ADR-0008](../../../docs/adr/0008-single-ordered-unix-stream-per-client.md)。
+每个 Client 只允许一条持久化、全双工 Unix Domain `SOCK_STREAM`。所有消息使用 `u32` 大端 Payload 长度前缀，Payload 是以 `ProtocolEnvelope` 为根的 FlatBuffers Buffer；长度不含前缀本身，且硬限制为 `MAX_FRAME_PAYLOAD_BYTES = 65_536`。解码器必须在分配 Payload 前检查上限；超限时不排空帧而直接关闭连接，开赛后产生 `CLIENT_FORFEIT`。上限内的完整 Buffer 若 Verifier 失败，则作为可恢复的信封拒绝。SDK 串行写入完整帧，不允许通过多个连接并发提交。Server 在完整帧结束时记录 `received_at`，并依连接帧序分配 Faction `receive_seq`；随后通过 FlatBuffers Verifier 才读取 Envelope。详见 [ADR-0008](../../adr/0008-single-ordered-unix-stream-per-client.md)。
 
 | 消息 | 方向 | 关键字段 / 语义 |
 |---|---|---|

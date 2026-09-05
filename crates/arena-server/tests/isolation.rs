@@ -5,7 +5,7 @@
 //! mapping-level guarantees (PROT_READ-only, no enemy partition in
 //! the SDK process) are pinned cross-crate in
 //! crates/arena-client-sdk/tests/isolation.rs; the same-UID open
-//! residual is the documented AUDIT boundary (D77, docs/sandbox.md).
+//! residual is the documented AUDIT boundary (D77, docs/design/sandbox.md).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

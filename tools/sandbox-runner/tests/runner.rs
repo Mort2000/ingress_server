@@ -180,7 +180,7 @@ fn default_limits_are_the_frozen_set() {
 /// REVIEW FIX (M8 review, finding 3): the CLI used to hard-default
 /// `nproc = 64` and unconditionally overwrite the config, so every
 /// real binary invocation ran with 64 — contradicting the frozen D74
-/// default (256, uid-wide) and docs/sandbox.md §3, and breaking even
+/// default (256, uid-wide) and docs/design/sandbox.md §3, and breaking even
 /// the runbook's own `sh -c '... & ...'` fork on this host (measured:
 /// `/bin/sh: Cannot fork`). The constructor default must be the only
 /// default; `--nproc` only overrides when passed.
@@ -198,7 +198,7 @@ fn cli_has_no_own_nproc_default() {
     );
 }
 
-/// REVIEW FIX (M8 review, finding 6): D76 and docs/sandbox.md §5
+/// REVIEW FIX (M8 review, finding 6): D76 and docs/design/sandbox.md §5
 /// record the landlock handled set as growing REFER 2 / TRUNCATE 3 /
 /// IOCTL_DEV 5, but `handled_fs` never included IOCTL_DEV — on this
 /// ABI-7 host device ioctls were unhandled (⇒ permitted) while the

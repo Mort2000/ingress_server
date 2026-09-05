@@ -1,4 +1,4 @@
-//! Balance layer gates (B1, `docs/ai-balance-plan.md` sections 12/13.2):
+//! Balance layer gates (B1, `docs/balance/ai-balance-plan.md` sections 12/13.2):
 //! the frozen m6 `matches.tsv` byte-format pin (the report.rs visibility
 //! refactor must change nothing), the balance record TSV round-trip with
 //! tamper rejection, and — further below as the milestones land — the
@@ -570,7 +570,7 @@ mod smoke_gates {
 
     // The completion condition: two configs x two policies x same-map
     // faction swap reproduces (small map count for suite speed; the real
-    // 8-map run is the CLI batch recorded in docs/balance-b1-smoke.md).
+    // 8-map run is the CLI batch recorded in docs/balance/balance-b1-smoke.md).
     #[test]
     fn frozen_smoke_plan_reproduces_end_to_end() {
         let plan = b1_smoke_plan(2);

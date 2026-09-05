@@ -40,7 +40,7 @@ fn main() {
     let mut address_space = 2 << 30;
     let mut cpu_secs: Option<u64> = None;
     // No CLI-side default: the frozen D74 set (nproc = 256, uid-wide;
-    // docs/sandbox.md §3) lives in `SandboxConfig::new` — a CLI default
+    // docs/design/sandbox.md §3) lives in `SandboxConfig::new` — a CLI default
     // of 64 silently overrode it and broke even an `sh` pipeline fork
     // on this host (REVIEW FIX, M8 review finding 3).
     let mut nproc: Option<u64> = None;

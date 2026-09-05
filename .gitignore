@@ -1,7 +1,13 @@
 # Rust build output
 /target
 
-# Experiment / batch-run artifacts (reports under docs/ are tracked)
+# Experiment / batch-run artifacts (specs and reports under docs/ are tracked)
 /runs/
 /artifacts/
 *.log
+
+# Scratch analysis / verification workspaces (never tracked)
+/.scratch/
+
+# Python bytecode
+__pycache__/

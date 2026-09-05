@@ -1,5 +1,5 @@
 //! arena-core: authoritative game model and deterministic settlement for
-//! Ingress Arena v0.1. Rule semantics come from `.scratch/ingress_arena_v0.1/rules/`;
+//! Ingress Arena v0.1. Rule semantics come from `docs/spec/rules/`;
 //! this crate must not contain a second copy of the rules.
 //!
 //! Milestone M1 modules: types (domain model), config (R-CONFIG-01),

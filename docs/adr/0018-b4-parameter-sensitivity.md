@@ -4,7 +4,7 @@ status: accepted
 
 # B4 参数敏感度：候选网格、地图机制变体与统计定义（ADR-0018）
 
-B4 交付 `docs/ai-balance-plan.md` 第 7.3 节（阶段 B）的单变量参数敏感度：Pilot →（稳定者）Full →（必要者）交互实验，完成条件是"每个候选均有配对效应与副作用报告"。本 ADR 在任何官方运行之前冻结候选网格、策略与对阵名单、实验计划、地图机制变体语义与第 9 节统计定义（第 14 节注：冻结 seed、统计定义与默认 `GameConfig` 相关决定必须先有 ADR）。默认 `GameConfig` 一概不动（base variant 即未改动的 `GameConfig::default()`，config hash `0x9ead052219fa7ff3`）；五个冻结 `BotKind` 与八个冻结 bot 文件零改动；既有 `runs/` 目录只读。
+B4 交付 `docs/balance/ai-balance-plan.md` 第 7.3 节（阶段 B）的单变量参数敏感度：Pilot →（稳定者）Full →（必要者）交互实验，完成条件是"每个候选均有配对效应与副作用报告"。本 ADR 在任何官方运行之前冻结候选网格、策略与对阵名单、实验计划、地图机制变体语义与第 9 节统计定义（第 14 节注：冻结 seed、统计定义与默认 `GameConfig` 相关决定必须先有 ADR）。默认 `GameConfig` 一概不动（base variant 即未改动的 `GameConfig::default()`，config hash `0x9ead052219fa7ff3`）；五个冻结 `BotKind` 与八个冻结 bot 文件零改动；既有 `runs/` 目录只读。
 
 ## 候选网格（冻结；plan 7.3 原表）
 
@@ -75,7 +75,7 @@ ADR-0014 冻结了"跨变体共享同一 Map Definition 仅当变体不改 `gene
 
 ## 产物
 
-每实验目录内 `effects.txt`（上述全部统计的机器可重算文本 + gate 判定，原始计数齐备）并折算内容 hash 入 `hashes.txt`；`docs/balance-b4-sensitivity.md` 携带各实验 manifest 摘要与全部产物内容 hash（plan 第 12 节，`runs/` 不跟踪）。若没有任何参数稳定，诚实产物就是带逐方向停止记录的 pilot/full 报告——完成条件同样满足（每候选均有效应 + 副作用报告与停止记录）。
+每实验目录内 `effects.txt`（上述全部统计的机器可重算文本 + gate 判定，原始计数齐备）并折算内容 hash 入 `hashes.txt`；`docs/balance/balance-b4-sensitivity.md` 携带各实验 manifest 摘要与全部产物内容 hash（plan 第 12 节，`runs/` 不跟踪）。若没有任何参数稳定，诚实产物就是带逐方向停止记录的 pilot/full 报告——完成条件同样满足（每候选均有效应 + 副作用报告与停止记录）。
 
 ## 不变式
 

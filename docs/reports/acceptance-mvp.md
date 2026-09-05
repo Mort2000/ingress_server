@@ -1,6 +1,6 @@
 # MVP Acceptance Record (M-final)
 
-One section per `A-*` row of `.scratch/ingress_arena_v0.1/mvp/06-roadmap-acceptance.md`
+One section per `A-*` row of `docs/spec/mvp/06-roadmap-acceptance.md`
 ("MVP Done"). Verdicts are **MET**, **MET-VIA-ESCAPE-HATCH** (met through a
 documented, plan-sanctioned deviation), or **PARTIAL** (with the reason and
 what remains). The roadmap bookkeeping line applies to every row:
@@ -194,8 +194,8 @@ state, no SHM writes, no network.*
   defended by audit R1/R5 (D77 states the exact boundary; NOT claimed:
   side channels, physical container escape, arbitrary untrusted code).
 - Config: frozen r1 sandbox settings (2 GiB AS, 20 s wall clamped inside
-  the per-match budget). Reports: `docs/sandbox.md`,
-  `docs/build-provenance.md`, the audit/sandbox test suites.
+  the per-match budget). Reports: `docs/design/sandbox.md`,
+  `docs/design/build-provenance.md`, the audit/sandbox test suites.
 
 ## A-PHASE-INTEGRITY — Phase Integrity — **MET**
 
@@ -210,7 +210,7 @@ state, no SHM writes, no network.*
   exemption, pinned from both sides. The compile-fail harness pins that
   views expose no raw-mapping escape (E0599).
 - Reports: arena-client-sdk `runtime.rs`/`isolation.rs` tests +
-  `tools/audit` suite; `docs/sandbox.md` evidence map (D77).
+  `tools/audit` suite; `docs/design/sandbox.md` evidence map (D77).
 
 ## A-BALANCE — Balance — **MET-VIA-ESCAPE-HATCH** (documented and
 scheduled; the tuning round has NOT been run)
@@ -226,7 +226,7 @@ scheduled; the tuning round has NOT been run)
   report §5, root cause A). Everything else sits at or below
   50% with the mirror exactly balanced (H×H 1126/1124).
 - The finding is RECORDED, root-caused, and scheduled (M6 milestone
-  log + `docs/balance-report-r1.md` §5): the plan's balance loop expects
+  log + `docs/balance/balance-report-r1.md` §5): the plan's balance loop expects
   the first analysis round to surface exactly such dominances and to
   answer them with rule/parameter tuning in a later round — which has
   not happened yet. Related recorded biases: the Hybrid-mirror ENL bias
@@ -254,10 +254,10 @@ links, fields, and per-round scores.*
   renders the whole timeline (`tools/replay-export` + `viewer/`): O(1)
   jump to any round, three view modes honoring R-VIS, integer-exact
   score display, and a machine-tested consistency suite over the emitted
-  HTML (`docs/viewer.md`); committed live sample `viewer/sample.html`
+  HTML (`docs/design/viewer.md`); committed live sample `viewer/sample.html`
   (the real r1 m11 match).
 - Reports: `arena-replay` test suites (decode/replay/intake), the
-  replay-export suite, `docs/viewer.md`.
+  replay-export suite, `docs/design/viewer.md`.
 
 ---
 

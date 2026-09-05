@@ -1,5 +1,5 @@
 //! Experiment plans, config variants and the frozen R2 seed sets (B1,
-//! `docs/ai-balance-plan.md` sections 5.3 and 8.1, ADR-0014): what a
+//! `docs/balance/ai-balance-plan.md` sections 5.3 and 8.1, ADR-0014): what a
 //! balance experiment runs — its stage, seed set, complete config
 //! variants, policy specs, matchups and acceptance gates — plus the frozen
 //! R2 seed derivations. Nothing here executes matches; the frozen m6

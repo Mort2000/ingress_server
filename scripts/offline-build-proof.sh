@@ -14,7 +14,7 @@
 # Evidence is recorded under runs/builds/<id>/: the build log, the
 # fresh-environment capture, the binary hashes, and the provenance
 # manifest. The pinned toolchain must be pre-provisioned via rustup
-# (the one out-of-band network step; see docs/build-provenance.md).
+# (the one out-of-band network step; see docs/design/build-provenance.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"

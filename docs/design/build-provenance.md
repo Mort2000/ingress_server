@@ -188,7 +188,7 @@ scripts/offline-build-proof.sh          # runs/builds/<id>/{build.log,manifest.j
 
 # 3) run matches from the RECORDED products only
 target/release/arena-server --socket ... --match-id <fresh-id> ...
-# clients are executed under the sandbox runner (docs/sandbox.md):
+# clients are executed under the sandbox runner (docs/design/sandbox.md):
 target/release/sandbox-runner --rw <scratch> -- target/release/<client> <socket>
 ```
 

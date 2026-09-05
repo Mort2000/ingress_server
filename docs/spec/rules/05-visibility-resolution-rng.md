@@ -65,7 +65,7 @@ receive_bucket = floor((received_at - round_start) / PRIORITY_BUCKET)
 
 Client 不提供任意 `stream_id`、排序 nonce 或其他 Tie-break 输入。选中一个 Stream 后按命令序号连续处理全部命令，不插入其他 Stream；每条命令仍按 [`R-RESOLVE-02`](#r-resolve-02-非法动作) 独立校验。即使全部命令最终 `DROP`，该 Stream 仍保留原排序位置，禁止根据执行结果重排。权威 Bucket、每 Faction 到达顺序、Round Start Signal 顺序和最终执行顺序必须写入 Replay。
 
-若未来明确把极端低延迟也作为竞技因素，应在新规则版本中显式切换为 Pure FIFO；v0.1 使用 Priority Bucket。取舍背景见 [ADR-0002](../../../docs/adr/0002-validate-priority-bucket-in-mvp.md) 与 [ADR-0003](../../../docs/adr/0003-agent-command-stream-is-scheduling-unit.md)。
+若未来明确把极端低延迟也作为竞技因素，应在新规则版本中显式切换为 Pure FIFO；v0.1 使用 Priority Bucket。取舍背景见 [ADR-0002](../../adr/0002-validate-priority-bucket-in-mvp.md) 与 [ADR-0003](../../adr/0003-agent-command-stream-is-scheduling-unit.md)。
 
 ## R-RESOLVE-04 典型冲突
 
@@ -83,6 +83,6 @@ Client 不提供任意 `stream_id`、排序 nonce 或其他 Tie-break 输入。�
 | `hack` | Round、Agent ID、Portal ID、成功 Hack 序号 |
 | `reinforcement` | Epoch 及坐标轴 |
 
-XOF 输出映射到有限整数范围时必须使用固定 rejection sampling，禁止直接 `% n` 引入 modulo bias。新增、删除或重排其他随机调用不得改变既有地址的输出；失败 Hack 不产生可观察样本。`rng_version`、地址编码、字节序与 Golden Vectors 属于规则版本的一部分，详见 [ADR-0011](../../../docs/adr/0011-domain-separated-blake3-random-oracle.md)。
+XOF 输出映射到有限整数范围时必须使用固定 rejection sampling，禁止直接 `% n` 引入 modulo bias。新增、删除或重排其他随机调用不得改变既有地址的输出；失败 Hack 不产生可观察样本。`rng_version`、地址编码、字节序与 Golden Vectors 属于规则版本的一部分，详见 [ADR-0011](../../adr/0011-domain-separated-blake3-random-oracle.md)。
 
 地图生成不属于该 Random Oracle 或 Replay 状态转换；Replay Header 直接保存冻结的完整 Map Definition。确定性重放还要求记录首个提交与被忽略的重复提交，并固定运行期 RNG、序列化和 Server 版本；这些元数据必须进入 Replay Header。
