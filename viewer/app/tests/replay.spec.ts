@@ -128,7 +128,12 @@ test("inventory hover, exact trajectories, zoom, playback, and visibility", asyn
       .join(""),
   );
   const initial = await page.locator("#map").getAttribute("viewBox");
+  const markerWidth = (await page.locator(".portal-hp").first().boundingBox())!
+    .width;
   await page.locator("#zoom-in").click();
+  expect(
+    (await page.locator(".portal-hp").first().boundingBox())!.width,
+  ).toBeCloseTo(markerWidth, 1);
   expect(await page.locator("#map").getAttribute("viewBox")).not.toBe(initial);
   await page.locator("#zoom-reset").click();
   await expect(page.locator("#map")).toHaveAttribute("viewBox", initial!);

@@ -13,6 +13,9 @@ export class TacticalMap {
   private drag?: { point: Point; camera: Camera; box: boolean; moved: boolean };
   private selection = document.createElementNS(ns, "rect");
   private boxMode = false;
+  private resizeObserver = new ResizeObserver(() =>
+    this.refreshCameraDrawing(),
+  );
   constructor(
     private host: HTMLElement,
     private model: ReplayModel,
@@ -28,6 +31,7 @@ export class TacticalMap {
     this.selection.setAttribute("class", "zoom-selection");
     host.prepend(this.svg);
     this.reset();
+    this.resizeObserver.observe(host);
     this.svg.addEventListener(
       "wheel",
       (e) => {
@@ -134,6 +138,7 @@ export class TacticalMap {
     this.svg.addEventListener("focusout", () => this.setHover(null));
   }
   destroy() {
+    this.resizeObserver.disconnect();
     this.svg.remove();
   }
   setBoxMode(enabled: boolean) {
@@ -161,6 +166,11 @@ export class TacticalMap {
       this.model.data.header.config.map_width_cm / this.camera.width;
     this.host.querySelector("#zoom-level")!.textContent =
       `${factor.toFixed(1)}×`;
+    this.refreshCameraDrawing();
+  }
+  private refreshCameraDrawing() {
+    this.render();
+    this.highlight();
   }
   reset() {
     const c = this.model.data.header.config,
@@ -214,7 +224,9 @@ export class TacticalMap {
     const positions = new Map(
       m.data.header.map.portals.map(([id, x, y]) => [id, screen([x, y])]),
     );
-    const radius = c.map_width_cm / 130;
+    // Markers and labels remain readable at every zoom; game geometry,
+    // including the operation radius, remains in authoritative world units.
+    const radius = 5.5 / (this.svg.getScreenCTM()?.a ?? 1);
     const factionColor = (tag: number) => (tag === 0 ? colors.enl : colors.res);
     let content = `<defs><pattern id="grid" width="${c.map_width_cm / 12}" height="${c.map_height_cm / 12}" patternUnits="userSpaceOnUse"><path d="M${c.map_width_cm / 12},0H0V${c.map_height_cm / 12}" fill="none" stroke="#112333" vector-effect="non-scaling-stroke"/></pattern></defs><rect width="${c.map_width_cm}" height="${c.map_height_cm}" fill="url(#grid)" stroke="#25435b" vector-effect="non-scaling-stroke"/>`;
     for (const [a, b, d, fac] of snapshot.fields)
