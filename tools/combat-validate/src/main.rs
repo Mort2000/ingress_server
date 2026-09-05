@@ -7,6 +7,7 @@ use arena_bots::{
     r2::{R2_VERSION, tasks::Task},
 };
 use arena_core::{
+    config::GameConfig,
     event::EventKind,
     observe::Observation,
     resolve::{CommandEffect, CommandOutcome, Resolver, SubmittedCommandStream},
@@ -52,6 +53,14 @@ struct Arm {
 }
 
 fn arms(group: &str) -> Result<Vec<Arm>> {
+    if group == "recharge-factorial" {
+        return Ok(arms("factorial")?.into_iter().filter(|arm| {
+            matches!(arm.subject.parameters, PolicyParameters::BuilderDefender(p) if p.defense_task_cap != 1)
+        }).collect());
+    }
+    if group == "recharge-adaptive" {
+        return arms("adaptive-defense");
+    }
     let mut result = Vec::new();
     match group {
         "supply-defense" | "supply-adaptive" => {
@@ -151,7 +160,7 @@ fn arms(group: &str) -> Result<Vec<Arm>> {
     Ok(result)
 }
 
-fn input_cases(archive: &Path, count: u32) -> Result<Vec<Input>> {
+fn input_cases(archive: &Path, maps: &[u32]) -> Result<Vec<Input>> {
     let records = parse_balance_tsv(&fs::read_to_string(archive.join("matches.tsv"))?)?;
     let mapping = fs::read_to_string(archive.join("replays.tsv"))?;
     let mut lines = mapping.lines();
@@ -184,7 +193,7 @@ fn input_cases(archive: &Path, count: u32) -> Result<Vec<Input>> {
     }
     let mut result = Vec::new();
     for row in records.iter().filter(|r| {
-        r.map_index < count
+        maps.contains(&r.map_index)
             && r.variant_id == "default"
             && r.policy_a == PolicyId::BuilderDefenderR2
             && r.policy_b == PolicyId::BuilderDisruptorR2
@@ -233,13 +242,13 @@ fn input_cases(archive: &Path, count: u32) -> Result<Vec<Input>> {
     result.sort_by_key(|i| (i.map_index, i.leg));
     assert_eq!(
         result.len(),
-        count as usize * 2,
+        maps.len() * 2,
         "complete map/leg coverage"
     );
     for (i, input) in result.iter().enumerate() {
         assert_eq!(
             (input.map_index, input.leg),
-            ((i / 2) as u32, (i % 2) as u8)
+            (maps[i / 2], (i % 2) as u8)
         );
     }
     Ok(result)
@@ -319,51 +328,56 @@ fn side(faction: Faction) -> usize {
     if faction == Faction::Enl { 0 } else { 1 }
 }
 
-fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
+fn run(out: &Path, input: &Input, arm: &Arm, recharge_amount: u32) -> Result<String> {
     let name = format!("{}-m{}-leg{}", arm.tag, input.map_index, input.leg);
     let dir = out.join(&name);
     fs::create_dir(&dir)?;
     let source = decode_log(&fs::read(&input.replay)?)?;
     let h = &source.header;
+    let cfg = recharge_config(&h.config, recharge_amount);
     let specs = if input.leg == 0 {
         [arm.subject, arm.opponent]
     } else {
         [arm.opponent, arm.subject]
     };
     let mut players = [
-        make_policy_player(&specs[0], Faction::Enl, input.bot_seed, &h.config, &h.map),
-        make_policy_player(&specs[1], Faction::Res, input.bot_seed, &h.config, &h.map),
+        make_policy_player(&specs[0], Faction::Enl, input.bot_seed, &cfg, &h.map),
+        make_policy_player(&specs[1], Faction::Res, input.bot_seed, &cfg, &h.map),
     ];
     let mut shadows = [
-        make_policy_player(&specs[0], Faction::Enl, input.bot_seed, &h.config, &h.map),
-        make_policy_player(&specs[1], Faction::Res, input.bot_seed, &h.config, &h.map),
+        make_policy_player(&specs[0], Faction::Enl, input.bot_seed, &cfg, &h.map),
+        make_policy_player(&specs[1], Faction::Res, input.bot_seed, &cfg, &h.map),
     ];
-    let roster = GameState::initial_roster(&h.config);
+    let roster = GameState::initial_roster(&cfg);
     let entries = [
-        players[0].choose_spawns(&h.config, &h.map, &roster.0),
-        players[1].choose_spawns(&h.config, &h.map, &roster.1),
+        players[0].choose_spawns(&cfg, &h.map, &roster.0),
+        players[1].choose_spawns(&cfg, &h.map, &roster.1),
     ];
     assert_eq!(
         entries[0],
-        shadows[0].choose_spawns(&h.config, &h.map, &roster.0)
+        shadows[0].choose_spawns(&cfg, &h.map, &roster.0)
     );
     assert_eq!(
         entries[1],
-        shadows[1].choose_spawns(&h.config, &h.map, &roster.1)
+        shadows[1].choose_spawns(&cfg, &h.map, &roster.1)
     );
-    let enl = validate_initial_spawn_set(&roster.0, &entries[0], &h.config)
+    let enl = validate_initial_spawn_set(&roster.0, &entries[0], &cfg)
         .map_err(|e| format!("{e:?}"))?;
-    let res = validate_initial_spawn_set(&roster.1, &entries[1], &h.config)
+    let res = validate_initial_spawn_set(&roster.1, &entries[1], &cfg)
         .map_err(|e| format!("{e:?}"))?;
-    let mut state = GameState::new(h.config, &h.map, &enl, &res).map_err(|e| format!("{e:?}"))?;
+    let mut state = GameState::new(cfg, &h.map, &enl, &res).map_err(|e| format!("{e:?}"))?;
+    // Authoritative state hashes include GameConfig. Normalize only the
+    // config to the archived baseline to separately prove map/spawn identity.
+    let initial_world = GameState::new(h.config, &h.map, &enl, &res).map_err(|e| format!("{e:?}"))?;
+    let initial_world_hash = canon::hex(&canon::state_hash(&initial_world));
     let initial_hash = blake3::Hash::from(canon::state_hash(&state))
         .to_hex()
         .to_string();
     let resolver = Resolver::with_seed(h.game_seed);
-    let mut writer = ReplayWriter::new(h.game_seed, &h.config, &h.map, &enl, &res);
+    let mut writer = ReplayWriter::new(h.game_seed, &cfg, &h.map, &enl, &res);
     let mut trace = BufWriter::new(File::create(dir.join("trace.jsonl"))?);
     let mut stats = [Stats::default(), Stats::default()];
-    for _ in 0..h.config.total_rounds {
+    for _ in 0..cfg.total_rounds {
         let round = state.round();
         let observations = [
             Observation::for_faction(&state, Faction::Enl),
@@ -450,7 +464,7 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                         round,
                         faction,
                         agent_id: sub.agent_id,
-                        received_at_ms: sub.bucket * h.config.priority_bucket_ms as u64,
+                        received_at_ms: sub.bucket * cfg.priority_bucket_ms as u64,
                         receive_seq: seq as u32,
                         commands: sub.commands.clone(),
                     })
@@ -507,7 +521,7 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                             recharged |= hp > 0;
                             s.recharges += 1;
                             s.hp += hp as u64;
-                            s.supply += h.config.recharge_cost_supply as u64;
+                            s.supply += cfg.recharge_cost_supply as u64;
                             changed |= hp > 0;
                             writeln!(
                                 trace,
@@ -552,7 +566,7 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
                             )?;
                         }
                         CommandEffect::Captured { portal } => {
-                            portal_hp.insert(*portal, h.config.portal_max_hp);
+                            portal_hp.insert(*portal, cfg.portal_max_hp);
                             changed = true;
                         }
                         _ => changed = true,
@@ -617,8 +631,9 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
     fs::write(dir.join("replay.iarp"), &bytes)?;
     let subject = input.leg as usize;
     let scores = [verified.final_scores.0, verified.final_scores.1];
+    let config_json = config_json(&cfg);
     let record = format!(
-        "{{\"match\":\"{name}\",\"arm\":\"{}\",\"map_index\":{},\"leg\":{},\"source_index\":{},\"version\":\"{R2_VERSION}\",\"subject\":\"{}\",\"opponent\":\"{}\",\"subject_side\":{subject},\"subject_parameters\":\"{}\",\"opponent_parameters\":\"{}\",\"game_seed\":{},\"bot_seed\":{},\"initial_hash\":\"{initial_hash}\",\"subject_score\":{},\"opponent_score\":{},\"subject_stats\":{},\"opponent_stats\":{},\"rules_verified\":true,\"decisions_verified\":true,\"replay_blake3\":\"{}\",\"final_hash\":\"{}\"}}",
+        "{{\"match\":\"{name}\",\"arm\":\"{}\",\"map_index\":{},\"leg\":{},\"source_index\":{},\"version\":\"{R2_VERSION}\",\"subject\":\"{}\",\"opponent\":\"{}\",\"subject_side\":{subject},\"subject_parameters\":\"{}\",\"opponent_parameters\":\"{}\",\"game_seed\":{},\"bot_seed\":{},\"initial_hash\":\"{initial_hash}\",\"initial_world_hash\":\"{initial_world_hash}\",\"config\":{config_json},\"subject_score\":{},\"opponent_score\":{},\"subject_stats\":{},\"opponent_stats\":{},\"rules_verified\":true,\"decisions_verified\":true,\"replay_blake3\":\"{}\",\"final_hash\":\"{}\"}}",
         arm.tag,
         input.map_index,
         input.leg,
@@ -645,36 +660,95 @@ fn run(out: &Path, input: &Input, arm: &Arm) -> Result<String> {
     Ok(record)
 }
 
+fn recharge_config(base: &GameConfig, amount: u32) -> GameConfig {
+    use arena_runner::balance::plan::ConfigVariant;
+    let cfg = GameConfig { recharge_amount: amount, ..*base };
+    cfg.validate().expect("valid experimental configuration");
+    let baseline = ConfigVariant::new("base", *base, vec![]);
+    let changed = ConfigVariant::new("recharge", cfg, vec!["recharge_amount"])
+        .changed_fields_against(&baseline);
+    assert_eq!(changed, if amount == base.recharge_amount { vec![] } else { vec!["recharge_amount"] });
+    cfg
+}
+
+fn config_json(cfg: &GameConfig) -> String {
+    let mut bytes = Vec::new();
+    arena_core::codec::push_config(cfg, &mut bytes);
+    let fields = arena_runner::balance::plan::CONFIG_FIELD_NAMES.iter()
+        .zip(bytes.chunks_exact(4))
+        .map(|(key, word)| format!("\"{key}\":{}", u32::from_le_bytes(word.try_into().unwrap())))
+        .collect::<Vec<_>>();
+    format!("{{{}}}", fields.join(","))
+}
+
+fn map_indices(argument: &str) -> Result<Vec<u32>> {
+    let maps: Vec<u32> = if let Some(ids) = argument.strip_prefix("ids:") {
+        ids.split(',').map(str::parse).collect::<std::result::Result<_, _>>()?
+    } else {
+        let count: u32 = argument.parse()?;
+        if !(1..=20).contains(&count) { return Err("map count must be 1..20".into()); }
+        (0..count).collect()
+    };
+    if maps.is_empty() || maps.len() > 20 || maps.iter().any(|&id| id >= 20)
+        || maps.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("maps must be 1..20 consecutive maps or ids:<ascending unique indices in 0..20>".into());
+    }
+    Ok(maps)
+}
+
+#[derive(Clone)]
+struct Job {
+    input: Input,
+    arm: Arm,
+    recharge_amount: u32,
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 6 {
-        return Err("combat-validate <Development archive> <new output> <adaptive|factorial|adaptive-defense> <map count> <workers>".into());
+    if !(args.len() == 6 || args.len() == 7) {
+        return Err("combat-validate <Development archive> <new output> <group> <map count|ids:0,1,3,6> <workers> [only:name1,name2]".into());
     }
     let archive = Path::new(&args[1]);
     let out = Path::new(&args[2]);
-    let count: u32 = args[4].parse()?;
+    let maps = map_indices(&args[4])?;
+    let count = maps.len();
     let workers: usize = args[5].parse()?;
-    if count == 0 || count > 20 || workers == 0 || workers > 32 {
-        return Err("bounded run: 1..20 maps, 1..32 workers".into());
+    if workers == 0 || workers > 32 {
+        return Err("bounded run: 1..32 workers".into());
     }
     if out.exists() {
         return Err("output exists; use a new directory".into());
     }
-    let inputs = input_cases(archive, count)?;
+    let inputs = input_cases(archive, &maps)?;
     let arms = arms(&args[3])?;
+    let levels = if args[3].starts_with("recharge-") { vec![15, 20, 25] } else { vec![15] };
+    let map_ids = maps.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let levels_tag = levels.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
     fs::create_dir_all(out)?;
     fs::write(
         out.join("manifest.txt"),
         format!(
-            "status=running\nversion={R2_VERSION}\nsource_archive={}\ngroup={}\nmaps={count}\nworkers={workers}\n",
+            "status=running\nversion={R2_VERSION}\nsource_archive={}\ngroup={}\nmaps={count}\nmap_indices={map_ids}\nrecharge_amounts={levels_tag}\nworkers={workers}\n",
             archive.display(),
             args[3]
         ),
     )?;
-    let jobs: Vec<_> = arms
-        .iter()
-        .flat_map(|arm| inputs.iter().map(move |input| (input.clone(), arm.clone())))
-        .collect();
+    let mut jobs = Vec::new();
+    for recharge_amount in levels {
+        for arm in &arms {
+            let mut arm = arm.clone();
+            if args[3].starts_with("recharge-") { arm.tag = format!("h{recharge_amount}-{}", arm.tag); }
+            jobs.extend(inputs.iter().map(|input| Job { input: input.clone(), arm: arm.clone(), recharge_amount }));
+        }
+    }
+    if let Some(selection) = args.get(6) {
+        let names: std::collections::BTreeSet<_> = selection.strip_prefix("only:")
+            .ok_or("optional selection must start with only:")?.split(',').collect();
+        jobs.retain(|job| names.contains(format!("{}-m{}-leg{}", job.arm.tag, job.input.map_index, job.input.leg).as_str()));
+        if jobs.len() != names.len() { return Err("selection contains an unknown match".into()); }
+        let manifest = fs::read_to_string(out.join("manifest.txt"))?;
+        fs::write(out.join("manifest.txt"), format!("{manifest}selected_matches={}\n", names.into_iter().collect::<Vec<_>>().join(",")))?;
+    }
     let jobs = Arc::new(jobs);
     let next = AtomicUsize::new(0);
     let mut results = std::thread::scope(|scope| -> Result<Vec<String>> {
@@ -686,10 +760,10 @@ fn main() -> Result<()> {
                 let mut result = Vec::new();
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some((input, arm)) = jobs.get(i) else {
+                    let Some(job) = jobs.get(i) else {
                         break;
                     };
-                    result.push(run(out, input, arm)?);
+                    result.push(run(out, &job.input, &job.arm, job.recharge_amount)?);
                 }
                 Ok(result)
             }));
@@ -716,4 +790,41 @@ fn main() -> Result<()> {
         ),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recharge_levels_change_exactly_one_rule_and_preserve_default() {
+        let base = GameConfig::default();
+        assert_eq!(base.recharge_amount, 15);
+        for amount in [15, 20, 25] {
+            let cfg = recharge_config(&base, amount);
+            assert_eq!(cfg.recharge_amount, amount);
+            assert_eq!(GameConfig { recharge_amount: 15, ..cfg }, base);
+            let encoded = config_json(&cfg);
+            assert!(encoded.contains(&format!("\"recharge_amount\":{amount}")));
+            assert_eq!(encoded.matches(':').count(), arena_core::codec::CONFIG_U32_COUNT);
+        }
+    }
+
+    #[test]
+    fn explicit_maps_cannot_silently_reorder_or_duplicate_pairs() {
+        assert_eq!(map_indices("ids:0,1,3,6").unwrap(), vec![0,1,3,6]);
+        assert_eq!(map_indices("4").unwrap(), vec![0,1,2,3]);
+        for invalid in ["0", "21", "4294967295", "ids:", "ids:1,1", "ids:3,1", "ids:20"] {
+            assert!(map_indices(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn recharge_arms_freeze_the_policy_switches() {
+        let factorial = arms("recharge-factorial").unwrap();
+        assert_eq!(factorial.len(), 4);
+        assert_eq!(factorial.iter().map(|a| a.tag.as_str()).collect::<Vec<_>>(),
+            vec!["def0-atk0", "def0-atk1", "def2-atk0", "def2-atk1"]);
+        assert_eq!(arms("recharge-adaptive").unwrap().len(), 2);
+    }
 }

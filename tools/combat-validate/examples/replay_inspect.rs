@@ -1,4 +1,4 @@
-//! Read-only r2.5 replay review. JSON adapters reuse the review-bot-replay template.
+//! Read-only version-matched replay review. JSON adapters reuse the review-bot-replay template.
 //! Both production policies and a request-level shadow must match every archived stream.
 //! Supply probes change one observed inventory only; they are not simulated game outcomes.
 use arena_bots::{
@@ -97,6 +97,15 @@ fn o(pairs: Vec<(&str, J)>) -> J {
 }
 fn a(items: Vec<J>) -> J {
     J::Arr(items)
+}
+
+fn config_j(cfg: &GameConfig) -> J {
+    let mut bytes = Vec::new();
+    arena_core::codec::push_config(cfg, &mut bytes);
+    o(arena_runner::balance::plan::CONFIG_FIELD_NAMES.iter()
+        .zip(bytes.chunks_exact(4))
+        .map(|(&key, word)| (key, i(u32::from_le_bytes(word.try_into().unwrap()))))
+        .collect())
 }
 fn keys_j(keys: &BTreeMap<PortalId, u32>) -> J {
     J::Obj(keys.iter().map(|(p, n)| (p.0.to_string(), i(*n))).collect())
@@ -658,6 +667,7 @@ fn main() {
     emit(o(vec![
         ("kind", s("identity")),
         ("version", s(R2_VERSION)),
+        ("config", config_j(&h.config)),
         ("subject_side", i(subject as u64)),
         ("game_seed", i(h.game_seed)),
         ("bot_seed", i(seed)),

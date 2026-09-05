@@ -203,7 +203,10 @@ def analyze(directory: Path) -> dict:
         'supply-adaptive': {'reserve0', 'reserve5'},
     }[group]
     assert {r.arm for r in rows} == expected_arms
-    expected_cases = {(m, leg) for m in range(int(manifest['maps'])) for leg in range(2)}
+    maps = ([int(m) for m in manifest['map_indices'].split(',')] if 'map_indices' in manifest
+            else list(range(int(manifest['maps']))))
+    assert len(maps) == len(set(maps)) == int(manifest['maps'])
+    expected_cases = {(m, leg) for m in maps for leg in range(2)}
     baseline: dict[tuple[int, int], Match] = {}
     summaries = {}
     for arm in sorted(expected_arms):

@@ -23,6 +23,8 @@ python3 tools/combat-validate/analyze.py runs/balance/NEW-factorial runs/balance
 | `adaptive` | Adaptive opening/lead 为 300/550、300/0、0/0 | 隔离阶段门槛；`legacy` 只表示门槛值，不代表运行了旧版代码 |
 | `compound` | Defender / Disruptor 各自 `core.combat_auxiliaries` 开/关 | 固定防守 cap=2、攻击开启，隔离双方组合动作的交互效应 |
 | `supply-defense` / `supply-adaptive` | Defender / Adaptive 的 `supplyreserve` 为 0/5 | 固定 Disruptor 补给关闭，比较独立补采和远程防守补给路线 |
+| `recharge-factorial` | 恢复量 15/20/25 × Defender cap 0/2 × Disruptor 攻击开/关 | 固定策略，比较攻防开关收益对充电效率的敏感度 |
+| `recharge-adaptive` | 恢复量 15/20/25 × Adaptive cap 0/2 | 检查增强充电在混合策略中的防守增益 |
 
 除明确列出的参数外，使用构建版本的完整默认参数；完整展开值写入 `result.json`。
 复现历史版本须使用相应源码或冻结二进制，不能用当前默认参数冒充历史输入。
@@ -87,3 +89,27 @@ python3 tools/combat-validate/evaluate_supply.py runs/balance/NEW-supply-defense
 评估脚本审计 64 场账本/收益，要求 32 场关闭组与 r2.5 对应完整 IARP 字节一致，
 并对预先固定的 Defender m3/leg0、Adaptive m6/leg0 修复组作规则/生产策略/请求影子
 三重检查。输出配对汇总、逐 Agent 账本、身份、完整样本 trace 与 SHA-256。
+
+### 充电效率规则试调
+
+新组仅改 `GameConfig.recharge_amount`，不修改全局默认值。源档仍要求默认配置，
+实际变体同时交给双方策略、Resolver 和 IARP；完整配置写入每场 `result.json`。
+地图参数兼容原来的数量，也支持 `ids:0,1,3,6` 形式的升序不重复 Development 索引。
+
+```sh
+cargo build --release --offline -p combat-validate --bins --examples
+target/release/combat-validate runs/balance/b2-readiness-rr-r3 runs/balance/NEW-recharge-factorial recharge-factorial ids:0,1,3,6 10
+target/release/combat-validate runs/balance/b2-readiness-rr-r3 runs/balance/NEW-recharge-adaptive recharge-adaptive ids:0,1,3,6 6
+python3 tools/combat-validate/analyze_recharge.py runs/balance/NEW-recharge-factorial runs/balance/NEW-recharge-adaptive runs/balance/NEW-recharge-analysis
+```
+
+专用分析器检查只有声明规则不同、每种策略参数跨档一致，并按同图双腿报告机制
+开关和规则变化的配对效应。`initial_hash` 是包含实际配置的权威初始 hash；
+`initial_world_hash` 用源档基准配置归一，仅证明初始地图/出生集一致，不替代规则 hash。
+自动对 25 HP 的两场预定压力样本进行全场规则/生产策略/请求影子复现，并核对
+检查器从 IARP 解出的完整配置与结果元数据一致。
+
+中断恢复使用 `resume_recharge.py SOURCE RETRY_OUTPUT MERGED_OUTPUT --binary DRIVER`。
+它校验完整记录及账本、固定原文件校验和，只向新目录补跑缺失场次，最后合并到另一个
+新目录；原目录和不完整 trace 不会被覆盖。驱动的可选 `only:name1,name2` 用于这种
+明确子批次；子批次本身不满足完整实验臂覆盖，不能直接当作全批结论。
