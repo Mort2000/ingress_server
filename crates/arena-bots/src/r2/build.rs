@@ -12,6 +12,12 @@
 //! - the plan triangle is the near-equal seeded pick over the value-ranked
 //!   candidates ([`crate::r2::value::rank_field_candidates`]) — mirror
 //!   factions draw different triangles and spawn sets;
+//! - a SECOND non-crossing candidate (r2.1,
+//!   [`CoreParams::second_plan_discount_permille`]) feeds the same
+//!   allocator at a discounted priority, so the agents one triangle cannot
+//!   employ — everyone past its six stations, reinforcements included —
+//!   build the next-best field instead of idling (the 2026-09-05 action
+//!   audit's task-pool finding: 66–68% no-task agent-rounds);
 //! - replanning mirrors the frozen `FieldPlanner` semantics: COMPLETE (all
 //!   three own links exist) and INVALID (enemy-held vertex, foreign link
 //!   on a planned pair, foreign link crossing a planned edge) replan
@@ -35,10 +41,10 @@ use arena_core::map::MapDefinition;
 use arena_core::observe::Observation;
 use arena_core::types::{AgentId, Coord, Faction, PortalId};
 
-use crate::common::{self, CommandList, HackLedger, in_range, link_is_legal, owners, step_toward};
+use crate::common::{self, CommandList, HackLedger, in_range, owners, step_toward};
 use crate::r2::rng::{R2Rng, R2Stream};
 use crate::r2::sample::pick_near_equal;
-use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
+use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate, allocate_compatible};
 use crate::r2::value::{
     Economy, FieldCandidate, ValueParams, field_candidates, field_value, rank_field_candidates,
     travel_rounds_to,
@@ -73,6 +79,16 @@ pub struct CoreParams {
     /// 10.1 mirror gate; the seeded tie-break alone cannot diverge a
     /// singleton band).
     pub spawn_jitter_cm: i32,
+    /// Priority discount (permille) of the SECOND plan's tasks (r2.1): the
+    /// surplus agents a single triangle cannot employ — everyone past its
+    /// six stations, reinforcements included — work the next-best
+    /// non-crossing candidate at `field_value * discount / 1000`, so the
+    /// primary plan still finishes first while idle agents build income
+    /// (the 2026-09-05 action audit: 66–68% of defender/blocker agent-rounds
+    /// carried no task against the disruptor's 10%). `0` disables the
+    /// second plan (the r2.0 behavior, also how pre-r2.1 parameter records
+    /// parse back).
+    pub second_plan_discount_permille: u32,
     /// The shared value model's thresholds (inlined into the record).
     pub value: ValueParams,
 }
@@ -84,22 +100,24 @@ impl Default for CoreParams {
             replan_retry_rounds: 25,
             fallback_priority: 1,
             spawn_jitter_cm: 1_000,
+            second_plan_discount_permille: 750,
             value: ValueParams::default(),
         }
     }
 }
 
-const CORE_PARAM_KEYS: [&str; 4] = ["nearequal", "retry", "fbpri", "jit"];
+const CORE_PARAM_KEYS: [&str; 5] = ["nearequal", "retry", "fbpri", "jit", "sec2p"];
 
 impl CoreParams {
     /// Canonical serialization:
-    /// `nearequal=..;retry=..;fbpri=..;jit=..|value=<ValueParams::tag>`.
+    /// `nearequal=..;retry=..;fbpri=..;jit=..;sec2p=..|value=<ValueParams::tag>`.
     pub fn tag(&self) -> String {
         let values = [
             self.near_equal_permille.to_string(),
             self.replan_retry_rounds.to_string(),
             self.fallback_priority.to_string(),
             self.spawn_jitter_cm.to_string(),
+            self.second_plan_discount_permille.to_string(),
         ];
         let mut tag = String::new();
         for (key, value) in CORE_PARAM_KEYS.iter().zip(values) {
@@ -115,15 +133,23 @@ impl CoreParams {
         tag
     }
 
-    /// Parses [`CoreParams::tag`] back — strictly canonical.
+    /// Parses [`CoreParams::tag`] back — strictly canonical for r2.1
+    /// records (exactly the five keys). A pre-r2.1 record (the four keys
+    /// without `sec2p`) parses with `second_plan_discount_permille = 0`:
+    /// that IS the r2.0 behavior the record was produced with, so archived
+    /// experiments keep re-executing byte-identically instead of failing
+    /// to parse.
     pub fn from_tag(tag: &str) -> Option<CoreParams> {
         let (own, value) = tag.split_once('|')?;
         let value = value.strip_prefix("value=")?;
         let parts: Vec<&str> = own.split(';').collect();
-        if parts.len() != CORE_PARAM_KEYS.len() {
+        if parts.len() != CORE_PARAM_KEYS.len() && parts.len() != CORE_PARAM_KEYS.len() - 1 {
             return None;
         }
-        let mut values = [0i64; 4];
+        let mut values = [0i64; 5];
+        // A legacy record's missing key defaults to 0 (disabled) — the
+        // value the r2.0 core effectively ran with.
+        values[4] = 0;
         for (index, part) in parts.iter().enumerate() {
             let (key, raw) = part.split_once('=')?;
             if key != CORE_PARAM_KEYS[index] {
@@ -136,6 +162,7 @@ impl CoreParams {
             replan_retry_rounds: u32::try_from(values[1].max(0) as u64).ok()?,
             fallback_priority: values[2],
             spawn_jitter_cm: i32::try_from(values[3].clamp(0, 100_000)).ok()?,
+            second_plan_discount_permille: u32::try_from(values[4].max(0) as u64).ok()?,
             value: ValueParams::from_tag(value)?,
         })
     }
@@ -150,6 +177,25 @@ enum PlanStatus {
     Invalid,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentDecision {
+    pub agent: AgentId,
+    /// Executable requests after policy overlays, before allocation. With no grant,
+    /// zero means no supplied feasible candidates; nonzero means reservation conflict.
+    pub candidate_count: usize,
+    /// Requests held back because the action is not available this round.
+    pub unavailable_count: usize,
+    pub grant: Option<Task>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecisionTrace {
+    pub round: u32,
+    pub active: Option<FieldCandidate>,
+    pub second: Option<FieldCandidate>,
+    pub agents: Vec<AgentDecision>,
+}
+
 pub struct BuilderCore {
     faction: Faction,
     own: arena_core::types::Owner,
@@ -162,11 +208,18 @@ pub struct BuilderCore {
     /// The plan validated for THIS round (`None` = fallback mode).
     active: Option<FieldCandidate>,
     next_search_round: u32,
+    /// The SECOND plan (r2.1): the best value-ranked candidate whose edges
+    /// cross neither the active plan's pending edges nor any live link —
+    /// the task source for agents the primary triangle cannot employ.
+    /// `None` in fallback mode and while the discount is 0.
+    second: Option<FieldCandidate>,
+    next_second_search_round: u32,
     /// The last spawn set (test/diagnostic echo).
     last_spawns: Vec<(AgentId, Coord)>,
     /// Best pending own candidate area2 of the last search (the economy's
     /// opportunity rate; 0 when the map offered nothing).
     best_pending_area2: u64,
+    last_decision: Option<DecisionTrace>,
 }
 
 impl BuilderCore {
@@ -188,8 +241,11 @@ impl BuilderCore {
             plan: None,
             active: None,
             next_search_round: 1,
+            second: None,
+            next_second_search_round: 1,
             last_spawns: Vec::new(),
             best_pending_area2: 0,
+            last_decision: None,
         }
     }
 
@@ -372,11 +428,91 @@ impl BuilderCore {
                 };
             }
         }
+        self.refresh_second(obs);
+    }
+
+    /// The second-plan discipline (r2.1): in plan mode with the discount
+    /// enabled, keep a SECOND active candidate for the agents the primary
+    /// triangle cannot employ. COMPLETE (the surplus built it) and INVALID
+    /// re-derive immediately; a failed search is throttled by the same
+    /// retry as the primary. Fallback mode clears it (the fallback spread
+    /// already serves every agent). Deterministic: the best non-crossing
+    /// candidate by (value, vertices) — no RNG, so mirror factions stay
+    /// seed-symmetric.
+    fn refresh_second(&mut self, obs: &Observation) {
+        if self.params.second_plan_discount_permille == 0 || self.active.is_none() {
+            self.second = None;
+            self.next_second_search_round = obs.round;
+            return;
+        }
+        let second_active = self
+            .second
+            .is_some_and(|second| self.status(&second, obs) == PlanStatus::Active);
+        if second_active && self.second != self.active {
+            return;
+        }
+        if obs.round < self.next_second_search_round {
+            return;
+        }
+        let ranked = rank_field_candidates(obs, self.faction, &self.cfg, &self.params.value);
+        let picked = ranked
+            .iter()
+            .filter(|(_, candidate)| {
+                Some(candidate) != self.active.as_ref() && !self.crosses_plan(obs, candidate)
+            })
+            .find(|(_, candidate)| self.status(candidate, obs) == PlanStatus::Active)
+            .map(|(_, candidate)| *candidate);
+        self.second = picked;
+        if picked.is_none() {
+            self.next_second_search_round = obs.round + self.params.replan_retry_rounds;
+        }
+    }
+
+    /// Whether `candidate`'s pending edges cross any pending edge of the
+    /// ACTIVE plan (shared endpoints exempt — a shared vertex anchors both
+    /// triangles). Existing links cannot be crossed by legality, so only
+    /// the two plans' pending edges interact.
+    fn crosses_plan(&self, obs: &Observation, candidate: &FieldCandidate) -> bool {
+        let Some(plan) = &self.active else {
+            return false;
+        };
+        for (cs, ct) in Self::edges(&candidate.vertices) {
+            let candidate_link = arena_core::types::LinkId::new(cs, ct);
+            let fired = obs.links.iter().any(|l| Some(l.id) == candidate_link);
+            if fired {
+                continue;
+            }
+            let (ps, pt) = (
+                common::portal(obs, cs).position,
+                common::portal(obs, ct).position,
+            );
+            for (ss, st) in Self::edges(&plan.vertices) {
+                let plan_link = arena_core::types::LinkId::new(ss, st);
+                let plan_fired = obs.links.iter().any(|l| Some(l.id) == plan_link);
+                if plan_fired || cs == ss || cs == st || ct == ss || ct == st {
+                    continue;
+                }
+                let (qs, qt) = (
+                    common::portal(obs, ss).position,
+                    common::portal(obs, st).position,
+                );
+                if arena_core::geometry::segments_intersect(ps, pt, qs, qt) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The plan validated for this round (`None` = fallback mode).
     pub fn active(&self) -> Option<&FieldCandidate> {
         self.active.as_ref()
+    }
+
+    /// The second plan validated for this round (`None` = no surplus-work
+    /// candidate; test/diagnostic accessor).
+    pub fn second(&self) -> Option<&FieldCandidate> {
+        self.second.as_ref()
     }
 
     /// The faction's economy at `obs`: horizon from the value model,
@@ -421,7 +557,10 @@ impl BuilderCore {
     /// the target key), each agent ranked by net marginal priority. An
     /// agent requests several tasks so the allocator can fall through when
     /// its preferred station is taken — the staggering that removes
-    /// same-portal crowding.
+    /// same-portal crowding. With the r2.1 second plan active, the same
+    /// stations of the SECOND candidate are appended at the recorded
+    /// discount — surplus agents (and reinforcements) fall through into
+    /// them after the primary plan's work, instead of idling.
     pub fn build_requests(&self, obs: &Observation) -> BTreeMap<AgentId, Vec<TaskRequest>> {
         let mut requests = BTreeMap::new();
         let Some(plan) = &self.active else {
@@ -429,44 +568,105 @@ impl BuilderCore {
         };
         let base = field_value(obs, self.faction, &self.cfg, &self.params.value, plan);
         let per_round = plan.area2;
+        // The second plan's discounted base: its stations rank strictly
+        // below comparable primary stations but far above any fallback. A
+        // non-positive discounted base requests nothing (surplus agents
+        // idle rather than build a candidate whose setup outlasts its
+        // value).
+        let second_base = self.second.map_or(0, |candidate| {
+            let raw = field_value(obs, self.faction, &self.cfg, &self.params.value, &candidate);
+            (raw as i128 * self.params.second_plan_discount_permille as i128 / 1000)
+                .clamp(i64::MIN as i128, i64::MAX as i128) as i64
+        });
+        let second = match (&self.second, second_base > 0) {
+            (Some(second), true) => Some(*second),
+            _ => None,
+        };
+        let second_per_round = second.map_or(0, |candidate| candidate.area2);
         let keyed = |portal: PortalId| {
             obs.own_agents
                 .iter()
                 .any(|agent| agent.keys.get(&portal).copied().unwrap_or(0) >= 1)
         };
-        for me in obs.own_agents.iter() {
-            let mut mine = Vec::new();
-            for &vertex in &plan.vertices {
-                let view = common::portal(obs, vertex);
-                match view.owner {
-                    arena_core::types::Owner::Neutral => {
-                        let pri = self.station_priority(obs, base, per_round, me, vertex);
-                        mine.push(TaskRequest::one_shot(Task::Capture { portal: vertex }, pri));
-                    }
-                    owner if owner == self.own && !keyed(vertex) => {
-                        let pri = self.station_priority(obs, base, per_round, me, vertex);
-                        mine.push(TaskRequest::one_shot(Task::KeyFarm { portal: vertex }, pri));
-                    }
-                    _ => {}
-                }
-            }
-            for (source, target) in Self::edges(&plan.vertices) {
-                let link_id =
-                    arena_core::types::LinkId::new(source, target).expect("distinct plan vertices");
-                let exists = obs
+        let mut missing_key_vertices = std::collections::BTreeSet::new();
+        for candidate in [Some(plan), second.as_ref()].into_iter().flatten() {
+            for (source, target) in Self::edges(&candidate.vertices) {
+                if obs
                     .links
                     .iter()
-                    .any(|l| l.id == link_id && l.faction == self.faction);
-                if exists {
+                    .any(|link| link.id == arena_core::types::LinkId::new(source, target).unwrap())
+                {
                     continue;
                 }
-                let (view_s, view_t) = (common::portal(obs, source), common::portal(obs, target));
-                if view_s.owner != self.own || view_t.owner != self.own {
-                    continue;
+                let owned = [source, target]
+                    .into_iter()
+                    .all(|portal| common::portal(obs, portal).owner == self.own);
+                let no_usable_holder = owned
+                    && !obs.own_agents.iter().any(|agent| {
+                        [(source, target), (target, source)]
+                            .into_iter()
+                            .any(|(s, t)| {
+                                common::link_completion_delay(obs, self.own, &self.cfg, agent, s, t)
+                                    .is_some()
+                            })
+                    });
+                if (!keyed(source) && !keyed(target)) || no_usable_holder {
+                    missing_key_vertices.extend([source, target]);
                 }
-                if me.keys.get(&target).copied().unwrap_or(0) >= 1 {
-                    let pri = self.station_priority(obs, base, per_round, me, source);
-                    mine.push(TaskRequest::one_shot(Task::Link { source, target }, pri));
+            }
+        }
+        for me in obs.own_agents.iter() {
+            let mut mine = Vec::new();
+            for (candidate, base, per_round) in [
+                (Some(plan), base, per_round),
+                (second.as_ref(), second_base, second_per_round),
+            ] {
+                let Some(candidate) = candidate else {
+                    continue;
+                };
+                for &vertex in &candidate.vertices {
+                    let view = common::portal(obs, vertex);
+                    match view.owner {
+                        arena_core::types::Owner::Neutral => {
+                            let pri = self.station_priority(obs, base, per_round, me, vertex);
+                            mine.push(TaskRequest::one_shot(Task::Capture { portal: vertex }, pri));
+                        }
+                        owner
+                            if owner == self.own
+                                && missing_key_vertices.contains(&vertex)
+                                && me.keys.get(&vertex).copied().unwrap_or(0) == 0 =>
+                        {
+                            let pri = self.station_priority(obs, base, per_round, me, vertex);
+                            mine.push(TaskRequest::one_shot(Task::KeyFarm { portal: vertex }, pri));
+                        }
+                        _ => {}
+                    }
+                }
+                for (source, target) in Self::edges(&candidate.vertices) {
+                    let link_id = arena_core::types::LinkId::new(source, target)
+                        .expect("distinct plan vertices");
+                    let exists = obs
+                        .links
+                        .iter()
+                        .any(|l| l.id == link_id && l.faction == self.faction);
+                    if exists {
+                        continue;
+                    }
+                    let (view_s, view_t) =
+                        (common::portal(obs, source), common::portal(obs, target));
+                    if view_s.owner != self.own || view_t.owner != self.own {
+                        continue;
+                    }
+                    for (source, target) in [(source, target), (target, source)] {
+                        if let Some(delay) = common::link_completion_delay(
+                            obs, self.own, &self.cfg, me, source, target,
+                        ) {
+                            let pri = base.saturating_sub(
+                                (per_round as i128 * delay as i128).min(i64::MAX as i128) as i64,
+                            );
+                            mine.push(TaskRequest::one_shot(Task::Link { source, target }, pri));
+                        }
+                    }
                 }
             }
             requests.insert(me.id, mine);
@@ -494,7 +694,7 @@ impl BuilderCore {
         for me in obs.own_agents.iter() {
             let mut mine = Vec::new();
             // Opportunistic links first (the highest-value fallback work).
-            for (source, target) in self.own_pairs_in_range(obs, me) {
+            for (source, target) in self.own_pairs_this_round(obs, me) {
                 mine.push(TaskRequest::one_shot(
                     Task::Link { source, target },
                     self.params.fallback_priority,
@@ -504,7 +704,10 @@ impl BuilderCore {
             let mut incomplete: Vec<(i64, PortalId)> = obs
                 .portals
                 .iter()
-                .filter(|p| p.owner != self.own || me.keys.get(&p.id).copied().unwrap_or(0) == 0)
+                .filter(|p| {
+                    p.owner == arena_core::types::Owner::Neutral
+                        || me.keys.get(&p.id).copied().unwrap_or(0) == 0
+                })
                 .map(|p| (arena_core::geometry::dist2(me.position, p.position), p.id))
                 .collect();
             incomplete.sort();
@@ -535,7 +738,7 @@ impl BuilderCore {
     pub fn blockable_pairs(&self, obs: &Observation) -> Vec<(PortalId, PortalId, AgentId)> {
         let mut out = Vec::new();
         for me in obs.own_agents.iter() {
-            for (source, target) in self.own_pairs_in_range(obs, me) {
+            for (source, target) in self.own_pairs_this_round(obs, me) {
                 out.push((source, target, me.id));
             }
         }
@@ -543,22 +746,15 @@ impl BuilderCore {
     }
 
     /// Every legal LINK `(source, target)` `me` could emit this round:
-    /// standing within operation range of an own `source`, holding a key of
+    /// standing or moving into operation range of an own `source`, holding a key of
     /// an own `target`, and passing the full pre-flight legality check.
-    fn own_pairs_in_range(
+    fn own_pairs_this_round(
         &self,
         obs: &Observation,
         me: &arena_core::observe::AgentPrivate,
     ) -> Vec<(PortalId, PortalId)> {
         let mut pairs = Vec::new();
         for source in obs.portals.iter().filter(|p| p.owner == self.own) {
-            if !in_range(
-                me.position,
-                source.position,
-                self.cfg.portal_operation_range_cm,
-            ) {
-                continue;
-            }
             let mut targets: Vec<PortalId> = me
                 .keys
                 .iter()
@@ -571,15 +767,9 @@ impl BuilderCore {
                 .collect();
             targets.sort();
             for target in targets {
-                if link_is_legal(
-                    obs,
-                    self.own,
-                    &self.cfg,
-                    me.position,
-                    &me.keys,
-                    source.id,
-                    target,
-                ) {
+                if common::link_position_this_round(obs, self.own, &self.cfg, me, source.id, target)
+                    .is_some()
+                {
                     pairs.push((source.id, target));
                 }
             }
@@ -652,9 +842,14 @@ impl BuilderCore {
                 }
                 Task::Link { source, target } => {
                     let stand = common::portal(obs, source);
-                    if in_range(me.position, stand.position, cfg.portal_operation_range_cm)
-                        && link_is_legal(obs, own, cfg, me.position, &me.keys, source, target)
+                    if let Some(position) =
+                        common::link_position_this_round(obs, own, cfg, me, source, target)
                     {
+                        if position != me.position {
+                            commands.aux(arena_core::types::Command::Move {
+                                destination: position,
+                            });
+                        }
                         commands.aux(arena_core::types::Command::Link {
                             source_portal: source,
                             target_portal: target,
@@ -679,23 +874,34 @@ impl BuilderCore {
                     {
                         commands.major(arena_core::types::Command::Attack);
                     } else if target.owner == enemy {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
+                        let destination =
+                            step_toward(me.position, target.position, cfg.move_budget_cm);
+                        // Aux Move precedes the Major Action in the same stream.
+                        if in_range(destination, target.position, cfg.portal_operation_range_cm) {
+                            commands.aux(arena_core::types::Command::Move { destination });
+                            commands.major(arena_core::types::Command::Attack);
+                        } else {
+                            commands.mv(arena_core::types::Command::Move { destination });
+                        }
                     }
                 }
                 Task::Recharge { portal } => {
                     let target = common::portal(obs, portal);
+                    // The overlay releases full-HP anchors. A stale grant
+                    // also emits nothing; remote target Keys satisfy the
+                    // position condition without being consumed.
+                    let damaged = target.hp < cfg.portal_max_hp;
                     if target.owner == own
-                        && in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                        && damaged
+                        && (in_range(me.position, target.position, cfg.portal_operation_range_cm)
+                            || me.keys.get(&portal).copied().unwrap_or(0) > 0)
                         && me.supply >= cfg.recharge_cost_supply
                     {
                         commands.major(arena_core::types::Command::Recharge { portal });
-                    } else if target.owner == own {
+                    } else if target.owner == own
+                        && damaged
+                        && me.supply >= cfg.recharge_cost_supply
+                    {
                         commands.mv(arena_core::types::Command::Move {
                             destination: step_toward(
                                 me.position,
@@ -744,20 +950,250 @@ impl BuilderCore {
         out
     }
 
+    /// Links emitted this round share a geometric reservation as well as
+    /// an edge id. Opponent races remain unknown; our own crossing edges
+    /// are known before submission and must fall through to alternate work.
+    fn compatible_link_grant(
+        &self,
+        obs: &Observation,
+        agent: AgentId,
+        task: Task,
+        granted: &BTreeMap<AgentId, Task>,
+    ) -> bool {
+        let Task::Link { source, target } = task else {
+            return true;
+        };
+        let me = obs.own_agents.iter().find(|me| me.id == agent).unwrap();
+        if common::link_position_this_round(obs, self.own, &self.cfg, me, source, target).is_none()
+        {
+            return true;
+        }
+        granted.iter().all(|(&other, task)| {
+            let Task::Link {
+                source: other_source,
+                target: other_target,
+            } = *task
+            else {
+                return true;
+            };
+            if [source, target]
+                .iter()
+                .any(|p| *p == other_source || *p == other_target)
+            {
+                return true;
+            }
+            let teammate = obs.own_agents.iter().find(|me| me.id == other).unwrap();
+            common::link_position_this_round(
+                obs,
+                self.own,
+                &self.cfg,
+                teammate,
+                other_source,
+                other_target,
+            )
+            .is_none()
+                || !arena_core::geometry::segments_intersect(
+                    common::portal(obs, source).position,
+                    common::portal(obs, target).position,
+                    common::portal(obs, other_source).position,
+                    common::portal(obs, other_target).position,
+                )
+        })
+    }
+
+    /// Read-only allocation preview shared by delivery comparison and execution.
+    /// Availability and surplus work are evaluated on the same reservation board.
+    pub fn preview_allocation(
+        &self,
+        obs: &Observation,
+        requests: &BTreeMap<AgentId, Vec<TaskRequest>>,
+    ) -> DecisionTrace {
+        let agents: Vec<_> = obs.own_agents.iter().map(|a| a.id).collect();
+        let mut ready: BTreeMap<AgentId, Vec<TaskRequest>> = obs
+            .own_agents
+            .iter()
+            .map(|agent| {
+                let mine = requests
+                    .get(&agent.id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|request| match request.task {
+                        Task::KeyFarm { portal } => {
+                            !in_range(
+                                agent.position,
+                                common::portal(obs, portal).position,
+                                self.cfg.portal_operation_range_cm,
+                            ) || self
+                                .ledger
+                                .available(obs.round, &self.cfg, agent.id, portal)
+                        }
+                        _ => true,
+                    })
+                    .copied()
+                    .collect();
+                (agent.id, mine)
+            })
+            .collect();
+        let unavailable: BTreeMap<AgentId, usize> = agents
+            .iter()
+            .map(|&agent| {
+                (
+                    agent,
+                    requests.get(&agent).map_or(0, Vec::len)
+                        - ready.get(&agent).map_or(0, Vec::len),
+                )
+            })
+            .collect();
+        let mut board = TaskBoard::new(obs.round);
+        let compatible = |agent, task, granted: &BTreeMap<AgentId, Task>| {
+            self.compatible_link_grant(obs, agent, task, granted)
+        };
+        let mut grants = allocate_compatible(&mut board, &agents, &ready, compatible);
+        // Overlay values assume a complete strike. Building may win a
+        // required teammate, so validate the ACTUAL granted cohort and
+        // release an attack that can no longer finish within the horizon.
+        let mut rejected = std::collections::BTreeSet::new();
+        let targets: std::collections::BTreeSet<_> = grants
+            .values()
+            .filter_map(|task| {
+                if let Task::Attack { portal } = task {
+                    Some(*portal)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for portal in targets {
+            let target = common::portal(obs, portal);
+            let economy = self.economy(obs);
+            let team: Vec<_> = obs
+                .own_agents
+                .iter()
+                .filter(|agent| grants.get(&agent.id) == Some(&Task::Attack { portal }))
+                .filter_map(|agent| {
+                    crate::r2::value::AttackArrival::for_agent(
+                        agent,
+                        target.position,
+                        &self.cfg,
+                        economy.horizon_rounds,
+                    )
+                })
+                .collect();
+            let income = crate::r2::value::attack_income_per_round(
+                obs,
+                self.faction,
+                &self.cfg,
+                &self.params.value,
+                portal,
+            );
+            if crate::r2::value::strike_value(
+                &economy,
+                income,
+                crate::r2::value::attacks_needed(target.hp, &self.cfg),
+                &team,
+            )
+            .is_none_or(|value| value <= 0)
+            {
+                rejected.insert(portal);
+            }
+        }
+        if !rejected.is_empty() {
+            for mine in ready.values_mut() {
+                mine.retain(|request| !matches!(request.task, Task::Attack { portal } if rejected.contains(&portal)));
+            }
+            board = TaskBoard::new(obs.round);
+            grants = allocate_compatible(&mut board, &agents, &ready, compatible);
+        }
+        // Unused builders may expand without drawing a crossing Link through
+        // either live plan. Reuse the same reservation board; planned work and
+        // policy overlays keep their grants, and no capture is duplicated.
+        {
+            let free: Vec<_> = agents
+                .iter()
+                .copied()
+                .filter(|agent| !grants.contains_key(agent))
+                .collect();
+            let mut expansion = BTreeMap::new();
+            for &agent in &free {
+                let me = obs.own_agents.iter().find(|me| me.id == agent).unwrap();
+                let mut targets: Vec<_> = obs
+                    .portals
+                    .iter()
+                    .filter(|p| p.owner == arena_core::types::Owner::Neutral)
+                    .filter_map(|p| {
+                        common::movement_rounds_to_within(
+                            me.position,
+                            p.position,
+                            self.cfg.portal_operation_range_cm,
+                            self.cfg.move_budget_cm,
+                            self.cfg.total_rounds.saturating_sub(obs.round),
+                        )
+                        .map(|moves| (moves, p.id))
+                    })
+                    .collect();
+                targets.sort();
+                let mine: Vec<_> = targets
+                    .into_iter()
+                    .map(|(moves, portal)| {
+                        TaskRequest::one_shot(Task::Capture { portal }, -(moves as i64))
+                    })
+                    .collect();
+                for request in &mine {
+                    if !ready[&agent].iter().any(|r| r.task == request.task) {
+                        ready.get_mut(&agent).unwrap().push(*request);
+                    }
+                }
+                expansion.insert(agent, mine);
+            }
+            grants.extend(allocate(&mut board, &free, &expansion));
+        }
+        DecisionTrace {
+            round: obs.round,
+            active: self.active,
+            second: self.second,
+            agents: agents
+                .iter()
+                .map(|&agent| AgentDecision {
+                    agent,
+                    candidate_count: ready.get(&agent).map_or(0, Vec::len),
+                    unavailable_count: unavailable[&agent],
+                    grant: grants.get(&agent).copied(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Allocate once, record the actual grants, then execute them.
+    pub fn allocate_and_execute(
+        &mut self,
+        obs: &Observation,
+        requests: &BTreeMap<AgentId, Vec<TaskRequest>>,
+    ) -> BTreeMap<AgentId, CommandList> {
+        let decision = self.preview_allocation(obs, requests);
+        let grants = decision
+            .agents
+            .iter()
+            .filter_map(|agent| agent.grant.map(|task| (agent.agent, task)))
+            .collect();
+        self.last_decision = Some(decision);
+        self.execute(obs, &grants)
+    }
+
+    pub fn decision_trace(&self) -> Option<&DecisionTrace> {
+        self.last_decision.as_ref()
+    }
+
     /// The pure-core round: refresh, build (or fallback) requests,
     /// allocate through a fresh per-round board, execute. This IS
     /// `greedy-coordinated-r2`'s decision function.
     pub fn core_round(&mut self, obs: &Observation) -> BTreeMap<AgentId, CommandList> {
         self.refresh(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
         let requests = if self.active.is_some() {
             self.build_requests(obs)
         } else {
             self.fallback_requests(obs)
         };
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        self.execute(obs, &grants)
+        self.allocate_and_execute(obs, &requests)
     }
 
     /// The faction this core plays.

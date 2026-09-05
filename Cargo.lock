@@ -210,6 +210,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "r22-micro"
+version = "0.1.0"
+dependencies = [
+ "arena-bots",
+ "arena-core",
+ "arena-replay",
+ "arena-runner",
+ "blake3",
+]
+
+[[package]]
 name = "replay-export"
 version = "0.1.0"
 dependencies = [

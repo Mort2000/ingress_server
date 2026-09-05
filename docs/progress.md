@@ -58,6 +58,10 @@ after each milestone; every agent should read it before starting work.
 
 ## Milestone log
 
+2026-09-05 Bot 全策略行为优化：当前策略版本为 r2.3。共享建造、离散防守收益、完整联攻队伍、默认规则 Key 交接、移动后阻断和混合策略收官行为已完成机制修复。最终测试、Development 回放与运输对照见 [r2.3 记录](balance/r23-behavior-validation.md)。后续 r2.2 段落及里程碑表保留其历史语境。
+
+2026-09-05 平衡验收补充（历史阶段）：当时策略版本为 r2.2；r2.1 原始源码、参数与归档已冻结。报告归因更正、机制回归和 24 场小型配对消融已完成，全部回放通过。第二计划／防守存在换边后效应反转；攻击关闭臂有大量 KeyFarm 等待；默认规则下运输净收益仍缺证据。正式 B2/B3/B4 继续暂停，Holdout 未使用。结果、测试范围与后续顺序见 [r2.2 记录](balance/r22-micro-validation.md)。下表历史 B2–B4 结论属于当时版本，不能代替本次验收。
+
 | Milestone | Status | Commit | Notes |
 |---|---|---|---|
 | M0 skeleton | done | c0a1495 | workspace,; corrected by(cargo mirror, official blake3) |

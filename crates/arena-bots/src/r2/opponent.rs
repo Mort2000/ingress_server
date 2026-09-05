@@ -135,6 +135,10 @@ impl OpponentModel {
         for event in fresh {
             self.last_seq_seen = self.last_seq_seen.max(event.seq + 1);
             match &event.kind {
+                EventKind::PortalCaptured { portal, .. }
+                | EventKind::PortalNeutralized { portal, .. } => {
+                    self.attacks.remove(portal);
+                }
                 EventKind::PortalAttacked {
                     faction, portal, ..
                 } if *faction == self.enemy => {
@@ -175,7 +179,7 @@ impl OpponentModel {
                 rounds
                     .iter()
                     .filter(|&&(round, _)| {
-                        round <= obs.round && obs.round - round <= self.params.threat_window_rounds
+                        round < obs.round && obs.round - round <= self.params.threat_window_rounds
                     })
                     .count() as u32
             })

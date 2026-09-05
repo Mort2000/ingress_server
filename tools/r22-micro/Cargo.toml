@@ -1,0 +1,12 @@
+[package]
+name = "r22-micro"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+arena-core = { path = "../../crates/arena-core" }
+arena-bots = { path = "../../crates/arena-bots" }
+arena-replay = { path = "../../crates/arena-replay" }
+arena-runner = { path = "../../crates/arena-runner" }
+blake3 = "1.8.7"

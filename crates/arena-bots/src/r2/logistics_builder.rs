@@ -1,22 +1,9 @@
-//! `logistics-builder-r2` (plan section 6.1, Key Runner + Builder): the
-//! coordinated builder core plus the explicit Key/Supply runner scheme.
-//! The command rule spends a Link target's key from the ACTING agent's
-//! inventory — so when the plan's edge `(source, target)` has no
-//! key-holder at the source, the core stations a keyless agent there
-//! (the `Standby` task) while the key sits with a distant holder. This
-//! policy commits the STATION as the edge's linker and dispatches the
-//! holder as a runner: the holder's walking-Link request is replaced by
-//! a [`Task::Transfer`] rendezvous — walk to the station, hand over the
-//! key (plus Supply headroom), move on to the next delivery. The frozen
-//! m6 baseline used Transfer 0 times in 10,000 matches; this policy
-//! exists to measure the mechanism (plan 6.1).
-//!
-//! Every Transfer command passes observation-level pre-flight checks
-//! (receiver is an own agent inside the closed `TRANSFER_RANGE`, sender
-//! holds the key, Supply respects both the sender's recorded reserve and
-//! the receiver's headroom to `MAX_SUPPLY`), so the emission is
-//! drop-free by construction; execution races still record as normal
-//! Drops (plan 6.3).
+//! Key delivery over the shared builder core. Only a closing-edge schedule
+//! that advances field completion can displace direct linking; all feasible
+//! sender/receiver pairs are compared against the same allocation preview.
+//! Delivery is Key-only because Link consumes no Supply. Sender streams
+//! settle first within the faction, so receivers can Move + Link immediately
+//! after payment. Public-state races remain possible and are recorded as Drops.
 
 use std::collections::BTreeMap;
 
@@ -30,12 +17,13 @@ use crate::common::{self, CommandList, in_range};
 use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 use crate::r2::greedy_coordinated::submissions;
-use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
+use crate::r2::tasks::{Task, TaskRequest};
 
 /// The recorded `logistics-builder-r2` parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LogisticsBuilderParams {
-    /// Supply the sender keeps after a Transfer (the runner's own reserve).
+    /// Legacy Supply reserve retained in parameter records. r2.2 only
+    /// delivers the Key needed for Link, which consumes no Supply.
     pub supply_reserve: u32,
     /// At most this many Transfer deliveries per round (the transport
     /// headroom).
@@ -86,7 +74,7 @@ impl LogisticsBuilderParams {
     }
 }
 
-/// The `logistics-builder-r2` policy (version `r2.0`, family
+/// The `logistics-builder-r2` policy (version [`crate::r2::R2_VERSION`], family
 /// `key-runner`).
 pub struct LogisticsBuilder {
     core: BuilderCore,
@@ -99,6 +87,36 @@ pub struct LogisticsBuilder {
     /// a runner, or station and runner just swap roles and ping-pong the
     /// key forever). Deterministic given the observation sequence.
     in_flight: BTreeMap<(PortalId, PortalId), (AgentId, Option<AgentId>)>,
+    comparisons: Vec<DeliveryComparison>,
+}
+
+/// Read-only evidence for the last decision. Delays are zero-based future
+/// decision offsets: zero means the current round, one means next round.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeliveryComparison {
+    pub round: u32,
+    pub source: PortalId,
+    pub target: PortalId,
+    pub runner: AgentId,
+    pub station: AgentId,
+    pub direct_delay: Option<u32>,
+    pub delivery_delay: Option<u32>,
+    pub meeting_delay: Option<u32>,
+    pub station_move_rounds: u32,
+    pub station_wait_rounds: u32,
+    pub receiver_task: Option<Task>,
+    pub net_value: i64,
+    pub decision: DeliveryDecision,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryDecision {
+    Accepted,
+    OtherEdgesPending,
+    Unreachable,
+    DirectNoLater,
+    ReceiverBusy,
+    NonPositiveValue,
 }
 
 impl LogisticsBuilder {
@@ -118,15 +136,150 @@ impl LogisticsBuilder {
             ),
             params,
             in_flight: BTreeMap::new(),
+            comparisons: Vec::new(),
         }
     }
 
-    /// Whether `sender` may hand a key of `target_key` (plus some Supply)
-    /// to `receiver` RIGHT NOW: distinct own agents, receiver inside the
-    /// closed TRANSFER_RANGE, sender holds the key, and the Supply
-    /// payload respects the sender's reserve and the receiver's headroom
-    /// (a zero Supply payload is legal — keys only). Returns the payable
-    /// Supply amount.
+    pub fn delivery_comparisons(&self) -> &[DeliveryComparison] {
+        &self.comparisons
+    }
+
+    fn compare_delivery(
+        &self,
+        obs: &Observation,
+        source: PortalId,
+        target: PortalId,
+        runner: AgentId,
+        station: AgentId,
+        receiver_task: Option<Task>,
+    ) -> DeliveryComparison {
+        let cfg = self.core.cfg();
+        let own = common::owners(self.core.faction()).0;
+        let sender = obs
+            .own_agents
+            .iter()
+            .find(|a| a.id == runner)
+            .expect("selected runner");
+        let receiver = obs
+            .own_agents
+            .iter()
+            .find(|a| a.id == station)
+            .expect("selected station");
+        let mut comparison =
+            DeliveryComparison {
+                round: obs.round,
+                source,
+                target,
+                runner,
+                station,
+                direct_delay: obs
+                    .own_agents
+                    .iter()
+                    .flat_map(|agent| {
+                        [(source, target), (target, source)].into_iter().filter_map(
+                            move |(s, t)| common::link_completion_delay(obs, own, cfg, agent, s, t),
+                        )
+                    })
+                    .min(),
+                delivery_delay: None,
+                meeting_delay: None,
+                station_move_rounds: 0,
+                station_wait_rounds: 0,
+                receiver_task,
+                net_value: 0,
+                decision: DeliveryDecision::Unreachable,
+            };
+        let plan = self.core.active().expect("active plan");
+        let closing_edge = plan
+            .vertices
+            .iter()
+            .filter(|&&p| p != source && p != target)
+            .all(|&third| {
+                [source, target].iter().all(|&end| {
+                    obs.links.iter().any(|l| {
+                        l.faction == self.core.faction()
+                            && l.id == arena_core::types::LinkId::new(third, end).unwrap()
+                    })
+                })
+            });
+        if !closing_edge {
+            comparison.decision = DeliveryDecision::OtherEdgesPending;
+            return comparison;
+        }
+        let mut sender_position = sender.position;
+        let mut receiver_position = receiver.position;
+        let source_position = common::portal(obs, source).position;
+        let remaining = cfg.total_rounds.saturating_sub(obs.round).saturating_add(1);
+        for delay in 0..remaining {
+            let receiver_next = if in_range(
+                receiver_position,
+                source_position,
+                cfg.portal_operation_range_cm,
+            ) {
+                receiver_position
+            } else {
+                common::step_toward(receiver_position, source_position, cfg.move_budget_cm)
+            };
+            if in_range(sender_position, receiver_position, cfg.transfer_range_cm) {
+                comparison.meeting_delay = Some(delay);
+                // The sender's stream precedes the receiver's. After payment
+                // the receiver may spend its full Move budget and Link now.
+                comparison.station_move_rounds += u32::from(receiver_next != receiver_position);
+                let mut keyed_receiver = receiver.clone();
+                keyed_receiver.position = receiver_position;
+                keyed_receiver.keys.insert(target, 1);
+                comparison.delivery_delay =
+                    common::link_completion_delay(obs, own, cfg, &keyed_receiver, source, target)
+                        .and_then(|walk| delay.checked_add(walk));
+                break;
+            }
+            let sender_next =
+                common::step_toward(sender_position, receiver_position, cfg.move_budget_cm);
+            comparison.station_move_rounds += u32::from(receiver_next != receiver_position);
+            comparison.station_wait_rounds += u32::from(receiver_next == receiver_position);
+            if sender_next == sender_position && receiver_next == receiver_position {
+                break;
+            }
+            sender_position = sender_next;
+            receiver_position = receiver_next;
+        }
+        let (Some(delivery), Some(meeting)) = (comparison.delivery_delay, comparison.meeting_delay)
+        else {
+            return comparison;
+        };
+        if delivery >= remaining {
+            return comparison;
+        }
+        let direct = comparison.direct_delay.unwrap_or(remaining);
+        if direct <= delivery {
+            comparison.decision = DeliveryDecision::DirectNoLater;
+            return comparison;
+        }
+        // The receiver may keep a source-local auxiliary Hack, or wait at
+        // this station. Committing an agent to other work is not treated as free.
+        if receiver_task.is_some_and(|task| {
+            !matches!(task,
+            Task::Standby { portal } | Task::KeyFarm { portal } if portal == source)
+        }) {
+            comparison.decision = DeliveryDecision::ReceiverBusy;
+            return comparison;
+        }
+        comparison.net_value = crate::r2::value::transfer_value(
+            &self.core.economy(obs),
+            plan.area2,
+            direct - delivery,
+            meeting,
+        );
+        comparison.decision = if comparison.net_value > 0 {
+            DeliveryDecision::Accepted
+        } else {
+            DeliveryDecision::NonPositiveValue
+        };
+        comparison
+    }
+
+    /// A payable Key-only delivery. Link consumes no Supply, so no Supply
+    /// is moved without a consumer in the selected completion plan.
     fn transfer_payload(
         &self,
         sender: &arena_core::observe::AgentPrivate,
@@ -146,25 +299,25 @@ impl LogisticsBuilder {
         if sender.keys.get(&target_key).copied().unwrap_or(0) < 1 {
             return None;
         }
-        let headroom = self.core.cfg().max_supply.saturating_sub(receiver.supply);
-        let spare = sender.supply.saturating_sub(self.params.supply_reserve);
-        Some(headroom.min(spare))
+        Some(0)
     }
 
     /// The runner-scheme request transformation (pre-allocation): for
-    /// every plan edge still missing, both vertices ours, with NO
-    /// key-holder in operation range of the source, the station is the
-    /// committed linker — every holder's walking `Link` request for that
-    /// edge is replaced by a `Transfer` rendezvous toward the station
-    /// agent (the keyless agent nearest the source — exactly the agent
-    /// the allocator grants the core's `Standby` task to). The rendezvous
-    /// walks at the delivery value: the plan's per-round income minus the
-    /// sender's travel to the station.
+    /// missing active-plan edge, propose a receiver and holder, then admit
+    /// only a delivery that advances complete field creation without
+    /// displacing the receiver's productive baseline grant. Both roles
+    /// follow the compared source/rendezvous paths; positions and competing
+    /// tasks are rechecked each round before keeping the commitment.
     fn apply_runner_scheme(
         &mut self,
         obs: &Observation,
         requests: &mut BTreeMap<AgentId, Vec<TaskRequest>>,
     ) {
+        self.comparisons.clear();
+        if self.params.max_transfers_per_round == 0 {
+            self.in_flight.clear();
+            return;
+        }
         let Some(plan) = self.core.active().map(|p| p.vertices) else {
             self.in_flight.clear();
             return;
@@ -178,6 +331,13 @@ impl LogisticsBuilder {
             (b.min(c), c.max(b)),
         ];
         edges.sort();
+        self.in_flight.retain(|edge, _| edges.contains(edge));
+        let baseline = self.core.preview_allocation(obs, requests);
+        let base_grants: BTreeMap<_, _> = baseline
+            .agents
+            .iter()
+            .filter_map(|agent| agent.grant.map(|task| (agent.agent, task)))
+            .collect();
         let mut base: Option<i64> = None;
         for (source, target) in edges {
             let link_id =
@@ -217,103 +377,67 @@ impl LogisticsBuilder {
                     }
                 }
             }
-            // A key-holder already in operation range of the source fires
-            // the edge directly — UNLESS a delivery is completing (the
-            // station is that holder) or its runner has arrived (the
-            // payment beats the direct link by policy identity, and the
-            // station fires next round).
-            let holder_in_range = obs.own_agents.iter().any(|me| {
-                me.keys.get(&target).copied().unwrap_or(0) >= 1
-                    && in_range(
-                        me.position,
-                        view_s.position,
-                        self.core.cfg().portal_operation_range_cm,
-                    )
-            });
-            let completing = self
-                .in_flight
-                .get(&(source, target))
-                .is_some_and(|&(_, runner)| runner.is_none());
-            let delivery_armed =
-                self.in_flight
-                    .get(&(source, target))
-                    .is_some_and(|&(station, runner)| {
-                        runner.is_some_and(|runner| {
-                            agent(station).is_some_and(|s| {
-                                agent(runner).is_some_and(|r| {
-                                    in_range(
-                                        r.position,
-                                        s.position,
-                                        self.core.cfg().transfer_range_cm,
-                                    )
-                                })
-                            })
-                        })
-                    });
-            if holder_in_range && !completing && !delivery_armed {
-                self.in_flight.remove(&(source, target));
-                continue;
-            }
-            // (Re-)derive a fresh assignment when none is in flight.
+            // Propose roles, then compare complete schedules below on every round.
             if !self.in_flight.contains_key(&(source, target)) {
                 let stations: std::collections::BTreeSet<AgentId> = self
                     .in_flight
                     .values()
                     .map(|(station, _)| *station)
                     .collect();
-                let Some(station) = obs
-                    .own_agents
-                    .iter()
-                    .filter(|me| {
-                        me.keys.get(&target).copied().unwrap_or(0) == 0
+                let mut best: Option<DeliveryComparison> = None;
+                for station in obs.own_agents.iter().filter(|me| {
+                    me.keys.get(&target).copied().unwrap_or(0) == 0 && !stations.contains(&me.id)
+                }) {
+                    for runner in obs.own_agents.iter().filter(|me| {
+                        me.id != station.id
+                            && me.keys.get(&target).copied().unwrap_or(0) > 0
                             && !stations.contains(&me.id)
-                    })
-                    .min_by_key(|me| {
-                        (
-                            arena_core::geometry::dist2(me.position, view_s.position),
-                            me.id,
-                        )
-                    })
-                    .map(|me| me.id)
-                else {
-                    continue;
-                };
-                let Some(runner) = obs
-                    .own_agents
-                    .iter()
-                    .filter(|me| {
-                        me.id != station
-                            && me.keys.get(&target).copied().unwrap_or(0) >= 1
-                            && !stations.contains(&me.id)
-                    })
-                    .min_by_key(|me| {
-                        (
-                            arena_core::geometry::dist2(me.position, view_s.position),
-                            me.id,
-                        )
-                    })
-                    .map(|me| me.id)
-                else {
+                    }) {
+                        let comparison = self.compare_delivery(
+                            obs,
+                            source,
+                            target,
+                            runner.id,
+                            station.id,
+                            base_grants.get(&station.id).copied(),
+                        );
+                        if comparison.decision == DeliveryDecision::Accepted {
+                            if best
+                                .as_ref()
+                                .is_none_or(|previous| comparison.net_value > previous.net_value)
+                            {
+                                best = Some(comparison);
+                            }
+                        } else {
+                            self.comparisons.push(comparison);
+                        }
+                    }
+                }
+                let Some(best) = best else {
                     continue;
                 };
                 self.in_flight
-                    .insert((source, target), (station, Some(runner)));
+                    .insert((source, target), (best.station, Some(best.runner)));
             }
-            // In the DELIVERING state: (a) the STATION requests its
-            // Standby — walk to the source and hold it (this request
-            // lives HERE, in the runner policy, not in the core: a core-
-            // level standby outranks every walking Link and deadlocks a
-            // faction whose key-holders stand at the wrong sources —
-            // observed as the idle-benchmark stall); (b) the runner's
-            // walking Link request for this edge is replaced by the
-            // Transfer rendezvous at the delivery value: the FULL edge
-            // value minus a single unit (the Key Runner commits to the
-            // station — a delivery outranks every walking task of the
-            // same plan and yields only to work an agent is already
-            // standing on; that commitment is the policy's identity,
-            // traded against the one-round payment delay). The
-            // COMPLETING state strips nothing: the station's core Link
-            // request fires the edge.
+            // Re-evaluate commitments as positions and alternative work change.
+            if let Some(&(station, Some(runner))) = self.in_flight.get(&(source, target)) {
+                let comparison = self.compare_delivery(
+                    obs,
+                    source,
+                    target,
+                    runner,
+                    station,
+                    base_grants.get(&station).copied(),
+                );
+                let accepted = comparison.decision == DeliveryDecision::Accepted;
+                self.comparisons.push(comparison);
+                if !accepted {
+                    self.in_flight.remove(&(source, target));
+                    continue;
+                }
+            }
+            // Accepted closing-edge delivery: station approaches the source,
+            // runner meets it; completing stations keep their normal Link task.
             if let Some(&(station, Some(runner))) = self.in_flight.get(&(source, target)) {
                 let value = *base.get_or_insert_with(|| {
                     crate::r2::value::field_value(
@@ -328,6 +452,15 @@ impl LogisticsBuilder {
                 let view_s = common::portal(obs, source);
                 if let Some(station_me) = obs.own_agents.iter().find(|me| me.id == station) {
                     if let Some(mine) = requests.get_mut(&station) {
+                        // The baseline allocation admitted this receiver only
+                        // when it had no competing productive grant. Releasing
+                        // the runner's Link reservation must not divert it into
+                        // a formerly blocked reverse Link: the accepted schedule
+                        // requires approaching this source before payment.
+                        mine.retain(|request| {
+                            matches!(request.task,
+                            Task::KeyFarm { portal } | Task::Standby { portal } if portal == source)
+                        });
                         let travel = crate::r2::value::travel_rounds_between(
                             station_me.position,
                             view_s.position,
@@ -356,13 +489,9 @@ impl LogisticsBuilder {
         }
     }
 
-    /// The payment step (post-allocation): a holder granted a Transfer
-    /// rendezvous pays the station the moment it is inside the closed
-    /// TRANSFER_RANGE — the key plus Supply headroom, drop-free by
-    /// construction. The station stands by (its `Standby` execution
-    /// already emits nothing once in range) so the payload cannot be
-    /// outrun, and once it holds the key the edge's Link request is its
-    /// own — the scheme never runs twice for one edge.
+    /// Pay accepted deliveries before receiver movement, preserve local
+    /// auxiliary work, and consume the received Key in a same-round Link
+    /// when the compared source is reachable with this Move budget.
     fn pay_deliveries(
         &self,
         obs: &Observation,
@@ -370,7 +499,7 @@ impl LogisticsBuilder {
         commands: &mut BTreeMap<AgentId, CommandList>,
     ) {
         let mut paid = 0u32;
-        let mut payments: Vec<(AgentId, AgentId, PortalId, u32)> = Vec::new();
+        let mut payments: Vec<(AgentId, AgentId, PortalId, PortalId, u32)> = Vec::new();
         for (agent, task) in grants.iter() {
             let Task::Transfer { receiver, key } = task else {
                 continue;
@@ -385,11 +514,19 @@ impl LogisticsBuilder {
                 continue;
             };
             if let Some(supply) = self.transfer_payload(sender, station, *key) {
-                payments.push((sender.id, station.id, *key, supply));
+                let source = self
+                    .in_flight
+                    .iter()
+                    .find(|((_, target), (receiver, runner))| {
+                        *target == *key && *receiver == station.id && *runner == Some(sender.id)
+                    })
+                    .map(|((source, _), _)| *source)
+                    .expect("granted delivery has a source");
+                payments.push((sender.id, station.id, source, *key, supply));
                 paid += 1;
             }
         }
-        for (sender_id, station_id, key, supply) in payments {
+        for (sender_id, station_id, source, key, supply) in payments {
             let mut list = CommandList::new();
             let mut keys = BTreeMap::new();
             keys.insert(key, 1u32);
@@ -398,13 +535,57 @@ impl LogisticsBuilder {
                 supply,
                 keys,
             });
-            commands.remove(&station_id);
+            // Accepted receivers hold source-local work, never another
+            // Transfer. Submission ordering therefore pays the Key before
+            // their Move or Link. Preserve any planned source-local Hack.
+            let mut receiver = obs
+                .own_agents
+                .iter()
+                .find(|agent| agent.id == station_id)
+                .unwrap()
+                .clone();
+            receiver
+                .keys
+                .insert(key, receiver.keys.get(&key).copied().unwrap_or(0) + 1);
+            if let Some(position) = common::link_position_this_round(
+                obs,
+                common::owners(self.core.faction()).0,
+                self.core.cfg(),
+                &receiver,
+                source,
+                key,
+            ) {
+                let mut station_commands = CommandList::new();
+                for command in commands.remove(&station_id).unwrap_or_default().build() {
+                    if !matches!(command, Command::Move { .. }) {
+                        station_commands.aux(command);
+                    }
+                }
+                if position != receiver.position {
+                    station_commands.aux(Command::Move {
+                        destination: position,
+                    });
+                }
+                station_commands.aux(Command::Link {
+                    source_portal: source,
+                    target_portal: key,
+                });
+                commands.insert(station_id, station_commands);
+            }
             commands.insert(sender_id, list);
         }
     }
 }
 
 impl R2Policy for LogisticsBuilder {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
+    fn delivery_comparisons(&self) -> &[DeliveryComparison] {
+        &self.comparisons
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,
@@ -416,16 +597,21 @@ impl R2Policy for LogisticsBuilder {
 
     fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
         self.core.refresh(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
         let mut requests = if self.core.active().is_some() {
             self.core.build_requests(obs)
         } else {
             self.core.fallback_requests(obs)
         };
         self.apply_runner_scheme(obs, &mut requests);
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        let mut commands = self.core.execute(obs, &grants);
+        let mut commands = self.core.allocate_and_execute(obs, &requests);
+        let grants = self
+            .core
+            .decision_trace()
+            .expect("just recorded")
+            .agents
+            .iter()
+            .filter_map(|a| a.grant.map(|task| (a.agent, task)))
+            .collect();
         self.pay_deliveries(obs, &grants, &mut commands);
         submissions(obs, commands)
     }

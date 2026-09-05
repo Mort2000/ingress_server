@@ -23,13 +23,13 @@
 //! policy-level determinism reduces to the determinism of the caller's
 //! [`crate::r2::rng::R2Rng`] stream (plan section 6.3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arena_core::config::GameConfig;
 use arena_core::event::EventKind;
 use arena_core::geometry::{area2, ceil_integer_sqrt, dist2, point_on_segment, segments_intersect};
-use arena_core::observe::{Observation, PortalPublic};
-use arena_core::types::{Coord, Faction, LinkId, Owner, PortalId};
+use arena_core::observe::{AgentPrivate, Observation, PortalPublic};
+use arena_core::types::{AgentId, Coord, Faction, LinkId, Owner, PortalId};
 
 use crate::common::owners;
 
@@ -212,6 +212,22 @@ pub fn travel_rounds_between(from: Coord, to: Coord, budget_cm: u32) -> u32 {
     distance.div_ceil(budget_cm as u64).min(u32::MAX as u64) as u32
 }
 
+/// Whole rounds an agent needs to get from `from` INSIDE the closed
+/// `range_cm` of `to` at one round's MOVE_BUDGET (0 when already within
+/// range — reaching a rendezvous or operation range, not the exact
+/// position). The transfer gate's completion estimates are measured to
+/// the range boundary, the same way executed Moves land.
+pub fn rounds_to_within(from: Coord, to: Coord, range_cm: u32, budget_cm: u32) -> u32 {
+    if budget_cm == 0 {
+        return u32::MAX; // GameConfig::validate rejects this; stay total
+    }
+    let distance = ceil_integer_sqrt(dist2(from, to).max(0) as u64);
+    distance
+        .saturating_sub(range_cm as u64)
+        .div_ceil(budget_cm as u64)
+        .min(u32::MAX as u64) as u32
+}
+
 /// The position view of `portal` in `obs` (portals are dense by map
 /// construction; `None` only for a caller-side id bug).
 fn view<'a>(obs: &'a Observation, portal: PortalId) -> Option<&'a PortalPublic> {
@@ -288,23 +304,86 @@ pub fn link_order_rounds(obs: &Observation, faction: Faction, candidate: &FieldC
     waiting
 }
 
-/// Whether `event` is an enemy-faction attack on `portal` inside the
-/// threat window (public history only).
-fn is_recent_enemy_attack(
-    obs: &Observation,
-    enemy: Faction,
-    params: &ValueParams,
-    event: &arena_core::event::Event,
-    portal: PortalId,
-) -> bool {
-    event.round <= obs.round
-        && obs.round - event.round <= params.threat_window_rounds
-        && matches!(
-            &event.kind,
-            EventKind::PortalAttacked {
-                faction, portal: hit, ..
-            } if *faction == enemy && *hit == portal
-        )
+/// One pass over the public history: for every portal, the round of its
+/// most recent ownership change (CAPTURE or NEUTRALIZATION cascade) and
+/// the `(count, first round)` of CURRENT-LIFECYCLE enemy attacks inside
+/// the threat window. Lifecycle segmentation: an attack older than the
+/// portal's last ownership change belongs to a PREVIOUS lifecycle —
+/// recapture resets HP to `PORTAL_MAX_HP`, so those hits no longer
+/// threaten the current anchor (the 2026-09-05 action audit: a recaptured
+/// portal kept scoring positive defense value — and drawing full-HP
+/// zero-effect Recharges — off its pre-recapture attack events).
+struct ThreatIndex {
+    last_change: BTreeMap<PortalId, u32>,
+    /// portal -> (attack count in window and lifecycle, first such round).
+    sieges: BTreeMap<PortalId, (u32, u32)>,
+}
+
+impl ThreatIndex {
+    fn build(obs: &Observation, enemy: Faction, params: &ValueParams) -> ThreatIndex {
+        let mut index = ThreatIndex {
+            last_change: BTreeMap::new(),
+            sieges: BTreeMap::new(),
+        };
+        for event in obs.events.iter() {
+            match &event.kind {
+                EventKind::PortalCaptured { portal, .. }
+                | EventKind::PortalNeutralized { portal, .. } => {
+                    index.last_change.insert(*portal, event.round);
+                    // A new lifecycle starts: earlier attacks never count.
+                    index.sieges.remove(portal);
+                }
+                EventKind::PortalAttacked {
+                    faction, portal, ..
+                } if *faction == enemy
+                    && event.round < obs.round
+                    && obs.round - event.round <= params.threat_window_rounds
+                    && event.round > index.last_change.get(portal).copied().unwrap_or(0) =>
+                {
+                    let siege = index.sieges.entry(*portal).or_insert((0, event.round));
+                    siege.0 += 1;
+                    siege.1 = siege.1.min(event.round);
+                }
+                _ => {}
+            }
+        }
+        index
+    }
+
+    /// Whether `portal` took a current-lifecycle enemy attack inside the
+    /// threat window.
+    fn under_siege(&self, portal: PortalId) -> bool {
+        self.sieges.contains_key(&portal)
+    }
+
+    /// Whole rounds of enemy pressure `portal` can still survive at the
+    /// OBSERVED siege rate (`u32::MAX` when nothing hit it recently — no
+    /// active deadline). Estimated collapse: `attacks_needed(hp)` attacks
+    /// at the observed attacks-per-round rate, where the rate's
+    /// denominator is the siege's own elapsed length
+    /// `min(threat_window, rounds since the first current-lifecycle
+    /// attack)` — a siege that started this round is measured at its full
+    /// rate, not diluted by the rounds before it began.
+    fn rounds_until_collapse(
+        &self,
+        obs: &Observation,
+        params: &ValueParams,
+        cfg: &GameConfig,
+        portal: PortalId,
+        hp: u32,
+    ) -> u32 {
+        let Some(&(observed, first)) = self.sieges.get(&portal) else {
+            return u32::MAX;
+        };
+        let elapsed = obs
+            .round
+            .saturating_sub(first)
+            .min(params.threat_window_rounds)
+            .max(1);
+        // attacks_needed * elapsed / observed, in u64 before the u32 clamp.
+        let rounds = attacks_needed(hp, cfg) as u64 * elapsed as u64 / observed as u64;
+        rounds.min(u32::MAX as u64) as u32
+    }
 }
 
 /// Loss-risk discount (rounds): every candidate vertex under recent enemy
@@ -315,15 +394,11 @@ pub fn risk_rounds(
     params: &ValueParams,
     candidate: &FieldCandidate,
 ) -> u32 {
-    let enemy = faction.opposite();
+    let index = ThreatIndex::build(obs, faction.opposite(), params);
     candidate
         .vertices
         .iter()
-        .filter(|&&vertex| {
-            obs.events
-                .iter()
-                .any(|event| is_recent_enemy_attack(obs, enemy, params, event, vertex))
-        })
+        .filter(|&&vertex| index.under_siege(vertex))
         .count() as u32
         * params.risk_rounds_per_threatened_vertex
 }
@@ -339,6 +414,68 @@ pub fn horizon_rounds(cfg: &GameConfig, round: u32, params: &ValueParams) -> u32
 /// ATTACK_DAMAGE.
 pub fn attacks_needed(hp: u32, cfg: &GameConfig) -> u32 {
     hp.div_ceil(cfg.attack_damage.max(1))
+}
+
+/// The actual approach cost of one prospective attacker.
+#[derive(Clone, Copy, Debug)]
+pub struct AttackArrival {
+    pub agent: AgentId,
+    pub movement_rounds: u32,
+}
+
+impl AttackArrival {
+    pub fn for_agent(
+        agent: &AgentPrivate,
+        target: Coord,
+        cfg: &GameConfig,
+        horizon: u32,
+    ) -> Option<Self> {
+        crate::common::movement_rounds_to_within(
+            agent.position,
+            target,
+            cfg.portal_operation_range_cm,
+            cfg.move_budget_cm,
+            horizon,
+        )
+        .map(|movement_rounds| Self {
+            agent: agent.id,
+            movement_rounds,
+        })
+    }
+
+    pub fn first_attack_delay(self) -> u32 {
+        self.movement_rounds.saturating_sub(1)
+    }
+}
+
+/// The same whole-team estimate is used before and after allocation.
+/// None means the team cannot finish in time or contains a late member
+/// who contributes no necessary damage. Non-positive net value cannot
+/// justify spending these agents instead of their building opportunity.
+pub fn strike_value(
+    economy: &Economy,
+    income_per_round: u128,
+    needed: u32,
+    team: &[AttackArrival],
+) -> Option<i128> {
+    let finish = (0..economy.horizon_rounds).find(|&round| {
+        team.iter()
+            .map(|agent| {
+                round
+                    .saturating_add(1)
+                    .saturating_sub(agent.first_attack_delay()) as u64
+            })
+            .sum::<u64>()
+            >= needed as u64
+    })?;
+    if team.iter().any(|agent| agent.first_attack_delay() > finish) {
+        return None;
+    }
+    let travel: u128 = team.iter().map(|agent| agent.movement_rounds as u128).sum();
+    Some(
+        income_per_round as i128 * (economy.horizon_rounds - finish) as i128
+            - (travel + needed as u128) as i128 * economy.opportunity_per_round as i128,
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -402,6 +539,11 @@ fn candidate_triples(
     max_link_distance_cm: u32,
 ) -> Vec<([PortalId; 3], u64)> {
     let link_ids: BTreeSet<LinkId> = links.iter().map(|l| l.id).collect();
+    let reusable: BTreeSet<LinkId> = links
+        .iter()
+        .filter(|link| owners(link.faction).0 == buildable)
+        .map(|link| link.id)
+        .collect();
     let eligible: Vec<PortalId> = portals
         .iter()
         .filter(|p| p.owner == Owner::Neutral || p.owner == buildable)
@@ -414,7 +556,9 @@ fn candidate_triples(
         std::collections::BTreeMap::new();
     for (index, &a) in eligible.iter().enumerate() {
         for &b in eligible.iter().skip(index + 1) {
-            if edge_viable(portals, links, &link_ids, max_link_distance_cm, a, b) {
+            if reusable.contains(&LinkId::new(a, b).unwrap())
+                || edge_viable(portals, links, &link_ids, max_link_distance_cm, a, b)
+            {
                 adjacency.entry(a).or_default().insert(b);
                 adjacency.entry(b).or_default().insert(a);
             }
@@ -440,6 +584,16 @@ fn candidate_triples(
                 .copied()
                 .collect();
             for c in common {
+                if [
+                    LinkId::new(a, b).unwrap(),
+                    LinkId::new(a, c).unwrap(),
+                    LinkId::new(b, c).unwrap(),
+                ]
+                .iter()
+                .all(|link| reusable.contains(link))
+                {
+                    continue;
+                }
                 let area = area2(position(a), position(b), position(c));
                 if area > 0 {
                     triples.push(([a, b, c], area));
@@ -451,7 +605,7 @@ fn candidate_triples(
 }
 
 /// This round's viable own-faction field candidates for `faction`, ranked
-/// by exact `area2` descending with ascending-triple tie-breaks and
+/// by existing own-edge count, then `area2` descending and triple, and
 /// truncated to `params.max_field_candidates` (the compute bound of plan
 /// section 15; value ranking happens in [`rank_field_candidates`]).
 pub fn field_candidates(
@@ -466,10 +620,23 @@ pub fn field_candidates(
             .into_iter()
             .map(|(vertices, area2)| FieldCandidate { vertices, area2 })
             .collect();
-    candidates.sort_by(|a, b| {
-        b.area2
-            .cmp(&a.area2)
-            .then_with(|| a.vertices.cmp(&b.vertices))
+    let own_links: BTreeSet<_> = obs
+        .links
+        .iter()
+        .filter(|link| link.faction == faction)
+        .map(|link| link.id)
+        .collect();
+    candidates.sort_by_cached_key(|candidate| {
+        let [a, b, c] = candidate.vertices;
+        let completed = [(a, b), (a, c), (b, c)]
+            .into_iter()
+            .filter(|&(s, t)| own_links.contains(&LinkId::new(s, t).unwrap()))
+            .count();
+        (
+            std::cmp::Reverse(completed),
+            std::cmp::Reverse(candidate.area2),
+            candidate.vertices,
+        )
     });
     candidates.truncate(params.max_field_candidates);
     candidates
@@ -525,6 +692,41 @@ pub fn field_value(
     candidate: &FieldCandidate,
 ) -> i64 {
     let horizon = horizon_rounds(cfg, obs.round, params) as i64;
+    let [a, b, c] = candidate.vertices;
+    let pending: Vec<_> = [(a, b), (a, c), (b, c)]
+        .into_iter()
+        .filter(|&(s, t)| {
+            !obs.links
+                .iter()
+                .any(|link| link.faction == faction && link.id == LinkId::new(s, t).unwrap())
+        })
+        .collect();
+    if let [(source, target)] = pending.as_slice() {
+        let delay = obs
+            .own_agents
+            .iter()
+            .flat_map(|agent| {
+                [(*source, *target), (*target, *source)]
+                    .into_iter()
+                    .filter_map(move |(s, t)| {
+                        crate::common::link_completion_delay(
+                            obs,
+                            owners(faction).0,
+                            cfg,
+                            agent,
+                            s,
+                            t,
+                        )
+                    })
+            })
+            .min();
+        if let Some(delay) = delay {
+            let saved_rounds = horizon
+                .saturating_sub(delay as i64)
+                .saturating_sub(risk_rounds(obs, faction, params, candidate) as i64);
+            return sat_i64(candidate.area2 as i128 * saved_rounds as i128);
+        }
+    }
     let setup = [
         travel_rounds_to_triangle(obs, cfg, &candidate.vertices),
         key_rounds(obs, faction, cfg, candidate),
@@ -638,26 +840,34 @@ pub fn attack_value(
     let Some(target) = view(obs, portal) else {
         return i64::MIN;
     };
-    let enemy = faction.opposite();
-    let horizon = economy.horizon_rounds as u128;
-    let preventable = preventable_income(obs, enemy, economy.horizon_rounds, portal);
-    let capture_gain = best_own_triangle_through(obs, faction, cfg, portal) as u128
-        * horizon
-        * params.capture_gain_share_permille as u128
-        / 1000;
+    let gain =
+        attack_income_per_round(obs, faction, cfg, params, portal) * economy.horizon_rounds as u128;
     let agent_rounds =
         travel_rounds_to(obs, cfg, portal) as u128 + attacks_needed(target.hp, cfg) as u128;
     let cost = agent_rounds * economy.opportunity_per_round as u128;
-    sat_i64(preventable as i128 + capture_gain as i128 - cost as i128)
+    sat_i64(gain as i128 - cost as i128)
 }
 
-/// RECHARGE / DEFENSE value of an own portal (plan 6.2): the future own
-/// field income that dies with the anchor, minus the Supply spent, the
-/// travel to reach it, and the Major Action's opportunity cost. Gated by
-/// urgency — the anchor is below the recorded HP share or under recent
-/// enemy attack — so healthy, unthreatened anchors score exactly 0 (a
-/// Recharge that preserves nothing new is never valued). Portals carrying
-/// no live own field score 0; unknown portals score `i64::MIN`.
+/// Income denied or unlocked for each round after neutralization. The
+/// overlay uses the actual strike's completion time and total travel cost.
+pub fn attack_income_per_round(
+    obs: &Observation,
+    faction: Faction,
+    cfg: &GameConfig,
+    params: &ValueParams,
+    portal: PortalId,
+) -> u128 {
+    preventable_income(obs, faction.opposite(), 1, portal)
+        + best_own_triangle_through(obs, faction, cfg, portal) as u128
+            * params.capture_gain_share_permille as u128
+            / 1000
+}
+
+/// Marginal DEFENSE value: additional settled field-income rounds bought
+/// by one Recharge, less actual defender time and Supply cost. Current
+/// lifecycle pressure determines the damage rate; quiet low-HP anchors use
+/// one attack per round as a conservative reserve estimate. Reject full HP,
+/// fatal arrivals, and observed enemy-first lethal strikes.
 pub fn defense_value(
     obs: &Observation,
     faction: Faction,
@@ -666,35 +876,138 @@ pub fn defense_value(
     economy: &Economy,
     portal: PortalId,
 ) -> i64 {
-    let Some(target) = view(obs, portal) else {
-        return i64::MIN;
-    };
-    let mut preserved_area: u128 = 0;
-    for field in obs.fields.iter().filter(|f| f.faction == faction) {
-        if field.id.contains(portal) {
-            preserved_area += field.area2 as u128;
+    let model = DefenseModel::new(obs, faction, cfg, params, economy);
+    obs.own_agents
+        .iter()
+        .map(|agent| model.value(agent, portal))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Scores the actual prospective defender, including remote Key access,
+/// Supply and its own arrival deadline. The event index is shared across
+/// every candidate in one observation; the allocator never substitutes
+/// another agent's shorter journey for the executor's journey.
+pub struct DefenseModel<'a> {
+    obs: &'a Observation,
+    faction: Faction,
+    cfg: &'a GameConfig,
+    params: &'a ValueParams,
+    economy: &'a Economy,
+    threats: ThreatIndex,
+}
+
+impl<'a> DefenseModel<'a> {
+    pub fn new(
+        obs: &'a Observation,
+        faction: Faction,
+        cfg: &'a GameConfig,
+        params: &'a ValueParams,
+        economy: &'a Economy,
+    ) -> Self {
+        Self {
+            obs,
+            faction,
+            cfg,
+            params,
+            economy,
+            threats: ThreatIndex::build(obs, faction.opposite(), params),
         }
     }
-    if preserved_area == 0 {
-        return 0;
+
+    pub fn value(&self, agent: &AgentPrivate, portal: PortalId) -> i64 {
+        let Some(target) = view(self.obs, portal) else {
+            return i64::MIN;
+        };
+        if target.owner != owners(self.faction).0
+            || target.hp >= self.cfg.portal_max_hp
+            || agent.supply < self.cfg.recharge_cost_supply
+        {
+            return 0;
+        }
+        let preserved_area: u128 = self
+            .obs
+            .fields
+            .iter()
+            .filter(|f| f.faction == self.faction && f.id.contains(portal))
+            .map(|f| f.area2 as u128)
+            .sum();
+        if preserved_area == 0 {
+            return 0;
+        }
+        let hp_low = target.hp as u64 * 1000
+            < self.cfg.portal_max_hp as u64 * self.params.defend_hp_permille as u64;
+        if !hp_low && !self.threats.under_siege(portal) {
+            return 0;
+        }
+        // D20 alternates the first faction. Under continuing observed
+        // pressure, one enemy Major Action can destroy this anchor before
+        // even our first submission; do not promise an impossible rescue.
+        let acts_first = (self.obs.round % 2 == 1) == (self.faction == Faction::Enl);
+        if !acts_first && self.threats.under_siege(portal) && target.hp <= self.cfg.attack_damage {
+            return 0;
+        }
+        let travel = if agent.keys.get(&portal).copied().unwrap_or(0) > 0 {
+            0
+        } else {
+            let Some(moves) = crate::common::movement_rounds_to_within(
+                agent.position,
+                target.position,
+                self.cfg.portal_operation_range_cm,
+                self.cfg.move_budget_cm,
+                self.cfg.total_rounds.saturating_sub(self.obs.round),
+            ) else {
+                return 0;
+            };
+            moves
+        };
+        let arrival = travel.saturating_add(1);
+        let collapse =
+            self.threats
+                .rounds_until_collapse(self.obs, self.params, self.cfg, portal, target.hp);
+        if travel > 0 && arrival >= collapse {
+            return 0;
+        }
+        // Credit only the extra lifetime bought by THIS Recharge. Under
+        // observed pressure use its settled damage rate; a damaged, quiet
+        // anchor uses one attack per round as a conservative reserve value.
+        let (hits, elapsed) = self
+            .threats
+            .sieges
+            .get(&portal)
+            .map_or((1, 1), |&(hits, first)| {
+                (
+                    hits,
+                    self.obs
+                        .round
+                        .saturating_sub(first)
+                        .min(self.params.threat_window_rounds)
+                        .max(1),
+                )
+            });
+        let damage = (hits as u128 * self.cfg.attack_damage.max(1) as u128)
+            .div_ceil(elapsed as u128)
+            .max(1);
+        let arrival_hp = (target.hp as u128).saturating_sub(damage * travel as u128);
+        if arrival_hp == 0 {
+            return 0;
+        }
+        let remaining = self.economy.horizon_rounds.saturating_sub(travel) as u128;
+        let unassisted = arrival_hp.saturating_sub(1) / damage;
+        let heal = (self.cfg.recharge_amount as u128)
+            .min((self.cfg.portal_max_hp as u128).saturating_sub(arrival_hp));
+        let assisted = (arrival_hp + heal).saturating_sub(1) / damage;
+        let preserved = preserved_area
+            * assisted
+                .min(remaining)
+                .saturating_sub(unassisted.min(remaining));
+        let action_cost = arrival as u128 * self.economy.opportunity_per_round as u128;
+        let supply_cost = self.cfg.recharge_cost_supply as u128
+            * self.params.supply_cost_permille as u128
+            * self.economy.opportunity_per_round as u128
+            / 1000;
+        sat_i64((preserved as i128 - action_cost as i128 - supply_cost as i128) / arrival as i128)
     }
-    let hp_low =
-        (target.hp as u64) * 1000 < (cfg.portal_max_hp as u64) * params.defend_hp_permille as u64;
-    let attacked = obs
-        .events
-        .iter()
-        .any(|event| is_recent_enemy_attack(obs, faction.opposite(), params, event, portal));
-    if !hp_low && !attacked {
-        return 0;
-    }
-    let preserved = preserved_area * economy.horizon_rounds as u128;
-    let agent_rounds = travel_rounds_to(obs, cfg, portal) as u128 + 1; // + the Major Action
-    let movement_and_major = agent_rounds * economy.opportunity_per_round as u128;
-    let supply = cfg.recharge_cost_supply as u128
-        * params.supply_cost_permille as u128
-        * economy.opportunity_per_round as u128
-        / 1000;
-    sat_i64(preserved as i128 - movement_and_major as i128 - supply as i128)
 }
 
 /// TRANSFER value (plan 6.2): the income a resource reallocation

@@ -18,6 +18,58 @@ pub fn in_range(a: Coord, b: Coord, range_cm: u32) -> bool {
     within_closed_range(a, b, range_cm)
 }
 
+/// A legal source position reachable in this round, including a Move
+/// followed by Link in the same ordered auxiliary command stream.
+pub fn link_position_this_round(
+    obs: &Observation,
+    own: Owner,
+    cfg: &GameConfig,
+    agent: &AgentPrivate,
+    source: PortalId,
+    target: PortalId,
+) -> Option<Coord> {
+    if link_is_legal(obs, own, cfg, agent.position, &agent.keys, source, target) {
+        return Some(agent.position);
+    }
+    let position = step_toward(
+        agent.position,
+        portal(obs, source).position,
+        cfg.move_budget_cm,
+    );
+    link_is_legal(obs, own, cfg, position, &agent.keys, source, target).then_some(position)
+}
+
+/// Earliest future decision offset for the same Move-then-Link executor,
+/// assuming the observed ownership and link geometry remain unchanged.
+pub fn link_completion_delay(
+    obs: &Observation,
+    own: Owner,
+    cfg: &GameConfig,
+    agent: &AgentPrivate,
+    source: PortalId,
+    target: PortalId,
+) -> Option<u32> {
+    let stand = portal(obs, source).position;
+    if !link_is_legal(obs, own, cfg, stand, &agent.keys, source, target) {
+        return None;
+    }
+    let mut position = agent.position;
+    for delay in 0..cfg.total_rounds.saturating_sub(obs.round).saturating_add(1) {
+        if link_is_legal(obs, own, cfg, position, &agent.keys, source, target) {
+            return Some(delay);
+        }
+        let next = step_toward(position, stand, cfg.move_budget_cm);
+        if next == position {
+            return None;
+        }
+        position = next;
+        if in_range(position, stand, cfg.portal_operation_range_cm) {
+            return Some(delay);
+        }
+    }
+    None
+}
+
 /// The faction's `(own, enemy)` portal owners.
 pub fn owners(faction: arena_core::types::Faction) -> (Owner, Owner) {
     match faction {
@@ -51,6 +103,28 @@ pub fn step_toward(from: Coord, to: Coord, budget_cm: u32) -> Coord {
         }
     }
     Coord::new(from.x + sx, from.y + sy)
+}
+
+/// Moves needed to enter the operation range using the executor's exact
+/// integer stepping. Returns None if the remaining decision window is too short.
+pub fn movement_rounds_to_within(
+    from: Coord,
+    to: Coord,
+    range_cm: u32,
+    budget_cm: u32,
+    max_rounds: u32,
+) -> Option<u32> {
+    let mut position = from;
+    for moves in 0..=max_rounds {
+        if in_range(position, to, range_cm) {
+            return Some(moves);
+        }
+        if budget_cm == 0 || moves == max_rounds {
+            return None;
+        }
+        position = step_toward(position, to, budget_cm);
+    }
+    None
 }
 
 /// Own-memory mirror of the engine's hack trackers: hack cooldown and the
@@ -96,6 +170,20 @@ impl HackLedger {
         portal: PortalId,
     ) -> bool {
         self.sweep(round, cfg.epoch_length);
+        self.available(round, cfg, agent, portal)
+    }
+
+    /// Read-only eligibility for planning, including the impending epoch reset.
+    pub fn available(
+        &self,
+        round: u32,
+        cfg: &GameConfig,
+        agent: AgentId,
+        portal: PortalId,
+    ) -> bool {
+        if GameState::epoch_index(round, cfg.epoch_length) != self.epoch {
+            return true;
+        }
         match self.entries.get(&(agent, portal)) {
             None => true,
             Some(entry) => {
@@ -156,6 +244,16 @@ impl CommandList {
 
     pub fn is_empty(&self) -> bool {
         self.aux.is_empty() && self.major.is_none() && self.mv.is_none()
+    }
+
+    /// The destination of the list's Move command, if any (read-only
+    /// inspection: the logistics payment step checks whether a receiver's
+    /// walk would break TRANSFER_RANGE before the Transfer settles).
+    pub fn move_destination(&self) -> Option<Coord> {
+        match &self.mv {
+            Some(Command::Move { destination }) => Some(*destination),
+            _ => None,
+        }
     }
 
     /// Whether the single Major Action slot is already filled.

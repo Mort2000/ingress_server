@@ -7,7 +7,7 @@
 | [spec/](./spec/) | v0.1 规则文档集(唯一事实源,条款编号 `R-*`)与 MVP 实施方案(里程碑 `M1`–`M10`) |
 | [adr/](./adr/) | 架构决策记录:难以反转且存在真实取舍的决定 |
 | [design/](./design/) | 子系统设计:沙箱隔离、回放观看器、构建溯源 |
-| [balance/](./balance/) | 平衡实验计划与 B1–B4 阶段报告 |
+| [balance/](./balance/) | 平衡实验计划与 B1–B4 阶段报告；当前状态见 [r2.3 Bot 行为优化与验收](./balance/r23-behavior-validation.md) |
 | [reports/](./reports/) | 正式结论:MVP 验收、r1 锦标赛 |
 | [progress.md](./progress.md) | 里程碑日志与冻结决策清单(`D-*` 编号) |
 

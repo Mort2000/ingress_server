@@ -22,7 +22,7 @@ use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 use crate::r2::builder_defender::merge_requests;
 use crate::r2::greedy_coordinated::submissions;
-use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
+use crate::r2::tasks::{Task, TaskRequest};
 use crate::r2::value::block_values;
 
 /// The recorded `blocker-builder-r2` parameters.
@@ -68,7 +68,7 @@ impl BlockerBuilderParams {
 /// The blocking overlay's task requests: every legal own link this round
 /// whose block value clears the recorded threshold, as one-shot
 /// [`Task::Link`] requests at their block value — each requested only by
-/// the agent already in range of its source (deterministic ranking:
+/// an agent able to reach its source and Link this round (deterministic ranking:
 /// value descending, then ascending `(source, target, agent)`). The
 /// allocator arbitrates denial against the build tasks by value.
 pub fn blocking_requests(
@@ -116,7 +116,7 @@ pub fn blocking_requests(
     requests
 }
 
-/// The `blocker-builder-r2` policy (version `r2.0`, family `blocker`).
+/// The `blocker-builder-r2` policy (current R2 version, family `blocker`).
 pub struct BlockerBuilder {
     core: BuilderCore,
     params: BlockerBuilderParams,
@@ -144,7 +144,6 @@ impl BlockerBuilder {
     /// One round (shared with the adaptive hybrid's composition).
     pub fn round_commands(&mut self, obs: &Observation) -> BTreeMap<AgentId, CommandList> {
         self.core.refresh(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
         let mut requests = if self.core.active().is_some() {
             self.core.build_requests(obs)
         } else {
@@ -154,13 +153,15 @@ impl BlockerBuilder {
             &mut requests,
             blocking_requests(&self.core, obs, &self.params),
         );
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        self.core.execute(obs, &grants)
+        self.core.allocate_and_execute(obs, &requests)
     }
 }
 
 impl R2Policy for BlockerBuilder {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,

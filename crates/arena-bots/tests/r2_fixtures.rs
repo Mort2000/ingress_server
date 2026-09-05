@@ -325,7 +325,7 @@ fn field_value_discounts_enemy_pressure_from_public_history_only() {
         .agent(0, Coord::new(4 * KM, 4 * KM), 20)
         .agent(1, Coord::new(16 * KM, 4 * KM), 20)
         .agent(2, Coord::new(4 * KM, 16 * KM), 20)
-        .event(enemy_attack(0, 10, 0, 80)) // this round: within the window
+        .event(enemy_attack(0, 9, 0, 80)) // latest settled round
         .build();
     let calm = two_triangle_world(10)
         .agent(0, Coord::new(4 * KM, 4 * KM), 20)
@@ -615,11 +615,11 @@ fn defense_value_recharges_only_urgent_anchors_ranked_by_live_field_area2() {
         .agent(2, Coord::new(4 * KM, 16 * KM), 20)
         .build();
     // P0 carries both fields (250M), P1 carries both too (250M): equal
-    // live income; exact integer for P0: 250M x 100 - (1 major round +
+    // live income; one extra settled income round: 250M - (1 major round +
     // 1 supply x 500 permille) x 10M.
     assert_eq!(
         defense_value(&obs, Faction::Enl, &cfg, &params, &economy, PortalId(0)),
-        250_000_000i64 * 100 - 10_000_000 - 5_000_000
+        250_000_000i64 - 10_000_000 - 5_000_000
     );
     assert_eq!(
         defense_value(&obs, Faction::Enl, &cfg, &params, &economy, PortalId(0)),
@@ -631,12 +631,12 @@ fn defense_value_recharges_only_urgent_anchors_ranked_by_live_field_area2() {
         defense_value(&obs, Faction::Enl, &cfg, &params, &economy, PortalId(2)),
         0
     );
-    // A fresh enemy attack makes a full-HP anchor urgent (public history).
+    // A fresh settled attack makes a damaged anchor urgent.
     let attacked = ObsBuilder::new(4)
-        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 80)
         .field([0, 1, 2], Faction::Enl, 200_000_000)
         .agent(0, Coord::new(4 * KM, 4 * KM), 20)
-        .event(enemy_attack(0, 4, 0, 100))
+        .event(enemy_attack(0, 3, 0, 80))
         .build();
     let attacked_value = defense_value(
         &attacked,
@@ -661,10 +661,10 @@ fn defense_value_recharges_only_urgent_anchors_ranked_by_live_field_area2() {
         ) < attacked_value
     );
     let far = ObsBuilder::new(4)
-        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 80)
         .field([0, 1, 2], Faction::Enl, 200_000_000)
         .agent(0, Coord::new(36 * KM, 36 * KM), 20)
-        .event(enemy_attack(0, 4, 0, 100))
+        .event(enemy_attack(0, 3, 0, 80))
         .build();
     assert!(
         defense_value(&far, Faction::Enl, &cfg, &params, &economy, PortalId(0)) < attacked_value
@@ -1001,14 +1001,14 @@ fn link_created(seq: u64, round: u32, faction: Faction, a: u32, b: u32) -> Event
 fn opponent_model_reads_pressure_from_public_history_only() {
     let params = OpponentParams::default();
     let mut model = OpponentModel::new(params, Faction::Res);
-    // Round 10 observation: the enemy hit P0 twice (rounds 9 and 10, both
+    // Round 10 observation: the enemy hit P0 twice (rounds 8 and 9, both
     // inside the default window) and P1 once, long ago (round 1).
     let obs = ObsBuilder::new(10)
         .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 60)
         .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 90)
         .agent(0, Coord::new(4 * KM, 4 * KM), 20)
-        .event(enemy_attack(0, 9, 0, 80))
-        .event(enemy_attack(1, 10, 0, 60))
+        .event(enemy_attack(0, 8, 0, 80))
+        .event(enemy_attack(1, 9, 0, 60))
         .event(enemy_attack(2, 1, 1, 90))
         .build();
     model.update(&obs);
@@ -1101,7 +1101,7 @@ fn opponent_pressure_caps_at_the_recorded_bound_and_params_round_trip() {
         .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 40)
         .agent(0, Coord::new(4 * KM, 4 * KM), 20);
     for seq in 0..9u64 {
-        builder = builder.event(enemy_attack(seq, 10, 0, 80));
+        builder = builder.event(enemy_attack(seq, 9, 0, 80));
     }
     let obs = builder.build();
     model.update(&obs);
@@ -1558,7 +1558,7 @@ fn near_equal_sampling_is_seed_sensitive_across_streams() {
 // ---------------------------------------------------------------------
 
 use arena_bots::policy::{PolicyId, make_policy_player};
-use arena_bots::r2::adaptive_hybrid_r2::{AdaptiveHybridParams, AdaptiveHybridR2, RoleMix};
+use arena_bots::r2::adaptive_hybrid_r2::{AdaptiveHybridR2, RoleMix};
 use arena_bots::r2::blocker_builder::{BlockerBuilder, BlockerBuilderParams};
 use arena_bots::r2::builder_defender::{BuilderDefender, BuilderDefenderParams};
 use arena_bots::r2::builder_disruptor::{BuilderDisruptor, BuilderDisruptorParams};
@@ -1606,7 +1606,10 @@ fn round_of(policy: &mut dyn R2Policy, obs: &Observation) -> BTreeMap<AgentId, V
         }
         if let (Some(&major_at), Some(&move_at)) = (major_positions.first(), move_positions.first())
         {
-            assert!(major_at < move_at, "the Major Action precedes the Move");
+            assert!(
+                major_at < move_at || matches!(submission.commands[major_at], Command::Attack),
+                "Attack may follow a same-round approach Move"
+            );
         }
         out.insert(submission.agent_id, submission.commands);
     }
@@ -1619,6 +1622,10 @@ fn round_of(policy: &mut dyn R2Policy, obs: &Observation) -> BTreeMap<AgentId, V
 #[test]
 fn defender_recharges_the_value_selected_anchor_only() {
     let cfg = support::fixture_cfg();
+    // Isolate defender selection; r23_mechanisms separately pits a
+    // marginal Recharge against an immediately executable field.
+    let mut params = BuilderDefenderParams::default();
+    params.core.value.max_field_candidates = 0;
     let world = |p0_hp: u32| {
         ObsBuilder::new(1)
             .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, p0_hp)
@@ -1639,12 +1646,7 @@ fn defender_recharges_the_value_selected_anchor_only() {
     // Urgent anchor (hp 40 < the recorded 500 permille share) carrying a
     // huge live field: the agent standing on it recharges it, exactly
     // once, as its single Major Action.
-    let mut defender = BuilderDefender::new(
-        Faction::Enl,
-        0x0DEF_0000_0000_0001,
-        &cfg,
-        BuilderDefenderParams::default(),
-    );
+    let mut defender = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0001, &cfg, params);
     let commands = round_of(&mut defender, &world(40));
     assert_eq!(
         commands.get(&AgentId(0)).map(|c| c.as_slice()),
@@ -1662,12 +1664,7 @@ fn defender_recharges_the_value_selected_anchor_only() {
         .count();
     assert_eq!(recharges, 1, "exactly one recharge (the defense cap)");
     // Healthy anchors: no defense value anywhere -> pure building.
-    let mut calm = BuilderDefender::new(
-        Faction::Enl,
-        0x0DEF_0000_0000_0001,
-        &cfg,
-        BuilderDefenderParams::default(),
-    );
+    let mut calm = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0001, &cfg, params);
     let commands = round_of(&mut calm, &world(100));
     assert!(
         commands
@@ -1751,7 +1748,7 @@ fn disruptor_sends_exactly_the_needed_attackers() {
 /// the sender's payload respects TRANSFER_RANGE, its reserve and the
 /// receiver's MAX_SUPPLY headroom.
 #[test]
-fn logistics_emits_a_drop_free_transfer_to_the_stationed_linker() {
+fn logistics_prefers_a_reachable_direct_link_to_the_nearby_station() {
     let cfg = support::fixture_cfg();
     // The only viable own candidate: (P0, P1, P2), all ENL, no links. Edge
     // (P0, P1): agent 1 stands 4 km from the source P0 without P1's key;
@@ -1787,18 +1784,22 @@ fn logistics_emits_a_drop_free_transfer_to_the_stationed_linker() {
         .clone();
     assert_eq!(
         transfer,
-        vec![Command::Transfer {
-            target_agent: AgentId(1),
-            // receiver supply 20, MAX_SUPPLY 100 -> headroom 80; sender
-            // keeps the recorded reserve of 5 -> 15.
-            supply: 15,
-            keys: BTreeMap::from([(PortalId(1), 1)]),
-        }]
+        vec![
+            Command::Move {
+                destination: Coord::new(4 * KM, 4 * KM)
+            },
+            Command::Link {
+                source_portal: PortalId(0),
+                target_portal: PortalId(1)
+            }
+        ]
     );
-    // The receiver stands by (no Move) while the delivery is in flight.
     assert!(
-        !commands.contains_key(&AgentId(1)),
-        "the stationed linker waits for the key"
+        commands
+            .values()
+            .flatten()
+            .all(|c| !matches!(c, Command::Transfer { .. })),
+        "the direct holder completes the edge without a delivery"
     );
 }
 
@@ -1867,115 +1868,72 @@ fn blocker_picks_the_link_crossing_the_enemy_candidate() {
 #[test]
 fn adaptive_switches_roles_by_phase_score_and_threat() {
     let cfg = support::fixture_cfg();
-    let world = |round: u32, threat: bool, enl_score: u128, res_score: u128| {
+    let world = |round: u32, threat: bool, enemy_field: bool| {
         let mut b = ObsBuilder::new(round)
-            .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 40)
-            .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 100)
-            .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Enl, 100)
-            .portal(3, Coord::new(36 * KM, 4 * KM), Owner::Res, 100)
-            .portal(4, Coord::new(36 * KM, 16 * KM), Owner::Res, 100)
-            .portal(5, Coord::new(24 * KM, 16 * KM), Owner::Res, 100)
+            .portal(
+                0,
+                Coord::new(4_000, 4_000),
+                Owner::Enl,
+                if threat { 40 } else { 100 },
+            )
+            .portal(1, Coord::new(16_000, 4_000), Owner::Enl, 100)
+            .portal(2, Coord::new(4_000, 16_000), Owner::Enl, 100)
+            .portal(3, Coord::new(36_000, 4_000), Owner::Res, 100)
+            .portal(4, Coord::new(36_000, 16_000), Owner::Res, 100)
+            .portal(5, Coord::new(24_000, 16_000), Owner::Res, 100)
+            .link(0, 1, Faction::Enl)
+            .link(0, 2, Faction::Enl)
+            .link(1, 2, Faction::Enl)
             .field([0, 1, 2], Faction::Enl, 1_000_000_000)
-            .field([3, 4, 5], Faction::Res, 100_000_000)
-            .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+            .agent(0, Coord::new(4_000, 4_000), 20)
             .agent_keys(0, 0, 1)
-            .agent(1, Coord::new(16 * KM, 4 * KM), 20)
-            .agent_keys(1, 1, 1)
-            .agent(2, Coord::new(4 * KM, 16 * KM), 20)
-            .agent_keys(2, 2, 1);
-        if threat {
-            b = b.event(enemy_attack(0, round, 0, 40));
+            .agent(1, Coord::new(36_000, 4_000), 20)
+            .agent(2, Coord::new(36_000, 4_000), 20);
+        if enemy_field {
+            b = b.field([3, 4, 5], Faction::Res, 100_000_000);
         }
-        let mut obs = b.build();
-        obs.scores.insert(Faction::Enl, enl_score);
-        obs.scores.insert(Faction::Res, res_score);
-        obs
+        if threat {
+            b = b.event(enemy_attack(0, round - 1, 0, 40));
+        }
+        b.build()
     };
-    // Each scenario drives a FRESH instance: the opponent model accumulates
-    // public history by design, and these scenarios assert the switching
-    // inputs in isolation.
-    let fresh = || {
-        AdaptiveHybridR2::new(
+    for (round, threat, enemy, expected) in [
+        (1, false, true, RoleMix::Opening),
+        (200, false, false, RoleMix::MidBuild),
+        (200, true, false, RoleMix::MidDefend),
+        (200, false, true, RoleMix::MidDisrupt),
+        (430, true, false, RoleMix::EndDefend),
+        (430, false, true, RoleMix::EndDisrupt),
+    ] {
+        let obs = world(round, threat, enemy);
+        let mut policy = AdaptiveHybridR2::new(
             Faction::Enl,
             0x0A0A_0000_0000_0001,
             &cfg,
-            AdaptiveHybridParams::default(),
-        )
-    };
-    // Phase input: round 1 of 500 (2 permille) is the opening.
-    assert_eq!(fresh().role_mix(&world(1, false, 0, 0)), RoleMix::Opening);
-    // Mid-game, tied public scores, no threat: pure build.
-    assert_eq!(
-        fresh().role_mix(&world(200, false, 100, 100)),
-        RoleMix::MidBuild
-    );
-    // The same round under public threat switches to defense.
-    assert_eq!(
-        fresh().role_mix(&world(200, true, 100, 100)),
-        RoleMix::MidDefend
-    );
-    // A recorded lead share switches to disruption.
-    assert_eq!(
-        fresh().role_mix(&world(200, false, 700, 300)),
-        RoleMix::MidDisrupt
-    );
-    // The endgame returns to pure build.
-    assert_eq!(
-        fresh().role_mix(&world(430, false, 700, 300)),
-        RoleMix::Endgame
-    );
-
-    // The decisions follow: threat -> the urgent anchor is recharged.
-    let mut policy = AdaptiveHybridR2::new(
-        Faction::Enl,
-        0x0A0A_0000_0000_0001,
-        &cfg,
-        AdaptiveHybridParams::default(),
-    );
-    let commands = round_of(&mut policy, &world(200, true, 100, 100));
-    assert!(
-        commands
-            .get(&AgentId(0))
-            .expect("agent 0 acts")
-            .contains(&Command::Recharge {
-                portal: PortalId(0)
-            })
-    );
-    // Tied, calm mid-game: building only (no recharge, no attack).
-    let mut policy = AdaptiveHybridR2::new(
-        Faction::Enl,
-        0x0A0A_0000_0000_0001,
-        &cfg,
-        AdaptiveHybridParams::default(),
-    );
-    let commands = round_of(&mut policy, &world(200, false, 100, 100));
-    assert!(
-        commands
-            .values()
-            .flatten()
-            .all(|c| { !matches!(c, Command::Recharge { .. }) && !matches!(c, Command::Attack) })
-    );
-    // Leading mid-game: the strike mass is staged at the value-selected
-    // target (P3 — the enemy anchor with the largest capture gain, not
-    // merely the nearest one) and fires.
-    let mut strike_world = world(200, false, 700, 300);
-    for (index, agent) in strike_world.own_agents.iter_mut().enumerate() {
-        agent.position = Coord::new(36_500 + index as i32 * 10, 4_500);
+            Default::default(),
+        );
+        assert_eq!(policy.role_mix(&obs), expected);
+        let commands = round_of(&mut policy, &obs);
+        assert_eq!(
+            policy.last_role_mix(),
+            expected,
+            "diagnostic follows the actual grant set"
+        );
+        assert_eq!(
+            commands
+                .values()
+                .flatten()
+                .any(|c| matches!(c, Command::Recharge { .. })),
+            threat
+        );
+        assert_eq!(
+            commands
+                .values()
+                .flatten()
+                .any(|c| matches!(c, Command::Attack)),
+            enemy && round > 1
+        );
     }
-    let mut policy = AdaptiveHybridR2::new(
-        Faction::Enl,
-        0x0A0A_0000_0000_0001,
-        &cfg,
-        AdaptiveHybridParams::default(),
-    );
-    let commands = round_of(&mut policy, &strike_world);
-    assert!(
-        commands
-            .values()
-            .flatten()
-            .any(|c| matches!(c, Command::Attack)),
-        "leading mid-game disrupts the enemy anchor"
-    );
 }
 
 /// greedy-coordinated-r2 through the era-agnostic PolicyPlayer: spawns
@@ -2036,4 +1994,384 @@ fn policy_player_builds_r2_policies_and_idle_passes() {
     ) else {
         panic!("R2 specs construct R2 players");
     };
+}
+
+// ---------------------------------------------------------------------
+// r2.1 regression scenarios from the 2026-09-05 bot action audit
+// (.scratch/bot-action-audit-20260905/report.md): each scenario mirrors
+// a key round the audit pinned, at the decision seam it implicated.
+// ---------------------------------------------------------------------
+
+/// A NEUTRALIZATION cascade event (the attack that zeroed the portal).
+fn enemy_neutralized(seq: u64, round: u32, portal: u32) -> Event {
+    Event {
+        seq,
+        round,
+        kind: EventKind::PortalNeutralized {
+            faction: Faction::Res,
+            agent_id: AgentId(9),
+            portal: PortalId(portal),
+        },
+    }
+}
+
+/// Our own faction's CAPTURE of `portal` (the lifecycle boundary).
+fn own_capture(seq: u64, round: u32, portal: u32) -> Event {
+    Event {
+        seq,
+        round,
+        kind: EventKind::PortalCaptured {
+            faction: Faction::Enl,
+            agent_id: AgentId(0),
+            portal: PortalId(portal),
+        },
+    }
+}
+
+/// The audit's R447-R454 anchor world: P0 is OURS at full HP, carries a
+/// huge live field, and its visible attack events all predate the
+/// recapture (a previous lifecycle). `extra` appends current-lifecycle
+/// events for the contrast scenarios.
+fn audited_anchor_world(round: u32, p0_hp: u32, extra: Vec<Event>) -> Observation {
+    let mut b = ObsBuilder::new(round)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, p0_hp)
+        .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Enl, 100)
+        .field([0, 1, 2], Faction::Enl, 1_000_000_000)
+        // The pre-recapture lifecycle: sieged, zeroed, recaptured by us.
+        .event(enemy_attack(1, round - 7, 0, 80))
+        .event(enemy_attack(2, round - 6, 0, 60))
+        .event(enemy_attack(3, round - 5, 0, 40))
+        .event(enemy_neutralized(4, round - 5, 0))
+        .event(own_capture(5, round - 4, 0));
+    for event in extra {
+        b = b.event(event);
+    }
+    b.agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .agent_keys(0, 0, 1)
+        .agent(1, Coord::new(16 * KM, 4 * KM), 20)
+        .agent_keys(1, 1, 1)
+        .agent(2, Coord::new(4 * KM, 16 * KM), 20)
+        .agent_keys(2, 2, 1)
+        .build()
+}
+
+/// R447-R454: a recaptured full-HP anchor whose attack events predate the
+/// recapture scores ZERO defense value — the lifecycle segmentation the
+/// audit found missing (four 100->100 zero-effect Recharges).
+#[test]
+fn stale_pre_recapture_attacks_never_make_an_anchor_urgent() {
+    let cfg = support::fixture_cfg();
+    let params = ValueParams::default();
+    let economy = Economy {
+        horizon_rounds: 100,
+        opportunity_per_round: 1_000_000,
+    };
+    let calm = audited_anchor_world(52, 100, Vec::new());
+    assert_eq!(
+        defense_value(&calm, Faction::Enl, &cfg, &params, &economy, PortalId(0)),
+        0,
+        "full HP + only pre-recapture attacks = not urgent"
+    );
+    // The same event timeline WITHOUT the recapture boundary stays a live
+    // siege (the segmentation is what changed, not the window).
+    let mut live = audited_anchor_world(52, 40, Vec::new());
+    live.events.truncate(3); // attacks only: no neutralize, no capture
+    live.portals[0].hp = 40;
+    assert!(
+        defense_value(&live, Faction::Enl, &cfg, &params, &economy, PortalId(0)) > 0,
+        "an actually-sieged anchor (hp 40, attacks in the current lifecycle) stays urgent"
+    );
+    // A post-recapture attack re-opens the current lifecycle even at full
+    // HP (R451 shape: attacked after we re-took the anchor).
+    let re_attacked = audited_anchor_world(52, 80, vec![enemy_attack(6, 51, 0, 80)]);
+    assert!(
+        defense_value(
+            &re_attacked,
+            Faction::Enl,
+            &cfg,
+            &params,
+            &economy,
+            PortalId(0)
+        ) > 0,
+        "a current-lifecycle attack makes the damaged anchor urgent again"
+    );
+}
+
+/// R49: an agent ~8 moves away from an anchor under a 1/round siege (4
+/// attacks from death at 80 HP) cannot arrive in time — defense value is
+/// exactly 0, so no Recharge march is ever requested. The agent already
+/// standing on the anchor still defends it.
+#[test]
+fn hopeless_defense_scores_zero_until_arrival_beats_collapse() {
+    let cfg = support::fixture_cfg();
+    let params = ValueParams::default();
+    let economy = Economy {
+        horizon_rounds: 100,
+        opportunity_per_round: 1_000_000,
+    };
+    // A current-lifecycle 1/round siege at 80 HP (attacks at rounds 9-11,
+    // after the round-8 recapture): attacks_needed = 4, observed rate 3
+    // attacks per 4 elapsed rounds -> collapse estimate 5 rounds.
+    let siege_events = vec![
+        enemy_attack(6, 9, 0, 60),
+        enemy_attack(7, 10, 0, 40),
+        enemy_attack(8, 11, 0, 20),
+    ];
+    let far_world = {
+        let mut obs = audited_anchor_world(12, 80, siege_events.clone());
+        // The audit's walker: every faction agent ~8 moves from the
+        // anchor (fixture units: off-map coords are fine for a pure
+        // scorer — the nearest agent is what the gate measures).
+        for agent in obs.own_agents.iter_mut() {
+            agent.position = Coord::new(164 * KM, 4 * KM);
+            agent.keys.remove(&PortalId(0)); // no remote recharge route
+        }
+        obs
+    };
+    assert_eq!(
+        defense_value(
+            &far_world,
+            Faction::Enl,
+            &cfg,
+            &params,
+            &economy,
+            PortalId(0)
+        ),
+        0,
+        "arrival (>= 9 rounds) cannot beat the estimated collapse"
+    );
+    // The standing agent (arrival 1) still defends the same anchor.
+    let near_world = audited_anchor_world(12, 80, siege_events);
+    assert!(
+        defense_value(
+            &near_world,
+            Faction::Enl,
+            &cfg,
+            &params,
+            &economy,
+            PortalId(0)
+        ) > 0,
+        "the standing agent arrives before the collapse"
+    );
+}
+
+/// R451-R454 belt-and-braces: even when the value layer marks an anchor
+/// urgent (a current-lifecycle attack this round), execution NEVER emits a
+/// Recharge at full HP — no Major Action or Supply is spent on 100->100.
+#[test]
+fn execution_never_recharges_a_full_hp_anchor() {
+    let cfg = support::fixture_cfg();
+    // Isolate defender selection; r23_mechanisms separately pits a
+    // marginal Recharge against an immediately executable field.
+    let mut params = BuilderDefenderParams::default();
+    params.core.value.max_field_candidates = 0;
+    // Full HP + an attack AFTER the recapture: value-positive, so the
+    // Recharge task is granted — and execution holds fire.
+    let obs = audited_anchor_world(52, 100, vec![enemy_attack(6, 51, 0, 80)]);
+    let mut defender = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0AA1, &cfg, params);
+    let commands = round_of(&mut defender, &obs);
+    assert!(
+        commands
+            .values()
+            .flatten()
+            .all(|c| !matches!(c, Command::Recharge { .. })),
+        "no Recharge command at full HP: {:?}",
+        commands.get(&AgentId(0))
+    );
+    // The moment the anchor is damaged (hp 80, same siege), the standing
+    // agent recharges for real.
+    let obs = audited_anchor_world(52, 80, vec![enemy_attack(6, 51, 0, 80)]);
+    let mut defender = BuilderDefender::new(Faction::Enl, 0x0DEF_0000_0000_0AA1, &cfg, params);
+    let commands = round_of(&mut defender, &obs);
+    assert_eq!(
+        commands.get(&AgentId(0)).map(|c| c.as_slice()),
+        Some(
+            &[Command::Recharge {
+                portal: PortalId(0)
+            }][..]
+        ),
+        "a damaged urgent anchor under a survivable siege is recharged"
+    );
+}
+
+/// R13/R26/R49 of the logistics audit: when the key-holder can legally
+/// fire the edge THIS round, the handover is canceled and the link fires
+/// directly — the audit's three opening Transfers each deferred a
+/// same-round link to the next round.
+#[test]
+fn logistics_fires_directly_when_the_holder_can_link_now() {
+    let cfg = support::fixture_cfg();
+    // Agent 0 holds P0's AND P1's keys and stands inside P0's operation
+    // range: the edge (P0, P1) is legally emittable right now (holding
+    // P0's key also removes the KeyFarm distraction so the allocator's
+    // choice is unambiguous).
+    let obs = ObsBuilder::new(1)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Enl, 100)
+        .agent(0, Coord::new(6 * KM, 4 * KM), 20)
+        .agent_keys(0, 0, 1)
+        .agent_keys(0, 1, 2)
+        .agent(1, Coord::new(16 * KM, 4 * KM), 20)
+        .agent(2, Coord::new(4 * KM, 16 * KM), 20)
+        .agent_keys(2, 2, 1)
+        .build();
+    let mut logistics = arena_bots::r2::logistics_builder::LogisticsBuilder::new(
+        Faction::Enl,
+        0x106_0000_0000_0AA2,
+        &cfg,
+        arena_bots::r2::logistics_builder::LogisticsBuilderParams::default(),
+    );
+    let commands = round_of(&mut logistics, &obs);
+    assert!(
+        commands
+            .values()
+            .flatten()
+            .all(|c| !matches!(c, Command::Transfer { .. })),
+        "no handover when the direct link is available"
+    );
+    assert_eq!(
+        commands.get(&AgentId(0)).map(|c| c.as_slice()),
+        Some(
+            &[Command::Link {
+                source_portal: PortalId(0),
+                target_portal: PortalId(1),
+            }][..]
+        ),
+        "the holder fires the edge this round"
+    );
+}
+
+/// The transfer net-benefit gate: a rendezvous that arrives no sooner
+/// than the holder's own walk never derives (the audit found
+/// transfer_value defined but unwired). The holder keeps its walking
+/// Link task instead of a Transfer rendezvous.
+#[test]
+fn logistics_never_derives_a_non_accelerating_delivery() {
+    let cfg = support::fixture_cfg();
+    // Agent 0 (holder of P1's key) is far from BOTH the source P0 and the
+    // keyless station agent 1: meeting the station costs as many rounds
+    // as walking to the source, so the scheme nets <= 0.
+    let obs = ObsBuilder::new(1)
+        .portal(0, Coord::new(4 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(1, Coord::new(16 * KM, 4 * KM), Owner::Enl, 100)
+        .portal(2, Coord::new(4 * KM, 16 * KM), Owner::Enl, 100)
+        .agent(0, Coord::new(36 * KM, 4 * KM), 20)
+        .agent_keys(0, 1, 2)
+        .agent(1, Coord::new(8 * KM, 4 * KM), 20)
+        .agent(2, Coord::new(4 * KM, 16 * KM), 20)
+        .agent_keys(2, 2, 1)
+        .build();
+    let mut logistics = arena_bots::r2::logistics_builder::LogisticsBuilder::new(
+        Faction::Enl,
+        0x106_0000_0000_0AA3,
+        &cfg,
+        arena_bots::r2::logistics_builder::LogisticsBuilderParams::default(),
+    );
+    let commands = round_of(&mut logistics, &obs);
+    assert!(
+        commands
+            .values()
+            .flatten()
+            .all(|c| !matches!(c, Command::Transfer { .. })),
+        "a non-accelerating delivery must not derive"
+    );
+    // The holder keeps the core's walking Link task: it moves toward the
+    // source instead of rendezvousing.
+    assert!(
+        commands.get(&AgentId(0)).is_some_and(|c| {
+            c.iter()
+                .any(|command| matches!(command, Command::Move { .. }))
+        }),
+        "the holder walks the edge itself: {:?}",
+        commands.get(&AgentId(0))
+    );
+}
+
+/// The r2.1 second plan: with two disjoint viable triangles and more
+/// agents than the primary plan employs, the surplus works the second
+/// candidate at the recorded discount — and a zero discount restores the
+/// r2.0 single-plan idle behavior exactly.
+#[test]
+fn second_plan_gives_surplus_agents_work_and_zero_disables_it() {
+    let cfg = support::fixture_cfg();
+    let obs = two_triangle_world(1)
+        .agent(0, Coord::new(4 * KM, 4 * KM), 20)
+        .agent(1, Coord::new(16 * KM, 4 * KM), 20)
+        .agent(2, Coord::new(4 * KM, 16 * KM), 20)
+        .agent(3, Coord::new(36 * KM, 4 * KM), 20)
+        .agent(4, Coord::new(36 * KM, 16 * KM), 20)
+        .build();
+    // Default discount (750): five agents, three primary stations — the
+    // two surplus agents get second-plan station work too (the seeded
+    // near-equal draw may pick either triangle as primary, so the
+    // invariant is the BUSY COUNT, not which triangle came first).
+    let mut coordinated = GreedyCoordinated::new(
+        Faction::Enl,
+        0x6C2_0000_0000_0AA4,
+        &cfg,
+        arena_bots::r2::build::CoreParams::default(),
+    );
+    let commands = round_of(&mut coordinated, &obs);
+    assert_eq!(
+        commands.len(),
+        5,
+        "every agent including the surplus works: {:?}",
+        commands.keys().collect::<Vec<_>>()
+    );
+    let captures = commands
+        .values()
+        .flatten()
+        .filter(|c| matches!(c, Command::Capture { .. }))
+        .count();
+    assert!(
+        captures >= 4,
+        "both triangles' stations are worked concurrently ({captures} captures)"
+    );
+    // Discount 0 disables the second plan. r2.3 still lets surplus
+    // agents perform safe expansion through the same reservation board.
+    let mut single = GreedyCoordinated::new(
+        Faction::Enl,
+        0x6C2_0000_0000_0AA4,
+        &cfg,
+        arena_bots::r2::build::CoreParams {
+            second_plan_discount_permille: 0,
+            ..arena_bots::r2::build::CoreParams::default()
+        },
+    );
+    let commands = round_of(&mut single, &obs);
+    assert!(single.decision_trace().unwrap().second.is_none());
+    assert_eq!(
+        commands.len(),
+        5,
+        "zero discount disables the second plan while surplus agents expand: {:?}",
+        commands.keys().collect::<Vec<_>>()
+    );
+}
+
+/// Pre-r2.1 parameter records (four CoreParams keys, no `sec2p`) parse
+/// back with the second plan DISABLED — the exact behavior the archived
+/// r2.0 experiments ran with — while r2.1 records round-trip strictly.
+#[test]
+fn core_params_records_parse_legacy_and_current_forms() {
+    let current = arena_bots::r2::build::CoreParams::default();
+    let tag = current.tag();
+    assert!(tag.contains(";sec2p=750|value="), "{tag}");
+    assert_eq!(
+        arena_bots::r2::build::CoreParams::from_tag(&tag),
+        Some(current)
+    );
+    // A legacy record: strip the fifth key; it must parse with sec2p = 0.
+    let legacy = tag.replace(";sec2p=750", "");
+    assert_eq!(
+        arena_bots::r2::build::CoreParams::from_tag(&legacy),
+        Some(arena_bots::r2::build::CoreParams {
+            second_plan_discount_permille: 0,
+            ..current
+        }),
+        "archived r2.0 records keep their exact semantics"
+    );
+    // Neither a wrong key nor a wrong count parses.
+    assert!(arena_bots::r2::build::CoreParams::from_tag(&tag.replace("sec2p", "sec3p")).is_none());
 }

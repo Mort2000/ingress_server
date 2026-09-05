@@ -15,7 +15,7 @@ use crate::common::{self, CommandList};
 use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 
-/// The `greedy-coordinated-r2` policy (version `r2.0`, family
+/// The `greedy-coordinated-r2` policy (current R2 version, family
 /// `field-builder`). Parameters are exactly the shared [`CoreParams`].
 pub struct GreedyCoordinated {
     core: BuilderCore,
@@ -36,6 +36,10 @@ impl GreedyCoordinated {
 }
 
 impl R2Policy for GreedyCoordinated {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,
@@ -52,7 +56,8 @@ impl R2Policy for GreedyCoordinated {
 }
 
 /// Emits one faction's submissions from per-agent command lists, in
-/// observation agent order (the faction's virtual arrival order), skipping
+/// Transfers before their receivers, urgent Recharge before routine work,
+/// then observation order, skipping
 /// empty lists (an empty stream is an explicit PASS). Shared by every
 /// R2 policy file; consumes the command map.
 pub fn submissions(
@@ -60,12 +65,31 @@ pub fn submissions(
     commands: std::collections::BTreeMap<AgentId, CommandList>,
 ) -> Vec<AgentSubmission> {
     let mut commands = commands;
-    obs.own_agents
+    let mut submissions: Vec<_> = obs
+        .own_agents
         .iter()
         .filter_map(|me| {
             commands
                 .remove(&me.id)
                 .map(|list| common::submission(me.id, list.build()))
         })
-        .collect()
+        .collect();
+    submissions.sort_by_key(|sub| {
+        if sub
+            .commands
+            .iter()
+            .any(|command| matches!(command, arena_core::types::Command::Transfer { .. }))
+        {
+            0
+        } else if sub
+            .commands
+            .iter()
+            .any(|command| matches!(command, arena_core::types::Command::Recharge { .. }))
+        {
+            1
+        } else {
+            2
+        }
+    });
+    submissions
 }

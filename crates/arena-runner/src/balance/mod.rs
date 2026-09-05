@@ -15,6 +15,7 @@ pub mod effects;
 pub mod execute;
 pub mod pairs;
 pub mod plan;
+pub mod r21verify;
 pub mod readiness;
 pub mod record;
 pub mod schedule;

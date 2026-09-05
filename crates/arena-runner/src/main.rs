@@ -311,6 +311,20 @@ fn main() {
                 base_commit,
             ));
         }
+        Some("balance-r21-verify") => {
+            // r2.1 post-audit verification (the 2026-09-05 bot action
+            // audit's step 4, small scale): the two audited pairings plus
+            // idle readiness of every competitive policy, 4 maps x 2 legs
+            // (8 matches per combination, under the operator's 10-cap),
+            // archived with the audit's own metrics in verify.tsv.
+            let output_root =
+                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
+            let base_commit = args.get(3).map(|s| s.as_str());
+            std::process::exit(arena_runner::balance::r21verify::run_r21_verify(
+                &output_root,
+                base_commit,
+            ));
+        }
         Some("balance-b3") => {
             // B3 default-config ablation (docs/balance/ai-balance-plan.md section
             // 7.2,): the frozen 8-policy same-map faction-swap

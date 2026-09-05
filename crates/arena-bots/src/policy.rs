@@ -670,7 +670,7 @@ mod tests {
 
     // (a) Every policy id has a spec with a non-empty id/family tag; the
     // m6.0 mirror carries version exactly "m6.0", every R2 id exactly
-    // "r2.0" with its own parameters variant.
+    // the current R2 era version ("r2.1") with its own parameters variant.
     #[test]
     fn specs_carry_identity_family_and_exact_versions() {
         assert_eq!(all_specs().len(), 5);
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(r2.len(), 7);
         for spec in &r2 {
             assert_eq!(spec.version, crate::r2::R2_VERSION);
-            assert_eq!(spec.version, "r2.0");
+            assert_eq!(spec.version, "r2.3");
             assert_eq!(spec.validate(), Ok(()));
             assert!(
                 spec.policy_id == PolicyId::Idle || !spec.family.is_diagnostic(),
@@ -705,7 +705,7 @@ mod tests {
             assert!(
                 spec.policy_id == PolicyId::GreedyCoordinatedCanonical
                     || spec.version == B3_VERSION,
-                "hybrid arms are b3.0; the canonical arm is r2.0"
+                "hybrid arms are b3.0; the canonical arm is the current r2 era"
             );
         }
         assert_eq!(
@@ -900,9 +900,9 @@ mod tests {
         let mut spec = PolicyId::BlockerBuilderR2.r2_spec();
         spec.family = PolicyFamily::FieldBuilder;
         assert!(spec.validate().is_err());
-        // Idle is version r2.0 only.
+        // Idle carries exactly the R2 era version, never a foreign one.
         let mut spec = PolicyId::Idle.r2_spec();
-        spec.version = "r2.1";
+        spec.version = "r2.4";
         assert!(spec.validate().is_err());
     }
 

@@ -1,10 +1,7 @@
-//! `builder-disruptor-r2` (plan section 6.1, Builder + Disruptor): the
-//! coordinated builder core plus the attack overlay — attackers allocated
-//! by the TARGET's value, the agents' distance, the portal's HP and the
-//! required attack count ([`crate::r2::value::attack_value`]). The
-//! required count is the overlay's coordinated-attack CAPACITY (the one
-//! sanctioned multi-assignee exception, plan 6.3): exactly
-//! `ceil(hp / ATTACK_DAMAGE)` attackers march, never "everyone".
+//! `builder-disruptor-r2`: building plus coordinated attacks. Candidate
+//! teams are prefixes of actual arrival order, capped by damage required
+//! and the recorded faction share. Whole-team completion is valued against
+//! forgone construction; the allocator rechecks the granted team's deadline.
 
 use std::collections::BTreeMap;
 
@@ -12,15 +9,15 @@ use arena_core::config::GameConfig;
 use arena_core::harness::AgentSubmission;
 use arena_core::map::MapDefinition;
 use arena_core::observe::Observation;
-use arena_core::types::{AgentId, Coord, Faction, PortalId};
+use arena_core::types::{AgentId, Coord, Faction};
 
 use crate::common::{self, CommandList};
 use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 use crate::r2::builder_defender::merge_requests;
 use crate::r2::greedy_coordinated::submissions;
-use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
-use crate::r2::value::{attack_value, attacks_needed, travel_rounds_between};
+use crate::r2::tasks::{Task, TaskRequest};
+use crate::r2::value::{AttackArrival, attack_income_per_round, attacks_needed, strike_value};
 
 /// The recorded `builder-disruptor-r2` parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,69 +65,81 @@ impl BuilderDisruptorParams {
     }
 }
 
-/// The attack overlay's task requests (shared with `adaptive-hybrid-r2`):
-/// the single best enemy-owned portal by positive [`attack_value`] becomes
-/// ONE coordinated [`Task::Attack`] whose declared capacity is
-/// `min(ceil(hp / ATTACK_DAMAGE), attack_share)` — the attackers-needed
-/// count, bounded by the recorded share of the faction. Every agent
-/// requests it at `attack_value` minus its own travel at the opportunity
-/// rate, so the nearest willing agents are granted first.
+/// Propose the best positive-value strike among arrival-ordered team
+/// prefixes. Complete prefixes cross discrete damage thresholds even when
+/// one additional attacker alone cannot advance completion. The team's
+/// value is shared across requests and competes with productive building.
 pub fn attack_overlay(
     core: &BuilderCore,
     obs: &Observation,
     params: &BuilderDisruptorParams,
 ) -> BTreeMap<AgentId, Vec<TaskRequest>> {
     let mut requests = BTreeMap::new();
-    let value_params = &core.params().value;
+    if params.attack_share_permille == 0 {
+        return requests;
+    }
+    let cfg = core.cfg();
     let economy = core.economy(obs);
     let enemy_owner = common::owners(core.faction()).1;
-    let mut targets: Vec<(i64, PortalId)> = obs
-        .portals
-        .iter()
-        .filter(|p| p.owner == enemy_owner)
-        .map(|p| {
+    let share_cap = ((obs.own_agents.len() as u64 * params.attack_share_permille as u64) / 1000)
+        .max(1) as usize;
+    let mut best_value = 0i128;
+    for target in obs.portals.iter().filter(|p| p.owner == enemy_owner) {
+        let needed = attacks_needed(target.hp, cfg).max(1);
+        let income =
+            attack_income_per_round(obs, core.faction(), cfg, &core.params().value, target.id);
+        if income == 0 {
+            continue;
+        }
+        let mut arrivals: Vec<_> = obs
+            .own_agents
+            .iter()
+            .filter_map(|agent| {
+                AttackArrival::for_agent(agent, target.position, cfg, economy.horizon_rounds)
+            })
+            .collect();
+        arrivals.sort_by_key(|agent| {
             (
-                attack_value(
-                    obs,
-                    core.faction(),
-                    core.cfg(),
-                    value_params,
-                    &economy,
-                    p.id,
-                ),
-                p.id,
+                agent.first_attack_delay(),
+                agent.agent,
+                agent.movement_rounds,
             )
-        })
-        .filter(|(value, _)| *value > 0)
-        .collect();
-    targets.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    let Some((value, portal)) = targets.first().copied() else {
-        return requests;
-    };
-    let hp = common::portal(obs, portal).hp;
-    let needed = attacks_needed(hp, core.cfg()).max(1);
-    let share_cap =
-        ((obs.own_agents.len() as u64 * params.attack_share_permille as u64) / 1000).max(1) as u32;
-    let capacity = needed.min(share_cap).max(1);
-    for me in obs.own_agents.iter() {
-        let target = common::portal(obs, portal);
-        let rounds = travel_rounds_between(me.position, target.position, core.cfg().move_budget_cm);
-        let priority = value.saturating_sub(
-            (rounds as i128 * economy.opportunity_per_round as i128).min(i64::MAX as i128) as i64,
-        );
-        requests.insert(
-            me.id,
-            vec![TaskRequest::coordinated(
-                Task::Attack { portal },
-                priority,
-                capacity,
-            )],
-        );
+        });
+        let mut selected = Vec::new();
+        for arrival in arrivals {
+            if selected.len() >= share_cap.min(needed as usize) {
+                break;
+            }
+            selected.push(arrival);
+            let Some(value) = strike_value(&economy, income, needed, &selected) else {
+                continue;
+            };
+            if value > best_value {
+                best_value = value;
+                let capacity = selected.len() as u32;
+                // The whole strike's benefit is shared by its members;
+                // it is not credited in full to every attacker separately.
+                let priority = (value / capacity as i128).min(i64::MAX as i128) as i64;
+                requests = selected
+                    .iter()
+                    .map(|arrival| {
+                        (
+                            arrival.agent,
+                            vec![TaskRequest::coordinated(
+                                Task::Attack { portal: target.id },
+                                priority,
+                                capacity,
+                            )],
+                        )
+                    })
+                    .collect();
+            }
+        }
     }
     requests
 }
 
-/// The `builder-disruptor-r2` policy (version `r2.0`, family
+/// The `builder-disruptor-r2` policy (current R2 version, family
 /// `disruptor`).
 pub struct BuilderDisruptor {
     core: BuilderCore,
@@ -159,20 +168,21 @@ impl BuilderDisruptor {
     /// One round (shared with the adaptive hybrid's composition).
     pub fn round_commands(&mut self, obs: &Observation) -> BTreeMap<AgentId, CommandList> {
         self.core.refresh(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
         let mut requests = if self.core.active().is_some() {
             self.core.build_requests(obs)
         } else {
             self.core.fallback_requests(obs)
         };
         merge_requests(&mut requests, attack_overlay(&self.core, obs, &self.params));
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        self.core.execute(obs, &grants)
+        self.core.allocate_and_execute(obs, &requests)
     }
 }
 
 impl R2Policy for BuilderDisruptor {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,

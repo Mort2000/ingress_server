@@ -1,6 +1,6 @@
 //! `builder-defender-r2` (plan section 6.1, Builder + Defender): the
 //! coordinated builder core plus the defense overlay — Recharge decisions
-//! driven by the FUTURE AREA-TIME VALUE the anchor still carries
+//! driven by the EXTRA SETTLED INCOME one Recharge can preserve
 //! ([`crate::r2::value::defense_value`]), never by identity or routine.
 //! A healthy, unthreatened anchor scores exactly 0, so the overlay
 //! touches nothing while building is the whole game — and when an anchor
@@ -20,8 +20,8 @@ use crate::common::CommandList;
 use crate::r2::R2Policy;
 use crate::r2::build::{BuilderCore, CoreParams};
 use crate::r2::greedy_coordinated::submissions;
-use crate::r2::tasks::{Task, TaskBoard, TaskRequest, allocate};
-use crate::r2::value::{defense_value, travel_rounds_between};
+use crate::r2::tasks::{Task, TaskRequest};
+use crate::r2::value::DefenseModel;
 
 /// The recorded `builder-defender-r2` parameters: the shared core plus
 /// the defense overlay's own thresholds.
@@ -78,6 +78,7 @@ pub fn defense_overlay(
     let mut requests = BTreeMap::new();
     let params = core.params();
     let economy = core.economy(obs);
+    let model = DefenseModel::new(obs, core.faction(), core.cfg(), &params.value, &economy);
     // Value-ranked urgent anchors: (defense_value, portal), value
     // descending then ascending portal id.
     let mut urgent: Vec<(i64, PortalId)> = obs
@@ -86,14 +87,11 @@ pub fn defense_overlay(
         .filter(|p| p.owner == crate::common::owners(core.faction()).0)
         .map(|p| {
             (
-                defense_value(
-                    obs,
-                    core.faction(),
-                    core.cfg(),
-                    &params.value,
-                    &economy,
-                    p.id,
-                ),
+                obs.own_agents
+                    .iter()
+                    .map(|agent| model.value(agent, p.id))
+                    .max()
+                    .unwrap_or(0),
                 p.id,
             )
         })
@@ -106,18 +104,14 @@ pub fn defense_overlay(
     }
     for me in obs.own_agents.iter() {
         let mut mine = Vec::new();
-        for (value, portal) in &urgent {
-            let target = crate::common::portal(obs, *portal);
-            let rounds =
-                travel_rounds_between(me.position, target.position, core.cfg().move_budget_cm);
-            let priority = value.saturating_sub(
-                (rounds as i128 * economy.opportunity_per_round as i128).min(i64::MAX as i128)
-                    as i64,
-            );
-            mine.push(TaskRequest::one_shot(
-                Task::Recharge { portal: *portal },
-                priority,
-            ));
+        for (_, portal) in &urgent {
+            let priority = model.value(me, *portal);
+            if priority > 0 {
+                mine.push(TaskRequest::one_shot(
+                    Task::Recharge { portal: *portal },
+                    priority,
+                ));
+            }
         }
         requests.insert(me.id, mine);
     }
@@ -135,7 +129,7 @@ pub fn merge_requests(
     }
 }
 
-/// The `builder-defender-r2` policy (version `r2.0`, family `defender`).
+/// The `builder-defender-r2` policy (current R2 version, family `defender`).
 pub struct BuilderDefender {
     core: BuilderCore,
     params: BuilderDefenderParams,
@@ -164,7 +158,6 @@ impl BuilderDefender {
     /// allocate, execute. Exposed for the adaptive hybrid's composition.
     pub fn round_commands(&mut self, obs: &Observation) -> BTreeMap<AgentId, CommandList> {
         self.core.refresh(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
         let mut requests = if self.core.active().is_some() {
             self.core.build_requests(obs)
         } else {
@@ -174,13 +167,15 @@ impl BuilderDefender {
             &mut requests,
             defense_overlay(&self.core, obs, self.params.defense_task_cap),
         );
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        self.core.execute(obs, &grants)
+        self.core.allocate_and_execute(obs, &requests)
     }
 }
 
 impl R2Policy for BuilderDefender {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,

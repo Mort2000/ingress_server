@@ -16,8 +16,9 @@ use std::collections::BTreeMap;
 use arena_core::types::{AgentId, PortalId};
 
 /// One one-shot tactical task for one agent (plan 6.3). Two tasks are the
-/// same task exactly when their variants and targets are equal (that is
-/// the reservation identity).
+/// same reservation when their variants and targets are equal. Link
+/// directions share one undirected edge reservation; the grant retains
+/// its original direction so execution consumes the correct target Key.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Task {
     /// Take a neutral portal (Major Action).
@@ -43,6 +44,16 @@ pub enum Task {
 }
 
 impl Task {
+    fn reservation(self) -> Self {
+        match self {
+            Self::Link { source, target } => Self::Link {
+                source: source.min(target),
+                target: source.max(target),
+            },
+            task => task,
+        }
+    }
+
     /// Stable lowercase tag for diagnostics and decision records.
     pub fn kind_tag(&self) -> &'static str {
         match self {
@@ -135,6 +146,7 @@ impl TaskBoard {
     /// tasks, the declared headcount for a coordinated attack); later
     /// claims succeed only while capacity remains.
     pub fn claim(&mut self, agent: AgentId, task: Task, capacity_if_new: u32) -> bool {
+        let task = task.reservation();
         let capacity = capacity_if_new.max(1);
         let remaining = self.remaining.entry(task).or_insert(capacity);
         if *remaining == 0 {
@@ -148,12 +160,18 @@ impl TaskBoard {
     /// How many more agents the task still admits this round (0 for a
     /// task never claimed).
     pub fn remaining_capacity(&self, task: &Task) -> u32 {
-        self.remaining.get(task).copied().unwrap_or(0)
+        self.remaining
+            .get(&task.reservation())
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The agents granted this task so far this round, in grant order.
     pub fn assignees(&self, task: &Task) -> &[AgentId] {
-        self.assignees.get(task).map(Vec::as_slice).unwrap_or(&[])
+        self.assignees
+            .get(&task.reservation())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Whether any agent holds this task this round.
@@ -174,6 +192,17 @@ pub fn allocate(
     agents: &[AgentId],
     requests: &BTreeMap<AgentId, Vec<TaskRequest>>,
 ) -> BTreeMap<AgentId, Task> {
+    allocate_compatible(board, agents, requests, |_, _, _| true)
+}
+
+/// The observation-aware core can reject mutually incompatible grants
+/// before reserving a task; rejected agents still try lower-ranked work.
+pub(crate) fn allocate_compatible(
+    board: &mut TaskBoard,
+    agents: &[AgentId],
+    requests: &BTreeMap<AgentId, Vec<TaskRequest>>,
+    compatible: impl Fn(AgentId, Task, &BTreeMap<AgentId, Task>) -> bool,
+) -> BTreeMap<AgentId, Task> {
     let mut flattened: Vec<(i64, AgentId, TaskRequest)> = Vec::new();
     for &agent in agents {
         if let Some(agent_requests) = requests.get(&agent) {
@@ -193,7 +222,9 @@ pub fn allocate(
         if granted.contains_key(&agent) {
             continue; // one task per agent per round
         }
-        if board.claim(agent, request.task, request.assignee_capacity) {
+        if compatible(agent, request.task, &granted)
+            && board.claim(agent, request.task, request.assignee_capacity)
+        {
             granted.insert(agent, request.task);
         }
     }

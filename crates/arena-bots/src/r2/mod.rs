@@ -28,7 +28,13 @@
 
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
 /// policies are registered in `crate::policy` with exactly this version).
-pub const R2_VERSION: &str = "r2.0";
+///
+/// r2.3 (2026-09-05 portfolio review): reuse partial fields, executable
+/// allocation previews and surplus expansion; marginal settled-income
+/// defense, feasible coordinated strikes, ordered same-round Key delivery,
+/// Move + Link/Attack, and adaptive roles based on actual grants. Frozen
+/// M6 policies and earlier experiment records retain their original version.
+pub const R2_VERSION: &str = "r2.3";
 
 pub mod adaptive_hybrid_r2;
 pub mod blocker_builder;
@@ -64,6 +70,16 @@ use crate::bot::Bot;
 /// submissions; all runtime randomness flows through the policy's own
 /// [`rng::R2Rng`] stream.
 pub trait R2Policy: Send {
+    /// Optional diagnostics from the previous decision; reading it never
+    /// advances strategy memory or consumes the policy's random stream.
+    fn decision_trace(&self) -> Option<&build::DecisionTrace> {
+        None
+    }
+
+    fn delivery_comparisons(&self) -> &[logistics_builder::DeliveryComparison] {
+        &[]
+    }
+
     /// Full-map initial spawn strategy (same contract as `Bot`').
     fn choose_spawns(
         &mut self,
@@ -100,6 +116,20 @@ pub enum PolicyPlayer {
 }
 
 impl PolicyPlayer {
+    pub fn decision_trace(&self) -> Option<&build::DecisionTrace> {
+        match self {
+            Self::R2(policy) => policy.decision_trace(),
+            Self::Frozen(_) => None,
+        }
+    }
+
+    pub fn delivery_comparisons(&self) -> &[logistics_builder::DeliveryComparison] {
+        match self {
+            Self::R2(policy) => policy.delivery_comparisons(),
+            Self::Frozen(_) => &[],
+        }
+    }
+
     /// Full-map initial spawn strategy.
     pub fn choose_spawns(
         &mut self,

@@ -1,16 +1,7 @@
-//! `adaptive-hybrid-r2` (plan section 6.1, Adaptive Hybrid): the
-//! coordinated builder core whose ROLE MIX changes dynamically by round
-//! phase, score differential and public-history threat — never by
-//! `AgentId`. Roles are overlays over the SAME allocator: opening and
-//! endgame play pure build; the mid-game adds the defender overlay while
-//! the opponent model sees live attack pressure, and the disruptor
-//! overlay while the faction holds a recorded score lead — so
-//! reinforcement agents and role switches flow through one allocation
-//! path (plan 6.3's "roles are grants, not identities").
-//!
-//! Score and phase inputs are public: `obs.scores` and the round against
-//! `cfg.total_rounds`; threat comes from the
-//! [`crate::r2::opponent::OpponentModel`] over `obs.events` only.
+//! Adaptive composition over the shared allocator. Opening favors building
+//! but permits urgent rescue. Later rounds can combine defense and attack;
+//! the endgame keeps actions that can preserve or deny remaining income.
+//! Role diagnostics describe the actual grants from the same request path.
 
 use std::collections::BTreeMap;
 
@@ -27,7 +18,6 @@ use crate::r2::builder_defender::{defense_overlay, merge_requests};
 use crate::r2::builder_disruptor::{BuilderDisruptorParams, attack_overlay};
 use crate::r2::greedy_coordinated::submissions;
 use crate::r2::opponent::{OpponentModel, OpponentParams};
-use crate::r2::tasks::{TaskBoard, allocate};
 
 /// The recorded `adaptive-hybrid-r2` parameters: the shared core, the
 /// opponent model's windows, and the phase/lead thresholds that switch
@@ -35,9 +25,9 @@ use crate::r2::tasks::{TaskBoard, allocate};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AdaptiveHybridParams {
     /// Rounds before this share (permille of `total_rounds`) are the
-    /// opening: pure build.
+    /// opening: build preference with urgent defense.
     pub opening_permille: u32,
-    /// Rounds from this share (permille) are the endgame: pure build.
+    /// Rounds from this share (permille) are the endgame: feasible build, defense and attack.
     pub endgame_permille: u32,
     /// The faction's score share (permille of the pair total) at or above
     /// which the mid-game adds the disruptor overlay.
@@ -124,7 +114,12 @@ pub enum RoleMix {
     MidBuild,
     MidDefend,
     MidDisrupt,
+    MidMixed,
+    OpeningDefend,
     Endgame,
+    EndDefend,
+    EndDisrupt,
+    EndMixed,
 }
 
 impl RoleMix {
@@ -134,12 +129,17 @@ impl RoleMix {
             RoleMix::MidBuild => "mid-build",
             RoleMix::MidDefend => "mid-defend",
             RoleMix::MidDisrupt => "mid-disrupt",
+            RoleMix::MidMixed => "mid-mixed",
+            RoleMix::OpeningDefend => "opening-defend",
             RoleMix::Endgame => "endgame",
+            RoleMix::EndDefend => "end-defend",
+            RoleMix::EndDisrupt => "end-disrupt",
+            RoleMix::EndMixed => "end-mixed",
         }
     }
 }
 
-/// The `adaptive-hybrid-r2` policy (version `r2.0`, family
+/// The `adaptive-hybrid-r2` policy (current R2 version, family
 /// `adaptive-hybrid`).
 pub struct AdaptiveHybridR2 {
     core: BuilderCore,
@@ -169,43 +169,92 @@ impl AdaptiveHybridR2 {
         }
     }
 
-    /// The role mix this round: a pure function of the round, the public
-    /// scores and the opponent model's pressure state (plan 6.1 — map,
-    /// round, score, threats; never AgentId). Consumes the observation's
-    /// NEW public events into the opponent model first (idempotent by
-    /// seq), so the decision never depends on call order.
-    pub fn role_mix(&mut self, obs: &Observation) -> RoleMix {
-        self.opponent.update(obs);
-        let total = self.core.cfg().total_rounds;
-        let permille = if total == 0 {
-            1000
+    fn phase(&self, obs: &Observation) -> RoleMix {
+        let permille = obs.round as u64 * 1000 / self.core.cfg().total_rounds.max(1) as u64;
+        if permille < self.params.opening_permille as u64 {
+            RoleMix::Opening
+        } else if permille >= self.params.endgame_permille as u64 {
+            RoleMix::Endgame
         } else {
-            obs.round * 1000 / total
+            RoleMix::MidBuild
+        }
+    }
+
+    fn round_requests(
+        &mut self,
+        obs: &Observation,
+    ) -> BTreeMap<AgentId, Vec<crate::r2::tasks::TaskRequest>> {
+        self.core.refresh(obs);
+        self.opponent.update(obs);
+        let phase = self.phase(obs);
+        let mut requests = if self.core.active().is_some() {
+            self.core.build_requests(obs)
+        } else {
+            self.core.fallback_requests(obs)
         };
-        if permille < self.params.opening_permille {
-            return RoleMix::Opening;
+        if self.opponent.any_threat(obs) || phase == RoleMix::Endgame {
+            merge_requests(
+                &mut requests,
+                defense_overlay(&self.core, obs, self.params.defense_task_cap),
+            );
         }
-        if permille >= self.params.endgame_permille {
-            return RoleMix::Endgame;
-        }
-        if self.opponent.any_threat(obs) {
-            return RoleMix::MidDefend;
-        }
-        let own_score = *obs.scores.get(&self.core.faction()).unwrap_or(&0) as u128;
+        let own_score = *obs.scores.get(&self.core.faction()).unwrap_or(&0);
         let enemy_score = *obs
             .scores
             .get(&self.core.faction().opposite())
-            .unwrap_or(&0) as u128;
-        let total_score = own_score + enemy_score;
-        let share = if total_score == 0 {
+            .unwrap_or(&0);
+        let share = if own_score + enemy_score == 0 {
             500
         } else {
-            (own_score * 1000 / total_score) as u32
+            own_score * 1000 / (own_score + enemy_score)
         };
-        if share >= self.params.attack_lead_share_permille {
-            return RoleMix::MidDisrupt;
+        if phase != RoleMix::Opening
+            && (phase == RoleMix::Endgame
+                || share >= self.params.attack_lead_share_permille as u128
+                || self.core.active().is_none())
+        {
+            let disruptor = BuilderDisruptorParams {
+                attack_share_permille: self.params.attack_share_permille,
+                core: self.params.core,
+            };
+            merge_requests(&mut requests, attack_overlay(&self.core, obs, &disruptor));
         }
-        RoleMix::MidBuild
+        requests
+    }
+
+    fn granted_mix(
+        &self,
+        obs: &Observation,
+        decision: &crate::r2::build::DecisionTrace,
+    ) -> RoleMix {
+        use crate::r2::tasks::Task;
+        let defend = decision
+            .agents
+            .iter()
+            .any(|a| matches!(a.grant, Some(Task::Recharge { .. })));
+        let attack = decision
+            .agents
+            .iter()
+            .any(|a| matches!(a.grant, Some(Task::Attack { .. })));
+        match (self.phase(obs), defend, attack) {
+            (RoleMix::Opening, true, _) => RoleMix::OpeningDefend,
+            (RoleMix::Opening, false, _) => RoleMix::Opening,
+            (RoleMix::Endgame, true, true) => RoleMix::EndMixed,
+            (RoleMix::Endgame, true, false) => RoleMix::EndDefend,
+            (RoleMix::Endgame, false, true) => RoleMix::EndDisrupt,
+            (RoleMix::Endgame, false, false) => RoleMix::Endgame,
+            (_, true, true) => RoleMix::MidMixed,
+            (_, true, false) => RoleMix::MidDefend,
+            (_, false, true) => RoleMix::MidDisrupt,
+            _ => RoleMix::MidBuild,
+        }
+    }
+
+    /// Preview the same requests and grants used by submit_round. Labels
+    /// describe feasible granted roles, not merely enabled overlays.
+    pub fn role_mix(&mut self, obs: &Observation) -> RoleMix {
+        let requests = self.round_requests(obs);
+        self.granted_mix(obs, &self.core.preview_allocation(obs, &requests))
     }
 
     /// The role mix chosen for the most recent round (diagnostic echo).
@@ -215,6 +264,10 @@ impl AdaptiveHybridR2 {
 }
 
 impl R2Policy for AdaptiveHybridR2 {
+    fn decision_trace(&self) -> Option<&crate::r2::build::DecisionTrace> {
+        self.core.decision_trace()
+    }
+
     fn choose_spawns(
         &mut self,
         cfg: &GameConfig,
@@ -225,33 +278,10 @@ impl R2Policy for AdaptiveHybridR2 {
     }
 
     fn submit_round(&mut self, obs: &Observation) -> Vec<AgentSubmission> {
-        self.core.refresh(obs);
-        self.last_mix = self.role_mix(obs);
-        let agents: Vec<AgentId> = obs.own_agents.iter().map(|me| me.id).collect();
-        let mut requests = if self.core.active().is_some() {
-            self.core.build_requests(obs)
-        } else {
-            self.core.fallback_requests(obs)
-        };
-        match self.last_mix {
-            RoleMix::MidDefend => {
-                merge_requests(
-                    &mut requests,
-                    defense_overlay(&self.core, obs, self.params.defense_task_cap),
-                );
-            }
-            RoleMix::MidDisrupt => {
-                let disruptor = BuilderDisruptorParams {
-                    attack_share_permille: self.params.attack_share_permille,
-                    core: self.params.core,
-                };
-                merge_requests(&mut requests, attack_overlay(&self.core, obs, &disruptor));
-            }
-            _ => {}
-        }
-        let mut board = TaskBoard::new(obs.round);
-        let grants = allocate(&mut board, &agents, &requests);
-        let commands: BTreeMap<AgentId, CommandList> = self.core.execute(obs, &grants);
+        let requests = self.round_requests(obs);
+        let commands: BTreeMap<AgentId, CommandList> =
+            self.core.allocate_and_execute(obs, &requests);
+        self.last_mix = self.granted_mix(obs, self.core.decision_trace().expect("just allocated"));
         submissions(obs, commands)
     }
 }

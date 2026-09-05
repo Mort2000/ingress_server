@@ -527,10 +527,10 @@ mod tests {
         assert_eq!(plan.base_variant, "default");
         assert_eq!(plan.bucket_policy, BucketPolicy::Flat(0));
         // Fixed R2 policy parameters: the six competitive policies at
-        // r2_spec(), version r2.0, full-value records.
+        // r2_spec(), the current R2 era version, full-value records.
         assert_eq!(plan.policies.len(), 6);
         for spec in &plan.policies {
-            assert_eq!(spec.version, "r2.0");
+            assert_eq!(spec.version, "r2.3");
             assert_eq!(spec, &spec.policy_id.r2_spec());
             assert!(!spec.family.is_diagnostic());
         }

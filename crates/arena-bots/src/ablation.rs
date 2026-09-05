@@ -401,6 +401,6 @@ mod tests {
         // with the two zeros (records stay comparable across the arm and
         // its r2 parent).
         assert!(params.tag().starts_with("nearequal=0;retry="));
-        assert!(params.tag().contains(";jit=0|value="));
+        assert!(params.tag().contains(";jit=0;sec2p="));
     }
 }
