@@ -21,6 +21,9 @@ cargo test --workspace
 
 ## 回放观看器
 
+正式 [Tactical Replay 前端](./viewer/app/README.md) 支持在浏览器直接打开 / 拖入 `.iarp`，本地校验后显示 HUD、局部缩放、Agent 逐命令轨迹及当轮高亮、Supply / Key 库存与 Portal 双向关联。采用 Vite + TypeScript + Rust WASM，无需上传或预先导出 HTML。首次安装、运行和测试步骤见前端 README。
+
+
 [`replay-export`](./tools/replay-export/) 把一份胜负记录（`.iarp`）导出成自包含的观看页面：
 
 ```sh
@@ -118,7 +121,7 @@ v0.1 的唯一准入类型是 **Audited Client**：
 | [`crates/arena-runner`](./crates/arena-runner/) | 批量调度、锦标赛、统计、Elo 排名 |
 | [`crates/arena-bots`](./crates/arena-bots/) | 5 个内置基线策略（自博弈与基准） |
 | [`bots/`](./bots/) | 3 个示例参赛程序 |
-| [`viewer/`](./viewer/) | 回放页面资源（由 replay-export 拼装进导出页面） |
+| [`viewer/`](./viewer/) | 正式 Vite 前端（`app/`）及原有自包含导出页面资源 |
 | [`tools/`](./tools/) | 审计、溯源、沙箱、回放导出等 CLI 工具 |
 | [`docs/`](./docs/) | 里程碑进度、验收、报告与决策记录 |
 | [`scripts/`](./scripts/) | 协议再生成、一键外部比赛等脚本 |

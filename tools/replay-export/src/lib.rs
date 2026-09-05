@@ -40,3 +40,5 @@
 pub mod data;
 pub mod json;
 pub mod views;
+
+mod telemetry;

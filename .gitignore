@@ -11,3 +11,11 @@
 
 # Python bytecode
 __pycache__/
+
+# Vite replay application
+/viewer/app/node_modules/
+/viewer/app/dist/
+/viewer/app/src/wasm/
+/viewer/app/test-results/
+/viewer/app/playwright-report/
+/viewer/app/tests/fixtures/

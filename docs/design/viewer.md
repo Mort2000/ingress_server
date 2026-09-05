@@ -164,3 +164,10 @@ The M10 milestone committed a dev-mode sample page at
 the zero-build demo entry is no longer wanted and no generated page is
 tracked; you can regenerate one with the command at the top of this document
 whenever one is needed.
+
+
+## 正式 Tactical Replay 前端
+
+`viewer/app/` 新增独立 Vite + TypeScript HUD 应用；其浏览器 Worker 经 `tools/replay-web` 复用本文件所述验证 / 物化路径，直接处理用户选择的 IARP。原有自包含 HTML 导出仍可使用。完整操作、数据扩展和验证方式见 [前端 README](../../viewer/app/README.md)。
+
+`ingress-viewer-v1` 新增同阵营过滤下的 `keys` 和 `commands` 两个可选顶层区段，旧观看器忽略它们。Key 来自轮末 Observation；commands 来自第一份可定位提交及已验证的 Resolver 报告，包含实际成功移动的每段起止点与整数 `cost_cm`，不以轮末直线或提交意图代替真实轨迹。Score 的字符串传输和隐私导出的构造边界保持适用。

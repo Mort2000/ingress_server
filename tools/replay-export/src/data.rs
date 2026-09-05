@@ -211,6 +211,8 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
         ("header", Json::Object(header_pairs)),
         ("rounds", Json::Array(materialized.rounds)),
         ("agents", Json::Object(materialized.agents)),
+        ("keys", Json::Object(materialized.keys)),
+        ("commands", Json::Object(materialized.commands)),
     ]);
     Ok((payload, summary_line(&outcome)))
 }
@@ -289,6 +291,8 @@ struct Materialized {
     rounds: Vec<Json>,
     /// `(faction key, per-round agent rows)` in embedding order.
     agents: Vec<(String, Json)>,
+    keys: Vec<(String, Json)>,
+    commands: Vec<(String, Json)>,
 }
 
 fn materialize(
@@ -327,10 +331,12 @@ fn materialize(
 
     let mut rounds = Vec::new();
     let mut agent_rounds: Vec<Vec<Json>> = vec![Vec::new(); embedded.len()];
+    let mut key_rounds: Vec<Vec<Json>> = vec![Vec::new(); embedded.len()];
+    let mut command_rounds: Vec<Vec<Json>> = vec![Vec::new(); embedded.len()];
     let mut cumulative: (Score2, Score2) = (0, 0);
 
     for record in log.round_records() {
-        let _report = resolver.run_round(&mut state, &record.submissions);
+        let report = resolver.run_round(&mut state, &record.submissions);
         state.advance_round();
 
         // Tripwire 1: this pass hashes identically to the verified replay.
@@ -470,6 +476,13 @@ fn materialize(
 
         // Per-faction private agents at this round-close point.
         for (slot, observation) in observations.iter().enumerate() {
+            key_rounds[slot].push(crate::telemetry::keys(observation));
+            command_rounds[slot].push(crate::telemetry::commands(
+                observation,
+                embedded[slot],
+                record.round,
+                &report,
+            ));
             agent_rounds[slot].push(Json::arr(
                 observation
                     .own_agents
@@ -503,7 +516,19 @@ fn materialize(
         .zip(agent_rounds)
         .map(|(faction, rounds)| (faction_key(*faction).to_string(), Json::Array(rounds)))
         .collect();
-    Ok(Materialized { rounds, agents })
+    let by_faction = |rows: Vec<Vec<Json>>| {
+        embedded
+            .iter()
+            .zip(rows)
+            .map(|(f, r)| (faction_key(*f).to_string(), Json::Array(r)))
+            .collect()
+    };
+    Ok(Materialized {
+        rounds,
+        agents,
+        keys: by_faction(key_rounds),
+        commands: by_faction(command_rounds),
+    })
 }
 
 // ---------------------------------------------------------------------------

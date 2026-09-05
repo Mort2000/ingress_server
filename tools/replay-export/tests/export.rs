@@ -1109,8 +1109,8 @@ fn viewer_speed_keys_match_the_documented_direction() {
     assert_eq!(html.matches("this.shiftSpeed(-1);").count(), 1);
 
     // And the documented contract says the same thing.
-    let viewer_doc =
-        std::fs::read_to_string(repo_relative("docs/design/viewer.md")).expect("docs/design/viewer.md");
+    let viewer_doc = std::fs::read_to_string(repo_relative("docs/design/viewer.md"))
+        .expect("docs/design/viewer.md");
     assert!(
         viewer_doc.contains("`+` / `−` | speed up / slow down"),
         "docs/design/viewer.md documents the direction"
@@ -1123,8 +1123,8 @@ fn viewer_speed_keys_match_the_documented_direction() {
 
 #[test]
 fn docs_gate() {
-    let viewer_doc =
-        std::fs::read_to_string(repo_relative("docs/design/viewer.md")).expect("docs/design/viewer.md");
+    let viewer_doc = std::fs::read_to_string(repo_relative("docs/design/viewer.md"))
+        .expect("docs/design/viewer.md");
     for section in [
         "View semantics",
         "ingress-viewer-v1",
@@ -1142,4 +1142,224 @@ fn docs_gate() {
     for marker in ["D87", "D88", "D89", "D90", "D91", "D92", "D93"] {
         assert!(progress.contains(marker), "progress.md lacks {marker}");
     }
+}
+
+/// Compare HUD telemetry with the authoritative state/report at every round,
+/// including the reinforcement boundary. Browser tests consume the same IARP
+/// and native JSON as an independent WASM/native equivalence oracle.
+#[test]
+fn hud_telemetry_and_browser_fixtures() {
+    use arena_core::observe::Observation;
+    use arena_core::resolve::{CommandEffect, CommandOutcome, Resolver};
+    let bytes = normal_iarp();
+    let log = decode_log(bytes).unwrap();
+    let h = &log.header;
+    let (enl, res) = GameState::initial_roster(&h.config);
+    let enl = validate_initial_spawn_set(&enl, &h.enl_spawns, &h.config).unwrap();
+    let res = validate_initial_spawn_set(&res, &h.res_spawns, &h.config).unwrap();
+    let mut state = GameState::new(h.config, &h.map, &enl, &res).unwrap();
+    let resolver = Resolver::with_seed(h.game_seed);
+    let options = ExportOptions {
+        dev: true,
+        faction: None,
+        meta: None,
+    };
+    let (payload, _) = data::build_payload(bytes, &options).unwrap();
+    let mut key_entries = 0;
+    let mut moves = 0;
+    for (i, record) in log.round_records().enumerate() {
+        let report = resolver.run_round(&mut state, &record.submissions);
+        state.advance_round();
+        for (faction, name) in [(Faction::Enl, "enl"), (Faction::Res, "res")] {
+            let observation = Observation::for_faction(&state, faction);
+            for agent in &observation.own_agents {
+                let key = agent.id.0.to_string();
+                let keys = payload
+                    .get("keys")
+                    .unwrap()
+                    .get(name)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()[i]
+                    .get(&key)
+                    .unwrap();
+                let expected = Json::Object(
+                    agent
+                        .keys
+                        .iter()
+                        .map(|(p, n)| (p.0.to_string(), Json::uint(*n as u64)))
+                        .collect(),
+                );
+                assert_eq!(keys, &expected);
+                key_entries += agent.keys.len();
+                let stream = payload
+                    .get("commands")
+                    .unwrap()
+                    .get(name)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()[i]
+                    .get(&key)
+                    .unwrap();
+                if let Some(executed) = report
+                    .execution_order
+                    .iter()
+                    .find(|s| s.agent_id == agent.id)
+                {
+                    let cmds = stream.get("cmds").unwrap().as_array().unwrap();
+                    assert_eq!(cmds.len(), executed.outcomes.len());
+                    for (cmd, outcome) in cmds.iter().zip(&executed.outcomes) {
+                        if let CommandOutcome::Ok(CommandEffect::Moved { from, to, .. }) = outcome {
+                            moves += 1;
+                            assert_eq!(
+                                cmd.get("from"),
+                                Some(&Json::arr(vec![
+                                    Json::int(from.x as i64),
+                                    Json::int(from.y as i64)
+                                ]))
+                            );
+                            assert_eq!(
+                                cmd.get("to"),
+                                Some(&Json::arr(vec![
+                                    Json::int(to.x as i64),
+                                    Json::int(to.y as i64)
+                                ]))
+                            );
+                        } else {
+                            assert!(cmd.get("from").is_none());
+                            assert!(cmd.get("to").is_none());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        key_entries > 100 && moves > 100,
+        "non-vacuous inventory/trajectory checks"
+    );
+    let options = ExportOptions {
+        dev: false,
+        faction: Some(Faction::Enl),
+        meta: None,
+    };
+    let (private, _) = data::build_payload(bytes, &options).unwrap();
+    for section in ["keys", "commands"] {
+        assert!(private.get(section).unwrap().get("res").is_none());
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../viewer/app/tests/fixtures");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("normal.iarp"), bytes).unwrap();
+    std::fs::write(dir.join("normal.json"), json::write_json(&payload).unwrap()).unwrap();
+    std::fs::write(dir.join("abnormal.iarp"), abnormal_iarp()).unwrap();
+    write_edge_browser_fixtures(&dir);
+}
+
+fn write_edge_browser_fixtures(dir: &Path) {
+    use arena_core::resolve::{CommandEffect, CommandOutcome, Resolver, SubmittedCommandStream};
+    use arena_core::types::{Command, Coord};
+    let log = decode_log(normal_iarp()).unwrap();
+    let h = &log.header;
+    let (enl, res) = GameState::initial_roster(&h.config);
+    let enl = validate_initial_spawn_set(&enl, &h.enl_spawns, &h.config).unwrap();
+    let res = validate_initial_spawn_set(&res, &h.res_spawns, &h.config).unwrap();
+    let mut state = GameState::new(h.config, &h.map, &enl, &res).unwrap();
+    let writer = || ReplayWriter::new(h.game_seed, &h.config, &h.map, &enl, &res);
+    let tag = arena_replay::format::OUTCOME_CLIENT_FORFEIT;
+    std::fs::write(
+        dir.join("zero.iarp"),
+        writer().finish_abnormal(&state, tag).unwrap(),
+    )
+    .unwrap();
+    let mut writer = writer();
+    let resolver = Resolver::with_seed(h.game_seed);
+    let (id, from) = h.enl_spawns[0];
+    let first = Coord::new(
+        from.x
+            + if from.x < h.config.map_width_cm / 2 {
+                100
+            } else {
+                -100
+            },
+        from.y,
+    );
+    let second = Coord::new(
+        first.x,
+        from.y
+            + if from.y < h.config.map_height_cm / 2 {
+                100
+            } else {
+                -100
+            },
+    );
+    let portal = h
+        .map
+        .portals()
+        .iter()
+        .min_by_key(|p| arena_core::geometry::dist2(p.position, from))
+        .unwrap()
+        .id;
+    for round in 1..=2 {
+        let destinations = if round == 1 {
+            [first, second]
+        } else {
+            [first, from]
+        };
+        let submitted = SubmittedCommandStream {
+            round,
+            faction: Faction::Enl,
+            agent_id: id,
+            received_at_ms: 0,
+            receive_seq: round,
+            commands: vec![
+                Command::Move {
+                    destination: destinations[0],
+                },
+                Command::Move {
+                    destination: Coord::new(-1, -1),
+                },
+                Command::Move {
+                    destination: destinations[1],
+                },
+                Command::Hack { portal },
+            ],
+        };
+        // Wrong-round input and duplicate are archived but must not replace
+        // the first locatable stream in the HUD or fabricate movement.
+        let mut wrong = submitted.clone();
+        wrong.round = 99;
+        let report = resolver.run_round(&mut state, &[wrong, submitted.clone(), submitted]);
+        assert_eq!(
+            report.execution_order[0]
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, CommandOutcome::Ok(CommandEffect::Moved { .. })))
+                .count(),
+            2
+        );
+        assert!(matches!(
+            report.execution_order[0].outcomes[1],
+            CommandOutcome::Drop(_)
+        ));
+        state.advance_round();
+        writer.record_round(&report, &state).unwrap();
+    }
+    let bytes = writer.finish_abnormal(&state, tag).unwrap();
+    let (payload, _) = data::build_payload(&bytes, &dev_options(None)).unwrap();
+    let stream = &payload
+        .get("commands")
+        .unwrap()
+        .get("enl")
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .get(&id.0.to_string())
+        .unwrap();
+    assert_eq!(stream.get("cmds").unwrap().as_array().unwrap().len(), 4);
+    std::fs::write(dir.join("movement.iarp"), bytes).unwrap();
+    std::fs::write(
+        dir.join("movement.json"),
+        json::write_json(&payload).unwrap(),
+    )
+    .unwrap();
 }
