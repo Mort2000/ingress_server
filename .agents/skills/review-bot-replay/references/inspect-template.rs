@@ -6,7 +6,7 @@
 // 加 awk 数列号的方式消费输出。
 //
 // 建立临时 crate（放在 <repo>/.scratch/<分析目录>/ 下，path 依赖按此相对路径；
-// 仓库 vendor 了离线依赖且没有 serde_json，模板只用三个 path 依赖 + 手写 JSON）：
+// 仓库无 serde_json 依赖，模板只用三个 path 依赖 + 手写 JSON）：
 //
 //   Cargo.toml:
 //     [package]

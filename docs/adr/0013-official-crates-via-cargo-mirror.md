@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # 经 cargo 镜像恢复使用官方 crate

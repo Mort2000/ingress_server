@@ -107,5 +107,5 @@ _Avoid_: Client sequence, stream nonce
 _Avoid_: Decision Window, idle time
 
 **Audited Client**:
-使用安全 Rust 和获批依赖、源码与完整依赖闭包可得、通过白盒审计，并由比赛方从冻结输入离线构建的参赛程序。它只能通过官方 SDK 访问系统边界，是 v0.1 唯一允许进入比赛的 Client 类型。
+使用安全 Rust 和获批依赖、源码与完整依赖闭包可得、通过白盒审计，并由比赛方从冻结输入构建的参赛程序。它只能通过官方 SDK 访问系统边界，是 v0.1 唯一允许进入比赛的 Client 类型。
 _Avoid_: Trusted binary, closed-source Client

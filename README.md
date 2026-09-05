@@ -9,11 +9,9 @@
 
 本仓库同时是**规则、引擎与平台**：包含规则文档、权威服务器与结算引擎、参赛方 SDK、示例参赛程序、锦标赛调度器和回放观看器。
 
-**最直接的体验方式**：用浏览器打开 [`viewer/sample.html`](./viewer/sample.html) —— 一场真实锦标赛的完整回放，不需要任何构建步骤。
-
 ## 快速开始
 
-前置条件：Rust 工具链 1.98.0（由 `rust-toolchain.toml` 固定）。依赖已随仓库离线固化在 [`vendor/`](./vendor/) 中，装好工具链后构建无需联网：
+前置条件：Rust 工具链 1.98.0（由 `rust-toolchain.toml` 固定）。依赖按提交的 [`Cargo.lock`](./Cargo.lock) 经 cargo 镜像解析：
 
 ```sh
 rustup toolchain install 1.98.0 --profile minimal --component rustfmt
@@ -21,9 +19,13 @@ cargo build --release
 cargo test --workspace
 ```
 
-## 先看一场比赛
+## 回放观看器
 
-[`viewer/sample.html`](./viewer/sample.html) 是自包含的回放页面（真实锦标赛 r1 中 `hybrid` 对阵 `probe` 的完整 100 轮），直接双击用浏览器打开即可：
+[`replay-export`](./tools/replay-export/) 把一份胜负记录（`.iarp`）导出成自包含的观看页面：
+
+```sh
+cargo run --release -p replay-export -- <replay.iarp> -o out.html --faction enl
+```
 
 | 操作 | 效果 |
 |---|---|
@@ -34,15 +36,7 @@ cargo test --workspace
 | 滑块 | 快速跳转到任意轮 |
 | `V` | 切换视角（ENL 视角 → RES 视角 → 公开视角 → 上帝视角） |
 
-页面完全离线、零外部请求；在后面加 `?selftest=1` 打开可在页内运行数据自检。
-
-把一份胜负记录（`.iarp`）导出成自己的观看页面：
-
-```sh
-cargo run --release -p replay-export -- <replay.iarp> -o out.html --faction enl
-```
-
-导出前会先完整验证回放（逐轮状态哈希、得分增量、事件序列全部重算一致）；未通过验证的输入不会写出任何 HTML。`--faction enl|res` 是生产导出，只嵌入该阵营的私有信息；调参和分析可用 `--dev 1` 嵌入双方阵营。
+导出前会先完整验证回放（逐轮状态哈希、得分增量、事件序列全部重算一致）；未通过验证的输入不会写出任何 HTML。`--faction enl|res` 是生产导出，只嵌入该阵营的私有信息；调参和分析可用 `--dev 1` 嵌入双方阵营。页面零外部请求；在 URL 后加 `?selftest=1` 打开可在页内运行数据自检。观看器格式详见 [`docs/design/viewer.md`](./docs/design/viewer.md)。
 
 ## 运行比赛
 
@@ -124,10 +118,10 @@ v0.1 的唯一准入类型是 **Audited Client**：
 | [`crates/arena-runner`](./crates/arena-runner/) | 批量调度、锦标赛、统计、Elo 排名 |
 | [`crates/arena-bots`](./crates/arena-bots/) | 5 个内置基线策略（自博弈与基准） |
 | [`bots/`](./bots/) | 3 个示例参赛程序 |
-| [`viewer/`](./viewer/) | 回放页面资源（含已生成示例 `sample.html`） |
+| [`viewer/`](./viewer/) | 回放页面资源（由 replay-export 拼装进导出页面） |
 | [`tools/`](./tools/) | 审计、溯源、沙箱、回放导出等 CLI 工具 |
 | [`docs/`](./docs/) | 里程碑进度、验收、报告与决策记录 |
-| [`scripts/`](./scripts/) | 离线构建证明、一键外部比赛等脚本 |
+| [`scripts/`](./scripts/) | 协议再生成、一键外部比赛等脚本 |
 | [`docs/spec/`](./docs/spec/) | 规则与 MVP 方案文档集 |
 
 ## 文档导航
@@ -142,7 +136,7 @@ v0.1 的唯一准入类型是 **Audited Client**：
 | [MVP 验收](docs/reports/acceptance-mvp.md) | 验收结论与已知残余风险 |
 | [r1 锦标赛报告](docs/reports/tournament-r1.md) | 首个排名锦标赛的结果与溯源 |
 | [平衡性报告](docs/balance/balance-report-r1.md) | 10000 场自博弈的平衡分析 |
-| [观看器](docs/design/viewer.md)、[沙箱](docs/design/sandbox.md)、[构建溯源](docs/design/build-provenance.md) | 观看器格式、隔离机制、离线构建证明 |
+| [观看器](docs/design/viewer.md)、[沙箱](docs/design/sandbox.md)、[构建溯源](docs/design/build-provenance.md) | 观看器格式、隔离机制、可复现构建 |
 
 ## 当前状态
 

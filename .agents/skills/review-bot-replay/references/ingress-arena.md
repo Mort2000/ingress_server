@@ -40,7 +40,7 @@ API 入口：
 
 本目录提供两个可直接复制的模板：
 
-- `inspect-template.rs`：单场只读检查器。规则逐轮重执行并校验 state hash；可选 BuilderCore 系策略影子还原（`enl=BuilderDefender,res=BuilderDisruptor` 形式的 spec），逐轮 assert 生成的命令与档案提交一致；证据输出 JSONL。仓库 vendor 离线且没有 serde_json，模板手写 JSON，只依赖三个 path 依赖。Logistics/Adaptive 有私有状态机，不在模板支持范围。
+- `inspect-template.rs`：单场只读检查器。规则逐轮重执行并校验 state hash；可选 BuilderCore 系策略影子还原（`enl=BuilderDefender,res=BuilderDisruptor` 形式的 spec），逐轮 assert 生成的命令与档案提交一致；证据输出 JSONL。仓库没有 serde_json 依赖，模板手写 JSON，只依赖三个 path 依赖。Logistics/Adaptive 有私有状态机，不在模板支持范围。
 - `analyze.py`：消费该 JSONL 的标准库分析器（无任务率、任务分布、补血窗口的到达时间 vs 倒塌时间、攻击命中 vs 受害方存活场、Drop 原因），可 `from analyze import Trace` 作库扩展。
 
 检查器输出统一走 JSONL：一行一个带 `kind` 的对象，Python `json.loads` 后按字段名过滤。不要用 Debug 字符串 TSV 加 awk 数列号消费输出——Debug 表示和列序都不是稳定接口，字段名才是。Rust 只负责解码、重执行、校验和导出；窗口、join、几何等分析放在 Python 侧。

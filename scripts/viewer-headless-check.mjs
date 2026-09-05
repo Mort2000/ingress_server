@@ -4,16 +4,22 @@
 // "the concatenated viewer JS boots and the in-page selftest passes" is
 // reproducible wherever a local JS engine exists:
 //
-//   node scripts/viewer-headless-check.mjs [viewer/sample.html]
+//   node scripts/viewer-headless-check.mjs <emitted-page.html>
 //
-// It extracts the second <script> block of the page (the concatenated
-// viewer JS), runs it under a minimal DOM shim with ?selftest=1 forced,
-// and reports the selftest verdict. The VISUAL half of D93 (canvas looks,
-// keyboard feel, animation) still needs a human with a browser.
+// Since D95 there is no committed sample page — export one first with
+// replay-export and pass its path. It extracts the second <script> block
+// of the page (the concatenated viewer JS), runs it under a minimal DOM
+// shim with ?selftest=1 forced, and reports the selftest verdict. The
+// VISUAL half of D93 (canvas looks, keyboard feel, animation) still needs
+// a human with a browser.
 
 import { readFileSync } from "node:fs";
 
-const path = process.argv[2] ?? "viewer/sample.html";
+const path = process.argv[2];
+if (!path) {
+  console.error("usage: node scripts/viewer-headless-check.mjs <emitted-page.html>");
+  process.exit(2);
+}
 const html = readFileSync(path, "utf8");
 
 const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);

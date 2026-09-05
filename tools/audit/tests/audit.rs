@@ -547,16 +547,16 @@ fn operator_crates_are_the_documented_exemption() {
     }
 }
 
-/// Real closure facts as they exist today: blake3 (and libc after
-/// vendoring) sanctioned build scripts; nothing unknown native.
+/// Real closure facts as they exist today (D94: no vendored closure —
+/// the dependency closure IS the Cargo.lock external set): the frozen
+/// allowlist equals the lockfile external set exactly, and the only
+/// native entry is the lockfile-derived sanctioned cc build-dep of
+/// blake3; nothing unknown native.
 #[test]
 fn real_closure_has_no_unknown_native_capability() {
     let root = workspace_root();
-    let vendor = root.join("vendor");
-    if !vendor.is_dir() {
-        eprintln!("vendor/ not yet committed; closure report from Cargo.lock only");
-        return;
-    }
+    audit::allowlist_matches_lock(&root)
+        .expect("frozen allowlist tracks the Cargo.lock external set");
     let participants = audit::participant_dirs(&root);
     let report = run(&root, &participants, &audit::operator_dirs(&root));
     for native in &report.natives {
@@ -569,11 +569,16 @@ fn real_closure_has_no_unknown_native_capability() {
         }
     }
     assert!(
+        report.natives.iter().all(|n| n.sanctioned),
+        "no unsanctioned native capability in the closure: {:?}",
+        report.natives
+    );
+    assert!(
         report
             .natives
             .iter()
-            .any(|n| n.crate_name == "blake3" && n.kind == "build.rs" && n.sanctioned),
-        "blake3's C/asm intrinsics are the sanctioned native entry: {:?}",
+            .any(|n| n.crate_name == "cc" && n.sanctioned),
+        "the lockfile-derived sanctioned cc build-dep entry is present: {:?}",
         report.natives
     );
     assert!(report.pass(), "{}", report.render());

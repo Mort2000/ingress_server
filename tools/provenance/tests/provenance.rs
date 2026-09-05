@@ -154,8 +154,8 @@ fn mutation_rename_move_and_exec_bit_all_change_the_tree_hash() {
 }
 
 /// Changes under the frozen exclusion set never change tree_hash;
-/// `vendor/` and `.cargo/` ARE covered (they are part of the audited
-/// build closure).
+/// any other directory participates (all non-excluded content is part
+/// of the audited input).
 #[test]
 fn exclusion_set_is_exact() {
     let root = minimal_tree("exclusions");
@@ -178,7 +178,8 @@ fn exclusion_set_is_exact() {
         base.tree_hash
     );
 
-    // vendor/ and .cargo/ participate.
+    // Any non-excluded directory participates (vendor/ and .cargo/ are
+    // just representative names; the repo itself no longer carries them).
     let closure_root = fixture("closure-covered");
     copy_tree(&root, &closure_root);
     let closure_base = compute(&closure_root).expect("closure base");

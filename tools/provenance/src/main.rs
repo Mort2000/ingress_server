@@ -6,7 +6,7 @@
 //! ```
 //!
 //! Writes `<out-dir>/<build-id>/manifest.json` and prints a human
-//! summary. Run AFTER `cargo build --release --locked --offline` so all
+//! summary. Run AFTER `cargo build --release --locked` so all
 //! recorded products exist.
 
 use std::path::PathBuf;

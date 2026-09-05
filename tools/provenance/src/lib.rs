@@ -1,4 +1,4 @@
-//! Build provenance for the audited offline closure (P4-BUILD, D71).
+//! Build provenance for the audited build closure (P4-BUILD, D71).
 //!
 //! Every match product must be traceable to the exact audited inputs:
 //! the source tree, the lockfile, the toolchain identity, and the final
@@ -15,8 +15,10 @@
 //!   terminated by `u64le(file_count)`. Walk root = the repository. The
 //!   frozen exclusion set prunes any directory named `.git`, `target`,
 //!   `runs`, or `.scratch` (build outputs, evidence dirs, planning
-//!   scratch). `vendor/` and `.cargo/` ARE hashed — they are part of the
-//!   audited build closure. Symlinks are an error (never followed).
+//!   scratch). Everything else in the tree participates — whatever the
+//!   tree contains is the audited input (since D94 there is no
+//!   `vendor/`; dependencies resolve via mirror per the lockfile).
+//!   Symlinks are an error (never followed).
 //!   `exec_bit = (mode & 0o111 != 0) as u8` — git's only tracked mode bit.
 //! * **lock_hash** = `new_der_key("ingress-arena-lock-v0.1")` over the raw
 //!   `Cargo.lock` bytes.
@@ -285,7 +287,7 @@ pub fn channel_pin(root: &Path) -> Option<String> {
     None
 }
 
-/// Default product set recorded by the offline build proof: the server,
+/// Default product set recorded by the build proof: the server,
 /// every participant client, and the operator tools.
 pub const DEFAULT_BINARIES: [&str; 12] = [
     "arena-server",

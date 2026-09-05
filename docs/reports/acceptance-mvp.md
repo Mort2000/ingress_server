@@ -16,7 +16,7 @@ Shared bookkeeping (referenced by every row below rather than repeated):
 | RNG / replay encoding | `RNG_VERSION = 1`, `STATE_ENCODING_VERSION = 1` |
 | Bot build | arena-bots `BOT_VERSION = "m6.0"` (fixed version, D53/D54); external clients are the same frozen algorithms behind the SDK (`nearest-client`, `hybrid-client`, `probe-client`) |
 | Default config | `GameConfig::default()` (R-CONFIG-01), identity hash `0x9ead052219fa7ff3` (blake3 over the canonical 31-word encoding); per-experiment deviations are named in each row |
-| Toolchain | rustc/cargo 1.98.0 pinned by `rust-toolchain.toml`; offline closure committed under `vendor/` (15 crates, D72); build-provenance manifests recorded per milestone handoff under `runs/builds/` |
+| Toolchain | rustc/cargo 1.98.0 pinned by `rust-toolchain.toml`; offline closure committed under `vendor/` (15 crates, D72; reversed by D94); build-provenance manifests recorded per milestone handoff under `runs/builds/` |
 | Suite | `cargo test --workspace` green in debug AND release at handoff (see the handoff note in `docs/progress.md`); `cargo fmt --check` clean |
 
 ---
@@ -179,7 +179,11 @@ state, no SHM writes, no network.*
   absence, `extern`/shm-token absence. Offline proof:
   `scripts/offline-build-proof.sh` (fresh CARGO_HOME + target, `env -i`,
   `--release --locked --offline`), evidence manifests recorded per
-  milestone handoff under `runs/builds/`.
+  milestone handoff under `runs/builds/`. *(Post-acceptance note,
+  2026-09-05: the vendored closure and the offline proof were later
+  reversed by D94 — dependencies resolve via the cargo mirror per the
+  committed `Cargo.lock`; this record describes the state at acceptance
+  time.)*
 - **Resource + filesystem isolation**: `tools/sandbox-runner` (rlimits,
   landlock ABI 7 with handled-not-granted semantics incl. REFER/TRUNCATE/
   IOCTL_DEV, NO_NEW_PRIVS, TCP bind/connect kernel-denied — verified
@@ -292,5 +296,5 @@ links, fields, and per-round scores.*
 7. **runs/ is local evidence**: every experiment artifact under `runs/`
    is untracked; the tracked stand-ins are the committed docs
    (`balance-report-r1.md`, `tournament-r1.md`, `sandbox.md`,
-   `viewer/sample.html`) and the tests that re-verify the artifacts
+   `viewer/sample.html`, withdrawn by D95) and the tests that re-verify the artifacts
    wherever they exist (M9 skip-on-fresh-clone convention).

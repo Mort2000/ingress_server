@@ -14,12 +14,13 @@ repository root, outside the Rust crates; the export tool is
 replay-export <replay.iarp> [-o out.html] [--meta <meta.json>] [--dev 0|1] [--faction enl|res]
 ```
 
-Built and run from the repository root:
+Built and run from the repository root (any archived `.iarp` works; the
+`runs/` evidence exists wherever it was produced):
 
 ```sh
 cargo run --release -p replay-export -- \
   runs/tournaments/r1/matches/m11/server/replay.iarp \
-  -o viewer/sample.html \
+  -o out.html \
   --meta runs/tournaments/r1/matches/m11/meta.json \
   --dev 1
 ```
@@ -41,10 +42,9 @@ Modes (D90):
 
 ## Opening the viewer
 
-Open the emitted `.html` file directly in a browser — e.g.
-`viewer/sample.html` from this repository. Everything renders from the
-embedded data; the page makes no requests (a test scans every emitted
-byte for `http://`, `https://`, `src=`, `href=`, `fetch(`,
+Open the emitted `.html` file directly in a browser (`file://`). Everything
+renders from the embedded data; the page makes no requests (a test scans
+every emitted byte for `http://`, `https://`, `src=`, `href=`, `fetch(`,
 `XMLHttpRequest`, `WebSocket`).
 
 ## Controls and shortcuts
@@ -130,7 +130,7 @@ inside the page, mirrored by the Rust twins in
 Append `?selftest=1` to the page URL (works from `file://`):
 
 ```text
-file:///…/viewer/sample.html?selftest=1
+file:///…/<emitted-page>.html?selftest=1
 ```
 
 The page re-runs the pure-data invariants in-place and renders PASS/FAIL
@@ -144,25 +144,23 @@ conversion.
 Machine-tested (`cargo test -p replay-export`, runs in the default
 workspace suite): every data-level invariant — embedded JSON parses with
 the strict integer-only parser; score accumulation is u128-exact for the
-normal fixture, the abnormal fixture, and the committed sample and equals
+normal and abnormal fixtures and equals
 the IARP records; final result/hash/scores equal `arena_replay::replay`
 and the trailer and the printed summary line; round counts and the
 abnormal shape; R-VIS faction-export filtering; the self-containment
 scan; the three-view predicate via the Rust twins; mini-JSON round trip
-and `</script>` inertness; unverified-input refusal; the committed
-sample's invariants; selftest-mode presence; the docs gate.
+and `</script>` inertness; unverified-input refusal; selftest-mode
+presence; the docs gate.
 
 Human-verified visually (no browser automation exists): canvas rendering
 (portals/links/fields/agents), keyboard feel, animation timing, and the
 `?selftest=1` display. The in-page selftest re-runs the same pure-data
 assertions as a human-triggered bonus.
 
-## Committed sample
+## Committed sample (withdrawn, D95)
 
-`viewer/sample.html` (≈180 KB) is the dev-mode export of the SHORTEST
-real r1 tournament replay, `runs/tournaments/r1/matches/m11`
-(`hybrid-probe`, j=1, 100 rounds, ENL win 1859239392301 : 0, final hash
-`9b3777f6…079`), regenerated with the exact command at the top of this
-document. Regenerate it after any viewer-asset or schema change with
-that same command (the runs/ artifacts exist wherever the r1 evidence
-was produced; on a fresh clone the committed file is the evidence).
+The M10 milestone committed a dev-mode sample page at
+`viewer/sample.html` (the r1 `m11` replay export); D95 withdrew it —
+the zero-build demo entry is no longer wanted and no generated page is
+tracked; you can regenerate one with the command at the top of this document
+whenever one is needed.

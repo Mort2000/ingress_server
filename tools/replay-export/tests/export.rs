@@ -18,7 +18,7 @@ use arena_replay::canon;
 use arena_replay::format::EndOfMatch;
 use arena_replay::recorder::ReplayWriter;
 use arena_replay::replay::{decode_log, replay_bytes};
-use replay_export::data::{self, ExportOptions, Exported, VIEWER_FORMAT, extract_embedded_json};
+use replay_export::data::{self, ExportOptions, Exported, extract_embedded_json};
 use replay_export::json::{self, Json};
 use replay_export::views::{View, event_visible, visible_agents, visible_factions};
 
@@ -229,13 +229,8 @@ fn repo_relative(path: &str) -> PathBuf {
         .join(path)
 }
 
-fn committed_sample_html() -> String {
-    std::fs::read_to_string(repo_relative("viewer/sample.html"))
-        .expect("viewer/sample.html is committed with the milestone")
-}
-
 // ---------------------------------------------------------------------------
-// Shared invariant helpers (also used against the committed sample)
+// Shared invariant helpers
 // ---------------------------------------------------------------------------
 
 fn assert_score_accumulation_exact(payload: &Json) {
@@ -422,10 +417,6 @@ fn embedded_score2_accumulation_exact() {
 
     let abnormal = export_abnormal();
     assert_score_accumulation_exact(&payload_of(&abnormal.html));
-
-    // The committed sample carries the same invariant (no runs/ needed).
-    let sample = committed_sample_html();
-    assert_score_accumulation_exact(&payload_of(&sample));
 
     // Cross-check against the IARP's own RoundRecord deltas: the embedded
     // cumulative values are exactly the record accumulation, and every
@@ -740,7 +731,6 @@ fn faction_export_contains_no_enemy_agent_data() {
 fn self_contained_scan() {
     assert_self_contained(&export_normal().html);
     assert_self_contained(&export_abnormal().html);
-    assert_self_contained(&committed_sample_html());
 }
 
 // ---------------------------------------------------------------------------
@@ -760,9 +750,6 @@ fn three_views_derive_from_one_base() {
     for round in rounds {
         assert!(!round.get("portals").unwrap().as_array().unwrap().is_empty());
     }
-
-    // And on the committed sample.
-    assert_three_views(&payload_of(&committed_sample_html()));
 
     // The event predicate twin: reinforcement is both-faction (no f), a
     // tagged kind hides without its faction, factions cannot replace kinds.
@@ -888,55 +875,7 @@ fn abnormal_fixture_exports() {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Committed sample invariants (fresh clone, no runs/ needed)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn sample_committed_invariants() {
-    let html = committed_sample_html();
-    assert_html_shape(&html);
-    assert_self_contained(&html);
-    let payload = payload_of(&html);
-    assert_eq!(
-        payload.get("format").and_then(Json::as_str),
-        Some(VIEWER_FORMAT)
-    );
-    assert_score_accumulation_exact(&payload);
-    assert_three_views(&payload);
-    // It is the dev sample (both factions embedded, header.dev true).
-    let header = payload.get("header").unwrap();
-    assert_eq!(header.get("dev").and_then(Json::as_bool), Some(true));
-    let keys: Vec<&str> = payload
-        .get("agents")
-        .and_then(Json::as_object)
-        .unwrap()
-        .iter()
-        .map(|(k, _)| k.as_str())
-        .collect();
-    assert_eq!(keys, vec!["enl", "res"]);
-    // Pinned to the real r1 m11 archive data (committed bytes).
-    let outcome = header.get("outcome").unwrap();
-    assert_eq!(
-        outcome.get("final_hash").and_then(Json::as_str),
-        Some("9b3777f68a567e4729c43c3d50b9437cbf238ad24e496b49b862aa6ceb607079")
-    );
-    assert_eq!(
-        outcome.get("final_score2").unwrap().as_array().unwrap()[0].as_str(),
-        Some("1859239392301")
-    );
-    // Round count and checkpoints of the archived 100-round match.
-    assert_eq!(
-        payload.get("rounds").unwrap().as_array().unwrap().len(),
-        100
-    );
-    assert_eq!(
-        header.get("checkpoints").unwrap().as_array().unwrap().len(),
-        2
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 12. Selftest mode present (human-triggered; no browser automation)
+// 11. Selftest mode present (human-triggered; no browser automation)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -954,7 +893,7 @@ fn selftest_mode_present() {
 }
 
 // ---------------------------------------------------------------------------
-// 13b. M-final review fix — reinforcement rounds are exercised in the export
+// 12b. M-final review fix — reinforcement rounds are exercised in the export
 // fixture (the old 100-round/interval-100 fixture never fired one)
 // ---------------------------------------------------------------------------
 
@@ -1043,7 +982,7 @@ fn reinforcement_rounds_present_in_embedded_data() {
 }
 
 // ---------------------------------------------------------------------------
-// 13c. M-final review fix — template marker injection (D87 assembly)
+// 12c. M-final review fix — template marker injection (D87 assembly)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1123,7 +1062,7 @@ fn hostile_marker_tokens_cannot_subvert_assembly() {
 }
 
 // ---------------------------------------------------------------------------
-// 13d. M-final review fix — viewer speed keys point the documented way
+// 12d. M-final review fix — viewer speed keys point the documented way
 // (docs/design/viewer.md: "+ / − speed up / slow down"). A static check: no browser
 // automation exists (D93), so the Rust side reads the asset and pins the
 // direction of the '+'/'-' key mapping.
@@ -1179,7 +1118,7 @@ fn viewer_speed_keys_match_the_documented_direction() {
 }
 
 // ---------------------------------------------------------------------------
-// 14. Docs gate
+// 13. Docs gate
 // ---------------------------------------------------------------------------
 
 #[test]

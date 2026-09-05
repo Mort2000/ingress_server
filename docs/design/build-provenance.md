@@ -1,16 +1,17 @@
-# Build provenance: audited offline builds (M8 / P4-BUILD)
+# Build provenance: audited builds (M8 / P4-BUILD)
 
-Status: implemented (M8). Every match product must be traceable to the
-exact audited inputs: source tree, lockfile, toolchain identity, and
-binary hashes (ADR-0005, P4-BUILD). This document records the
-mechanism, the closure, the proof recipe, and the operator runbook.
+Status: implemented (M8; dependency resolution reversed by D94 — see
+§2). Every match product must be traceable to the exact audited inputs:
+source tree, lockfile, toolchain identity, and binary hashes (ADR-0005,
+P4-BUILD). This document records the mechanism, the closure, the
+integrity basis, and the operator runbook.
 
 ## 1. Dependency policy and the frozen closure
 
-Policy (ADR-0013, amended M7): the sanctioned external set is exactly
-**blake3 + planus**; everything else is std-only. `cargo vendor
---versioned-dirs vendor` freezes precisely this closure — 15 external
-crates, 12 MB, no more:
+Policy (ADR-0013 mirror adoption, amended M7): the sanctioned external
+set is exactly **blake3 + planus**; everything else is std-only. The
+committed `Cargo.lock` pins precisely this closure — 15 external
+crates, no more:
 
 | Crate | Version | Why it is in the closure | Native findings (audit R3) |
 |---|---|---|---|
@@ -30,59 +31,53 @@ crates, 12 MB, no more:
 | find-msvc-tools | 0.1.11 | cc dep (Windows targets) | none |
 | shlex | 2.0.1 | cc dep | none |
 
-The audit's R3 report regenerates this table from `vendor/` on every
-run; any native capability NOT in the frozen sanctioned pair (blake3 +
-cc, libc) fails the audit. The frozen allowlist is pinned equal to the
-actual lockfile closure by a test
-(`frozen_allowlist_matches_the_lockfile_closure`) — they cannot drift.
+The audit's R3 report derives native capability from the Cargo.lock
+external set on every run (and from a `vendor/` source scan whenever a
+vendored closure is present — dormant since D94); any native capability
+NOT in the frozen sanctioned pair (blake3 + cc, libc) fails the audit.
+The frozen allowlist is pinned equal to the actual lockfile closure by
+a test (`frozen_allowlist_matches_the_lockfile_closure`) — they cannot
+drift.
 
-## 2. Vendoring mechanics
+## 2. Dependency resolution and integrity (D94)
 
-* `vendor/` is committed (12 MB, 15 versioned directories).
-* `.cargo/config.toml` (committed) is byte-identical to what
-  `cargo vendor` prints:
+The M8 design froze the closure in-tree with `cargo vendor` and
+redirected crates.io via `.cargo/config.toml` (offline-first builds).
+D94 reversed that: the original requirements never asked for
+mirror-independent or self-contained builds, and this environment has
+in fact always resolved through the configured cargo mirror. Since D94:
 
-  ```toml
-  [source.crates-io]
-  replace-with = "vendored-sources"
+* Dependencies resolve through the cargo mirror per the committed
+  `Cargo.lock`; `vendor/` and `.cargo/config.toml` are removed and
+  offline resolvability is no longer a property of this repository.
+* **Integrity is unchanged**: every one of the 15 lockfile entries
+  carries a SHA-256 checksum, and `--locked` builds verify each
+  downloaded `.crate` against it — a hostile mirror cannot substitute
+  bytes without a SHA-256 preimage. Lock + mirror gives the same
+  integrity guarantee the vendored closure gave; what is given up is
+  availability-independence and self-containment, neither of which is
+  a requirement.
+* Builds use `cargo build --release --locked`; adding or updating a
+  dependency still requires recording it (ADR gate) and updates the
+  lockfile, which changes `lock_hash` and `tree_hash`.
 
-  [source.vendored-sources]
-  directory = "vendor"
-  ```
+## 3. Build evidence (history and current practice)
 
-  Every cargo command in the repository now resolves dependencies from
-  `vendor/`; no registry access is needed or attempted.
-* `Cargo.lock` is unchanged by vendoring (asserted by `--locked` in
-  the proof); the only M8 lockfile change is the workspace gaining the
-  `tools/*` members — zero new external crates.
-
-## 3. The offline proof (frozen recipe, D72)
-
-`scripts/offline-build-proof.sh` performs the strongest form of the
-P4-BUILD requirement on this machine:
-
-1. `mktemp -d` fresh **CARGO_HOME** and fresh **CARGO_TARGET_DIR** —
-   no registry cache, no build cache, nothing reused;
-2. resolves the REAL toolchain cargo
-   (`~/.rustup/toolchains/1.98.0-.../bin/cargo`), so no rustup proxy
-   runs inside the proof;
-3. `env -i PATH=<toolchain>/bin:/usr/bin:/bin HOME=fresh
-   CARGO_HOME=fresh cargo build --release --locked --offline` —
-   every proxy/mirror/ambient variable is dropped;
-4. on success, records evidence under `runs/builds/<id>/`:
-   `build.log`, `binary-hashes.txt` (sha256 of every product),
-   `env.txt` (the exact invocation), `manifest.log`, and the
-   provenance `manifest.json`.
-
-Recorded evidence run (recipe demonstration, tree at proof time):
+The M8–M-final era used a frozen offline-proof recipe
+(`scripts/offline-build-proof.sh`: fresh CARGO_HOME + target, `env -i`,
+`--release --locked --offline`), recorded per milestone handoff under
+`runs/builds/<id>/`. Recorded demonstration run (tree at proof time):
 `runs/builds/20260903-0011-34ac97841d9d` — tree hash
 `34ac97841d9da5c90792ede13223c43952eff43412c5099c45f3823b72632801`,
 919 files hashed, lock hash
 `e721b8419ffeaf9f64248f542408cc00a8dd1cacbc6098053b8124209a79075c`,
-exit 0. The recipe is re-runnable at any time and is re-executed at
-milestone handoffs; the latest recorded run's `manifest.json` is the
-attestation for the tree it hashed (verify any tree with
-`target/release/provenance --root .` and compare `tree-hash`).
+exit 0. Those manifests remain valid history: they attest the trees
+they hashed (pre-D94 trees included `vendor/`; tree_hash values are
+NOT comparable across the D94 removal — the hashed set shrank).
+
+Current practice: build with `cargo build --release --locked`, then
+record the manifest with `target/release/provenance --root .` (see the
+runbook); verify any tree the same way and compare `tree-hash`.
 
 ## 4. Toolchain pinning
 
@@ -95,14 +90,11 @@ attestation for the tree it hashed (verify any tree with
 * **Hazard**: a pin without the toolchain installed breaks EVERY cargo
   command in the repository (rustup downloads on demand only when a
   network is reachable). Provisioning is the one out-of-band network
-  step of the offline story — rustup itself is not vendored:
+  step — rustup itself is not resolved through the cargo mirror:
 
   ```bash
   rustup toolchain install 1.98.0 --profile minimal --component rustfmt
   ```
-
-  The proof script checks for the pinned toolchain and prints exactly
-  this command when it is missing.
 * The pinned rustfmt component is required: without it `cargo fmt`
   (used at every milestone handoff) fails under the pin even though
   builds succeed.
@@ -119,8 +111,10 @@ attestation for the tree it hashed (verify any tree with
   terminated by `u64le(file_count)`. Walk root = the repository. The
   frozen exclusion set prunes any directory named `.git`, `target`,
   `runs`, or `.scratch` (build outputs, evidence dirs, planning
-  scratch). `vendor/` and `.cargo/` ARE hashed — they are part of the
-  audited build closure. Symlinks are an error (never followed).
+  scratch). Everything else in the tree participates — whatever the
+  tree contains is the audited input (since D94 there is no `vendor/`;
+  dependencies resolve via mirror per the lockfile). Symlinks are an
+  error (never followed).
   `exec_bit = (mode & 0o111 != 0) as u8` — git's only tracked mode
   bit.
 * **lock_hash** = same construction under
@@ -167,8 +161,8 @@ build id/directory name. Recorded products: `arena-server`, all
   `tree_hash`; so do a rename, a move between directories, and an
   exec-bit flip.
 * Exclusion correctness: changes under `target/`, `.git/`, `runs/`,
-  `.scratch/` never change `tree_hash`; `vendor/` and `.cargo/`
-  changes DO.
+  `.scratch/` never change `tree_hash`; any non-excluded content
+  change does.
 * Path order: ascending raw bytes, not locale collation — pinned by
   fixtures whose adjacent paths differ above ASCII
   (`paths_sort_by_raw_bytes_not_locale`).
@@ -183,8 +177,9 @@ rustup toolchain install 1.98.0 --profile minimal --component rustfmt
 # 1) white-box audit the participants (exit 0 = PASS)
 cargo run -p audit                      # or: target/debug/audit --root .
 
-# 2) audited offline build + evidence record
-scripts/offline-build-proof.sh          # runs/builds/<id>/{build.log,manifest.json,...}
+# 2) audited build (mirror + committed lockfile) + evidence record
+cargo build --release --locked
+target/release/provenance --root .      # runs/builds/<id>/manifest.json
 
 # 3) run matches from the RECORDED products only
 target/release/arena-server --socket ... --match-id <fresh-id> ...
@@ -196,7 +191,7 @@ The audit gate (step 1) covers the full dependency graph, not just the
 top-level crate: participant manifests (every dependency spelling —
 dotted `[dependencies.x]` tables and `target.*.dependencies` sections
 included; `path =` deps must resolve to workspace member crates
-`crates/*`/`bots/*`/`tools/*`), the committed `vendor/` closure,
+`crates/*`/`bots/*`/`tools/*`),
 `Cargo.lock` (every `source =` entry — registry, git, or sparse — must
 be one of the frozen 15 names), and every `.rs` file under each
 `bots/*` crate directory (not only `src/`; `#[path]`/`include!`

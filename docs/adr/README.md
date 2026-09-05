@@ -14,7 +14,7 @@
 | [0010](./0010-canonical-blake3-state-hash.md) | accepted | 使用 Canonical Encoding 与 BLAKE3-256 校验逐轮状态 |
 | [0011](./0011-domain-separated-blake3-random-oracle.md) | accepted | 用带域隔离的 BLAKE3 Random Oracle 派生比赛内随机结果 |
 | [0012](./0012-offline-stdlib-only-dependency-closure.md) | superseded | 离线环境使用零第三方依赖的 std-only 闭包（被 0013 撤销） |
-| [0013](./0013-official-crates-via-cargo-mirror.md) | accepted | 经 cargo 镜像使用官方 blake3 与 flatbuffers/planus，其余保持 std-only |
+| [0013](./0013-official-crates-via-cargo-mirror.md) | superseded | 经 cargo 镜像使用官方 blake3 与 flatbuffers/planus，其余保持 std-only（镜像采用仍有效；vendor 冻结条款被 progress.md D94 撤销） |
 | [0014](./0014-r2-seed-set-domains-and-paired-scheduling.md) | accepted | 冻结 R2 Seed Set 主种子、推导域与同图换边配对单位 |
 | [0015](./0015-independent-policy-identity.md) | accepted | 策略以独立 policy_id/family/version/parameters 标识；版本只增不改；bot RNG kind-tag 1-5 永属 m6 |
 | [0016](./0016-r2-policy-portfolio-and-readiness-gates.md) | accepted | 冻结 B2 六策略组合（kind-tag 6-12、结构化参数全值序列化、Readiness 阶段）与第 10.1 节就绪门槛的统计定义、阈值与主动阻断几何代理 |

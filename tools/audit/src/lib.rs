@@ -22,10 +22,13 @@
 //!   link unaudited code into the audited build).
 //! * **R3 NATIVE-FLAG** — participant-owned `build.rs`, build-deps,
 //!   proc-macros, `links =`, and staticlib/cdylib crate types FAIL;
-//!   native code inside the frozen closure is REPORTED with a verdict:
-//!   SANCTIONED (blake3 build.rs + cc-built C intrinsics, libc build.rs
-//!   — ADR-0013) or UNKNOWN (any other native capability that has not
-//!   been separately audited and approved).
+//!   native code inside the dependency closure is REPORTED with a
+//!   verdict: SANCTIONED (blake3 build.rs + cc-built C intrinsics,
+//!   libc build.rs — ADR-0013) or UNKNOWN (any other native capability
+//!   that has not been separately audited and approved). Since D94 the
+//!   repo carries no vendored closure: the lockfile half still reports
+//!   the sanctioned cc build-dep of blake3, and a `vendor/` directory,
+//!   if present, resumes the full source scan.
 //! * **R4 NET-ABSENCE** — networking tokens (`std::net`, TcpStream, ...)
 //!   must be absent from participant sources.
 //! * **R5 SHM/FFI-ABSENCE** — raw system-boundary tokens (`extern`,
@@ -64,9 +67,12 @@ pub const ALLOWED_EXTERNAL: [&str; 15] = [
     "shlex",
 ];
 
-/// Vendored crates whose native code is sanctioned (ADR-0013):
-/// blake3 (build.rs compiling C/asm intrinsics via cc) and libc
-/// (build.rs). Anything else native is UNKNOWN and fails the audit.
+/// External crates whose native code is sanctioned (ADR-0013): blake3
+/// (build.rs compiling C/asm intrinsics via cc) and libc (build.rs).
+/// Consulted only by the vendor-source scan — dormant since D94 (the
+/// repo resolves via mirror; the lockfile half is
+/// `Report::lock_external_names`). Anything else native is UNKNOWN and
+/// fails the audit.
 const SANCTIONED_BUILD_SCRIPTS: [&str; 2] = ["blake3", "libc"];
 
 /// R4 frozen token list (substring scans over stripped sources).
@@ -526,7 +532,8 @@ fn audit_participant(crate_dir: &Path, report: &mut Report) {
 }
 
 /// R3 (closure half): report every native capability under `vendor/`
-/// (or the lockfile external set when no vendor dir exists yet).
+/// when a vendored closure is present (dormant since D94), plus the
+/// lockfile-derived cc build-dep of blake3.
 fn audit_closure(root: &Path, report: &mut Report) {
     let vendor = root.join("vendor");
     let mut crates_seen: Vec<PathBuf> = Vec::new();

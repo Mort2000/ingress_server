@@ -9,8 +9,8 @@ explicitly NOT claimed.
 v0.1 runs **audited safe-Rust participants built by the operator from
 source** (`bots/*`: every crate is `#![forbid(unsafe_code)]`, verified
 by the white-box audit, `tools/audit`). The operator builds the whole
-closure offline from the committed `vendor/` directory with a pinned
-toolchain and records every input and product hash
+closure per the committed `Cargo.lock` (via the cargo mirror, D94) with
+a pinned toolchain and records every input and product hash
 (`docs/design/build-provenance.md`).
 
 **v0.1 does NOT claim safe execution of arbitrary untrusted code.**

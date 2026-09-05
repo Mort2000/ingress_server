@@ -5,15 +5,19 @@ after each milestone; every agent should read it before starting work.
 
 ## Environment constraints (read first)
 
-- **Offline-first since M8**: the dependency closure is COMMITTED under `vendor/`
-  and `.cargo/config.toml` redirects crates.io to it — builds need no network.
+- **Dependencies resolve through the configured cargo mirror** (the M8
+  offline-first arrangement is REVERSED, D94: `vendor/` and
+  `.cargo/config.toml` are removed — the original requirements never asked for
+  mirror-independent or self-contained builds): the committed `Cargo.lock`
+  pins all 15 external crates with checksums and `--locked` enforces them, so
+  mirror resolution is byte-exact without a vendored closure.
   `rust-toolchain.toml` pins 1.98.0 (+rustfmt); the rustup proxies honor the pin.
   If the pinned toolchain is missing, EVERY cargo command in the repository fails
   until `rustup toolchain install 1.98.0 --profile minimal --component rustfmt`
   runs (the one out-of-band network step; see docs/design/build-provenance.md).
 - **Network works through a configured cargo mirror** (crates.io is reachable via
   cargo itself; direct curl to the default CDN times out — probe with cargo, not curl).
-- **Dependency policy (ADR-0013, amended for M7)**: official `blake3` only until
+- **Dependency policy (ADR-0013 mirror adoption — vendor clause reversed by D94; amended for M7)**: official `blake3` only until
   M7; M7 adds `planus` (pure-Rust FlatBuffers-compatible compiler + runtime — the
   wire format is FlatBuffers; planus generates planus-runtime code, so the
   official flatbuffers crate is NOT used; generated code is committed so builds
@@ -249,6 +253,11 @@ M10 (Viewer) additions:
 - D91: integer exactness — cumulative/delta `score2` and `final_score2` are embedded as decimal STRINGS (u128-exact; JS `Number` cannot hold > 2^53); the viewer accumulates with `BigInt`. Display conversion is presentation-only and exact: halving to cm² (the `.5` visible when odd) then a decimal-string shift by 10^-10 to km² — floats never touch the values (curve PIXEL math may use floats; embedded DATA stays integer). Ids/coords/hp/supply/`area2` stay plain JSON numbers (< 2^53 by the D10 bounds).
 - D92: mini-JSON `tools/replay-export/src/json.rs` — std-only writer (compact) + strict parser (objects/arrays/strings/bools/null/integers; float syntax REJECTED); besides the JSON-mandated escapes the writer also escapes `<`, `>`, `&` (as `<` `>` `&`), so a hostile `meta.json` string can never contain the literal bytes `</script>` and break out of the page's script element (pinned by tests at string and full-document level). The parser is also what every Rust test uses to read the embedded payload back out of the emitted HTML (`data::extract_embedded_json` + `json::parse_json`). The M9 mini-JSON in arena-runner stays untouched (this copy carries the extra escaping contract).
 - D93: test split (honest) — machine-tested: all data-level invariants (Rust parses the embedded JSON out of the emitted HTML and checks score accumulation, final hash/result/scores vs `arena_replay::replay` + trailer + summary line, round counts, abnormal shape, R-VIS faction filtering, self-containment scan, three-view predicate via the Rust twins in `views.rs`, mini-JSON round trip, unverified-input refusal, sample invariants, selftest presence, docs gate) + DOM-id parse-check. Human-verified visually: canvas rendering, keyboard feel, animation. The in-page `?selftest=1` mode (works from file://) re-runs the same pure-data assertions and renders PASS/FAIL — human-triggered bonus, no browser automation exists or is claimed; docs/design/viewer.md states the split.
+
+Post-MVP additions (2026-09-05):
+
+- D94: dependency resolution reversed to mirror + committed lockfile — supersedes the vendor-freeze clause of D72/ADR-0013 (ADR-0013 flipped to superseded; its mirror adoption and minimal-closure policy stay in force). Rationale: the original requirements never asked for mirror-independent or self-contained builds, and this environment has in fact always resolved through the configured cargo mirror. Integrity without a vendored closure: the committed `Cargo.lock` pins all 15 external crates with SHA-256 checksums and `--locked` builds verify them, so a hostile mirror cannot substitute bytes without a SHA-256 preimage — equivalent integrity to vendor/, giving up only availability-independence and self-containment, neither of which is a requirement. Removed with this decision: `vendor/`, `.cargo/config.toml` (the vendored-sources replacement), `scripts/offline-build-proof.sh`. Consequences: offline resolvability is no longer a property of this repository; `runs/builds/` manifests recorded before this change remain valid history (their tree_hash values are NOT comparable with the post-removal tree — the hashed set shrank, expected); participant-submission semantics (ADR-0005 one-shot offline container builds) are unchanged — that isolation belongs to match runtime, not to operator builds; provenance's D71 exclusion set is untouched (it never listed vendor/).
+- D95: committed viewer sample withdrawn — reverses the D93/M10 commitment that `viewer/sample.html` must always exist on a fresh clone. The zero-build demo entry is no longer wanted (the viewer will get a proper standalone frontend project later). The export tests that ran against the committed sample now synthesize their page in-process from the deterministic fixture via `data::export` (same invariants, no committed artifact); the `sample_committed_invariants` test (r1 m11-specific pins) is deleted with its object; `scripts/viewer-headless-check.mjs` now requires an explicit page path.
 
 M9 deviations from the architect plan (spec wins / noted):
 

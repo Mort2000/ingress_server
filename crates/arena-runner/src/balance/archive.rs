@@ -21,9 +21,11 @@ use arena_core::types::PortalId;
 use crate::balance::execute::BalanceRunResult;
 use crate::balance::pairs::{PairedResult, VariantSummary, paired_results_to_tsv};
 use crate::balance::plan::{
-    CONFIG_FIELD_NAMES, ExperimentPlan, Gate, SeedSet, Stage, bot_seed_derivation,
+    CONFIG_FIELD_NAMES, ExperimentPlan, Gate, Stage, bot_seed_derivation,
     game_seed_derivation, map_seed_derivation, schedule_seed_derivation,
 };
+#[cfg(test)]
+use crate::balance::plan::SeedSet;
 use crate::balance::record::balance_records_to_tsv;
 
 /// Archive-level failures.
