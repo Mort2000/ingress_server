@@ -26,6 +26,10 @@ try {
 run("cargo", [
   "build",
   "--locked",
+  "--manifest-path",
+  "viewer/wasm/Cargo.toml",
+  "--target-dir",
+  "target/replay-web",
   "--release",
   "-p",
   "replay-web",
@@ -33,7 +37,7 @@ run("cargo", [
   "wasm32-unknown-unknown",
 ]);
 run(bindgen, [
-  "target/wasm32-unknown-unknown/release/replay_web.wasm",
+  "target/replay-web/wasm32-unknown-unknown/release/replay_web.wasm",
   "--target",
   "web",
   "--out-dir",

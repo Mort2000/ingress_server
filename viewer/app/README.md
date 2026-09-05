@@ -17,7 +17,7 @@ npm run dev
 
 打开 Vite 输出的地址，选择或拖入 `.iarp`。文件全部在浏览器本地处理。生产构建使用 `npm run build`，预览使用 `npm run preview`；将 `dist/` 部署至任意静态 HTTP 服务即可，也支持部署在子目录。构建步骤会重新编译 WASM，不依赖本地实验归档或未跟踪设计稿。
 
-修改 Rust 回放代码后重新运行 `npm run wasm`。生成的 WASM、npm 依赖和构建输出不提交，Rust 和 npm 依赖由各自 lockfile 固定。
+修改 Rust 回放代码后重新运行 `npm run wasm`。生成的 WASM、npm 依赖和构建输出不提交。`viewer/wasm` 使用独立 Rust workspace / `Cargo.lock`，浏览器依赖不会进入根 workspace 的参赛程序冻结依赖闭包；npm 依赖由 `package-lock.json` 固定。
 
 ## 操作
 
@@ -43,7 +43,7 @@ npm run dev
 
 ## 数据与验证
 
-原始 IARP 不保存逐轮私有完整快照。Worker 通过 `tools/replay-web` 的 wasm-bindgen 边界调用现有 `replay-export::build_payload`，复用 Rust 引擎完成解码、逐轮哈希 / 事件 / 得分 / 调度结果验证，再生成每轮状态。未通过验证的文件显示错误，保留上一份已载入回放；重新选择文件会终止上一 Worker，避免结果串场。零轮及技术性终止归档显示实际完成轮数和归档结果。
+原始 IARP 不保存逐轮私有完整快照。Worker 通过 `viewer/wasm` 的 wasm-bindgen 边界调用现有 `replay-export::build_payload`，复用 Rust 引擎完成解码、逐轮哈希 / 事件 / 得分 / 调度结果验证，再生成每轮状态。未通过验证的文件显示错误，保留上一份已载入回放；重新选择文件会终止上一 Worker，避免结果串场。零轮及技术性终止归档显示实际完成轮数和归档结果。
 
 ```plantuml
 @startuml

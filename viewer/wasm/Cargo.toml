@@ -1,0 +1,15 @@
+[package]
+name = "replay-web"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+replay-export = { path = "../../tools/replay-export" }
+wasm-bindgen = "=0.2.100"
+
+[workspace]
+resolver = "3"
