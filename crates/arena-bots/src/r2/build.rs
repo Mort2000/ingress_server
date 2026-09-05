@@ -93,6 +93,10 @@ pub struct CoreParams {
     /// opportunistic Hack. False keeps single-task command generation;
     /// historical replay still requires the recorded policy version.
     pub combat_auxiliaries: bool,
+    /// Independently replenish at or below this many Recharge costs.
+    /// Zero disables it, including when parsing pre-r2.6 records. Defense
+    /// policies opt in; pure builders and the Transfer planner stay unchanged.
+    pub supply_reserve_recharges: u32,
     /// The shared value model's thresholds (inlined into the record).
     pub value: ValueParams,
 }
@@ -106,16 +110,25 @@ impl Default for CoreParams {
             spawn_jitter_cm: 1_000,
             second_plan_discount_permille: 750,
             combat_auxiliaries: true,
+            supply_reserve_recharges: 0,
             value: ValueParams::default(),
         }
     }
 }
 
-const CORE_PARAM_KEYS: [&str; 6] = ["nearequal", "retry", "fbpri", "jit", "sec2p", "combataux"];
+const CORE_PARAM_KEYS: [&str; 7] = [
+    "nearequal",
+    "retry",
+    "fbpri",
+    "jit",
+    "sec2p",
+    "combataux",
+    "supplyreserve",
+];
 
 impl CoreParams {
     /// Canonical serialization:
-    /// `nearequal=..;retry=..;fbpri=..;jit=..;sec2p=..;combataux=..|value=<ValueParams::tag>`.
+    /// `nearequal=..;retry=..;fbpri=..;jit=..;sec2p=..;combataux=..;supplyreserve=..|value=<ValueParams::tag>`.
     pub fn tag(&self) -> String {
         let values = [
             self.near_equal_permille.to_string(),
@@ -124,6 +137,7 @@ impl CoreParams {
             self.spawn_jitter_cm.to_string(),
             self.second_plan_discount_permille.to_string(),
             u8::from(self.combat_auxiliaries).to_string(),
+            self.supply_reserve_recharges.to_string(),
         ];
         let mut tag = String::new();
         for (key, value) in CORE_PARAM_KEYS.iter().zip(values) {
@@ -144,6 +158,7 @@ impl CoreParams {
     /// without `sec2p`) parses with `second_plan_discount_permille = 0`.
     /// Parsing does not silently enable either new feature; reproducing
     /// a historical experiment also requires its frozen policy version.
+    /// The seventh key enables independent replenishment (r2.6); missing is 0.
     pub fn from_tag(tag: &str) -> Option<CoreParams> {
         let (own, value) = tag.split_once('|')?;
         let value = value.strip_prefix("value=")?;
@@ -151,7 +166,7 @@ impl CoreParams {
         if !(4..=CORE_PARAM_KEYS.len()).contains(&parts.len()) {
             return None;
         }
-        let mut values = [0i64; 6];
+        let mut values = [0i64; 7];
         // A legacy record's missing key defaults to 0 (disabled) — the
         // value the r2.0 core effectively ran with.
         values[4] = 0;
@@ -172,6 +187,7 @@ impl CoreParams {
             spawn_jitter_cm: i32::try_from(values[3].clamp(0, 100_000)).ok()?,
             second_plan_discount_permille: u32::try_from(values[4].max(0) as u64).ok()?,
             combat_auxiliaries: values[5] == 1,
+            supply_reserve_recharges: u32::try_from(values[6]).ok()?,
             value: ValueParams::from_tag(value)?,
         })
     }
@@ -1269,8 +1285,10 @@ impl BuilderCore {
             .filter_map(|agent| agent.grant.map(|task| (agent.agent, task)))
             .collect();
         if !self.params.combat_auxiliaries {
+            let mut out = self.execute(obs, &grants);
+            self.replenish(obs, &decision, &mut out);
             self.last_decision = Some(decision);
-            return self.execute(obs, &grants);
+            return out;
         }
         let mut out = BTreeMap::new();
         for agent in &decision.agents {
@@ -1305,8 +1323,42 @@ impl BuilderCore {
                 }
             }
         }
+        self.replenish(obs, &decision, &mut out);
         self.last_decision = Some(decision);
         out
+    }
+
+    fn replenish(
+        &mut self,
+        obs: &Observation,
+        decision: &DecisionTrace,
+        out: &mut BTreeMap<AgentId, CommandList>,
+    ) {
+        if self.params.supply_reserve_recharges == 0 {
+            return;
+        }
+        for agent in &decision.agents {
+            if matches!(agent.grant, Some(Task::Transfer { .. })) {
+                continue;
+            }
+            let me = obs
+                .own_agents
+                .iter()
+                .find(|me| me.id == agent.agent)
+                .unwrap();
+            let original = out
+                .get(&agent.agent)
+                .cloned()
+                .map_or_else(Vec::new, CommandList::build);
+            let mut commands = original.clone();
+            crate::r2::compound::replenish(self, obs, me, agent.grant.is_none(), &mut commands);
+            if commands != original {
+                // replenish never changes a stream that already contains a
+                // Hack, so this records only the newly emitted harvest.
+                self.record_hacks(obs.round, agent.agent, &commands);
+                out.insert(agent.agent, CommandList::from_ordered(commands));
+            }
+        }
     }
 
     pub fn decision_trace(&self) -> Option<&DecisionTrace> {

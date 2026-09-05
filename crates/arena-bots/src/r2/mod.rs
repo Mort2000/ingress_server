@@ -29,11 +29,11 @@
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
 /// policies are registered in `crate::policy` with exactly this version).
 ///
-/// r2.5 (2026-09-05 compound combat): compatible construction and combat
-/// share a command stream, with ordered Key use and bounded auxiliary Hack.
-/// Actual cohorts and Link geometry remain reserved and revalidated.
+/// r2.6 (2026-09-05 Supply maintenance): defense policies replenish low
+/// inventory independently of combat grants and use free remote-charge
+/// movement to approach harvest points. Existing compound work is preserved.
 /// Frozen M6 policies, rules and earlier experiment records are unchanged.
-pub const R2_VERSION: &str = "r2.5";
+pub const R2_VERSION: &str = "r2.6";
 
 pub mod adaptive_hybrid_r2;
 pub mod blocker_builder;

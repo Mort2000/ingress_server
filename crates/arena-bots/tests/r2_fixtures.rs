@@ -2358,13 +2358,19 @@ fn second_plan_gives_surplus_agents_work_and_zero_disables_it() {
 fn core_params_records_parse_legacy_and_current_forms() {
     let current = arena_bots::r2::build::CoreParams::default();
     let tag = current.tag();
-    assert!(tag.contains(";sec2p=750;combataux=1|value="), "{tag}");
+    assert!(
+        tag.contains(";sec2p=750;combataux=1;supplyreserve=0|value="),
+        "{tag}"
+    );
     assert_eq!(
         arena_bots::r2::build::CoreParams::from_tag(&tag),
         Some(current)
     );
     // A legacy record: strip the fifth key; it must parse with sec2p = 0.
-    let legacy = tag.replace(";sec2p=750", "").replace(";combataux=1", "");
+    let legacy = tag
+        .replace(";sec2p=750", "")
+        .replace(";combataux=1", "")
+        .replace(";supplyreserve=0", "");
     assert_eq!(
         arena_bots::r2::build::CoreParams::from_tag(&legacy),
         Some(arena_bots::r2::build::CoreParams {

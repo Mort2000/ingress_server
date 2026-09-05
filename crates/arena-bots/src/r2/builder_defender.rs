@@ -38,7 +38,10 @@ impl Default for BuilderDefenderParams {
     fn default() -> Self {
         BuilderDefenderParams {
             defense_task_cap: 2,
-            core: CoreParams::default(),
+            core: CoreParams {
+                supply_reserve_recharges: 5,
+                ..CoreParams::default()
+            },
         }
     }
 }

@@ -56,7 +56,10 @@ impl Default for AdaptiveHybridParams {
             attack_share_permille: 1000,
             defense_task_cap: 2,
             opponent: OpponentParams::default(),
-            core: CoreParams::default(),
+            core: CoreParams {
+                supply_reserve_recharges: 5,
+                ..CoreParams::default()
+            },
         }
     }
 }

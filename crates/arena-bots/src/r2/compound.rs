@@ -144,3 +144,69 @@ pub(super) fn add_hack(
         }
     }
 }
+
+/// Low-stock safety net, independent of obtaining a combat grant. Existing
+/// work keeps its relative order; movement is added only to an idle stream or a
+/// keyed remote Recharge with no route already assigned, and only when a Hack
+/// can complete this round. Local defenders,
+/// attackers and the stateful Transfer planner keep their stations/routes.
+pub(super) fn replenish(
+    core: &BuilderCore,
+    obs: &Observation,
+    me: &AgentPrivate,
+    idle: bool,
+    commands: &mut Vec<Command>,
+) {
+    let cfg = core.cfg();
+    let reserve = core.params().supply_reserve_recharges;
+    if reserve == 0
+        || me.supply > reserve.saturating_mul(cfg.recharge_cost_supply)
+        || me.supply >= cfg.max_supply
+        || commands
+            .iter()
+            .any(|c| matches!(c, Command::Transfer { .. }))
+    {
+        return;
+    }
+    add_hack(core, obs, me, commands);
+    if commands.len() >= cfg.max_commands_per_agent_round as usize
+        || commands
+            .iter()
+            .any(|c| matches!(c, Command::Move { .. } | Command::Hack { .. }))
+    {
+        return;
+    }
+    let remote_charge = commands.iter().any(|c| match c {
+        Command::Recharge { portal } => me.keys.get(portal).copied().unwrap_or(0) > 0,
+        _ => false,
+    });
+    if !(idle || remote_charge)
+        || cfg.move_budget_cm == 0
+        || commands.len() + 2 > cfg.max_commands_per_agent_round as usize
+    {
+        return;
+    }
+    let Some(portal) = obs
+        .portals
+        .iter()
+        .filter(|p| {
+            core.hack_available(obs.round, me.id, p.id)
+                && common::in_range(
+                    common::step_toward(me.position, p.position, cfg.move_budget_cm),
+                    p.position,
+                    cfg.portal_operation_range_cm,
+                )
+        })
+        .min_by_key(|p| (arena_core::geometry::dist2(me.position, p.position), p.id))
+    else {
+        return;
+    };
+    let destination = common::step_toward(me.position, portal.position, cfg.move_budget_cm);
+    if destination == me.position {
+        return;
+    }
+    commands.push(Command::Move { destination });
+    // Do not begin a multi-round tour that can reverse on the next cooldown
+    // reset or lengthen a future build route before harvesting anything.
+    add_hack(core, obs, me, commands);
+}

@@ -530,7 +530,7 @@ mod tests {
         // r2_spec(), the current R2 era version, full-value records.
         assert_eq!(plan.policies.len(), 6);
         for spec in &plan.policies {
-            assert_eq!(spec.version, "r2.5");
+            assert_eq!(spec.version, "r2.6");
             assert_eq!(spec, &spec.policy_id.r2_spec());
             assert!(!spec.family.is_diagnostic());
         }

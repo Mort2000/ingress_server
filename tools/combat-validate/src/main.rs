@@ -54,6 +54,25 @@ struct Arm {
 fn arms(group: &str) -> Result<Vec<Arm>> {
     let mut result = Vec::new();
     match group {
+        "supply-defense" | "supply-adaptive" => {
+            for reserve in [0, 5] {
+                let mut subject = if group == "supply-defense" {
+                    PolicyId::BuilderDefenderR2.r2_spec()
+                } else {
+                    PolicyId::AdaptiveHybridR2.r2_spec()
+                };
+                match &mut subject.parameters {
+                    PolicyParameters::BuilderDefender(p) => p.core.supply_reserve_recharges = reserve,
+                    PolicyParameters::AdaptiveHybridR2(p) => p.core.supply_reserve_recharges = reserve,
+                    _ => unreachable!(),
+                }
+                let mut opponent = PolicyId::BuilderDisruptorR2.r2_spec();
+                if let PolicyParameters::BuilderDisruptor(p) = &mut opponent.parameters {
+                    p.core.supply_reserve_recharges = 0;
+                }
+                result.push(Arm { tag: format!("reserve{reserve}"), subject, opponent });
+            }
+        }
         "compound" => {
             for defense_aux in [false, true] {
                 for attack_aux in [false, true] {
@@ -123,7 +142,7 @@ fn arms(group: &str) -> Result<Vec<Arm>> {
                 });
             }
         }
-        _ => return Err("group must be adaptive, factorial, adaptive-defense, or compound".into()),
+        _ => return Err("group must be adaptive, factorial, adaptive-defense, compound, supply-defense, or supply-adaptive".into()),
     }
     for arm in &result {
         arm.subject.validate()?;

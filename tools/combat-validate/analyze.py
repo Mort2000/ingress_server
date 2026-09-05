@@ -199,6 +199,8 @@ def analyze(directory: Path) -> dict:
         'adaptive-defense': {'adaptive-def0', 'adaptive-def2'},
         'adaptive': {'legacy', 'mid-open', 'all-open'},
         'compound': {f'daux{d}-aaux{a}' for d in range(2) for a in range(2)},
+        'supply-defense': {'reserve0', 'reserve5'},
+        'supply-adaptive': {'reserve0', 'reserve5'},
     }[group]
     assert {r.arm for r in rows} == expected_arms
     expected_cases = {(m, leg) for m in range(int(manifest['maps'])) for leg in range(2)}
@@ -224,7 +226,9 @@ def analyze(directory: Path) -> dict:
             'subject_stats': {k: sum(r.stats[k] for r in selected) for k in selected[0].stats},
             'opponent_stats': {k: sum(r.opponent_stats[k] for r in selected) for k in selected[0].opponent_stats},
         }
-    if group == 'compound':
+    if group in ('supply-defense', 'supply-adaptive'):
+        contrasts = [contrast(rows, 'reserve0', 'reserve5', 'subject')]
+    elif group == 'compound':
         contrasts = [contrast(rows, f'daux0-aaux{a}', f'daux1-aaux{a}', 'subject') for a in range(2)]
         contrasts += [contrast(rows, f'daux{d}-aaux0', f'daux{d}-aaux1', 'opponent') for d in range(2)]
     elif group == 'factorial':
