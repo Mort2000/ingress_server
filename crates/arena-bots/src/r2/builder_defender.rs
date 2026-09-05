@@ -27,8 +27,8 @@ use crate::r2::value::DefenseModel;
 /// the defense overlay's own thresholds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BuilderDefenderParams {
-    /// At most this many concurrent Recharge tasks per round (the defense
-    /// headroom — one anchor at a time by default).
+    /// Maximum simultaneous defenders across all anchors. A coordinated
+    /// rescue spends one slot per member, including a moving defender.
     pub defense_task_cap: u32,
     /// The shared builder-core + value-model parameters.
     pub core: CoreParams,
@@ -37,7 +37,7 @@ pub struct BuilderDefenderParams {
 impl Default for BuilderDefenderParams {
     fn default() -> Self {
         BuilderDefenderParams {
-            defense_task_cap: 1,
+            defense_task_cap: 2,
             core: CoreParams::default(),
         }
     }
@@ -76,39 +76,94 @@ pub fn defense_overlay(
     cap: u32,
 ) -> BTreeMap<AgentId, Vec<TaskRequest>> {
     let mut requests = BTreeMap::new();
+    if cap == 0 {
+        return requests;
+    }
     let params = core.params();
     let economy = core.economy(obs);
     let model = DefenseModel::new(obs, core.faction(), core.cfg(), &params.value, &economy);
-    // Value-ranked urgent anchors: (defense_value, portal), value
-    // descending then ascending portal id.
-    let mut urgent: Vec<(i64, PortalId)> = obs
+    struct Rescue {
+        priority: i64,
+        portal: PortalId,
+        team: Vec<AgentId>,
+        capacity: u32,
+    }
+    let mut urgent: Vec<Rescue> = obs
         .portals
         .iter()
         .filter(|p| p.owner == crate::common::owners(core.faction()).0)
         .map(|p| {
-            (
-                obs.own_agents
+            let mut rescue = Rescue {
+                priority: obs
+                    .own_agents
                     .iter()
                     .map(|agent| model.value(agent, p.id))
                     .max()
                     .unwrap_or(0),
-                p.id,
-            )
+                portal: p.id,
+                team: Vec::new(),
+                capacity: 1,
+            };
+            let mut ready: Vec<_> = obs
+                .own_agents
+                .iter()
+                .filter(|a| model.available_now(a, p.id))
+                .map(|a| a.id)
+                .collect();
+            ready.sort();
+            for size in 2..=ready.len().min(cap as usize) {
+                let priority = model.coordinated_value(&ready[..size], p.id) / size as i64;
+                if priority > rescue.priority {
+                    rescue.priority = priority;
+                    // All ready defenders have one occupied action round;
+                    // let allocation substitute an equally ready teammate
+                    // when another candidate wins one of the initial members.
+                    rescue.team = ready.clone();
+                    rescue.capacity = size as u32;
+                }
+            }
+            rescue
         })
-        .filter(|(value, _)| *value > 0)
+        .filter(|rescue| rescue.priority > 0)
         .collect();
-    urgent.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    urgent.truncate(cap.max(0) as usize);
+    urgent.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.portal.cmp(&b.portal))
+    });
+    let mut remaining = cap as usize;
+    urgent.retain(|rescue| {
+        let needed = rescue.capacity as usize;
+        if needed > remaining {
+            return false;
+        }
+        remaining -= needed;
+        true
+    });
     if urgent.is_empty() {
         return requests;
     }
     for me in obs.own_agents.iter() {
         let mut mine = Vec::new();
-        for (_, portal) in &urgent {
-            let priority = model.value(me, *portal);
+        for rescue in &urgent {
+            if !rescue.team.is_empty() {
+                if rescue.team.contains(&me.id) {
+                    mine.push(TaskRequest::coordinated(
+                        Task::Recharge {
+                            portal: rescue.portal,
+                        },
+                        rescue.priority,
+                        rescue.capacity,
+                    ));
+                }
+                continue;
+            }
+            let priority = model.value(me, rescue.portal);
             if priority > 0 {
                 mine.push(TaskRequest::one_shot(
-                    Task::Recharge { portal: *portal },
+                    Task::Recharge {
+                        portal: rescue.portal,
+                    },
                     priority,
                 ));
             }

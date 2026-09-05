@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(r2.len(), 7);
         for spec in &r2 {
             assert_eq!(spec.version, crate::r2::R2_VERSION);
-            assert_eq!(spec.version, "r2.3");
+            assert_eq!(spec.version, "r2.4");
             assert_eq!(spec.validate(), Ok(()));
             assert!(
                 spec.policy_id == PolicyId::Idle || !spec.family.is_diagnostic(),
@@ -803,7 +803,7 @@ mod tests {
         }
         // Edited values change the parsed parameter set...
         let tuned = PolicyParameters::BuilderDefender(BuilderDefenderParams {
-            defense_task_cap: 2,
+            defense_task_cap: 3,
             ..BuilderDefenderParams::default()
         });
         assert_ne!(
@@ -902,7 +902,7 @@ mod tests {
         assert!(spec.validate().is_err());
         // Idle carries exactly the R2 era version, never a foreign one.
         let mut spec = PolicyId::Idle.r2_spec();
-        spec.version = "r2.4";
+        spec.version = "foreign-version";
         assert!(spec.validate().is_err());
     }
 

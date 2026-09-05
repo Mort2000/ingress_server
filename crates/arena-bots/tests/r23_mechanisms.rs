@@ -1060,7 +1060,10 @@ fn recharge_must_buy_a_settled_income_round_under_the_observed_burst() {
         Faction::Enl,
         0x2318,
         world.state.config(),
-        Default::default(),
+        BuilderDefenderParams {
+            defense_task_cap: 1,
+            ..Default::default()
+        },
     );
     let commands = policy.submit_round(&world.observation());
     assert!(

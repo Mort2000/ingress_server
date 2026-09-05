@@ -355,35 +355,6 @@ impl ThreatIndex {
     fn under_siege(&self, portal: PortalId) -> bool {
         self.sieges.contains_key(&portal)
     }
-
-    /// Whole rounds of enemy pressure `portal` can still survive at the
-    /// OBSERVED siege rate (`u32::MAX` when nothing hit it recently — no
-    /// active deadline). Estimated collapse: `attacks_needed(hp)` attacks
-    /// at the observed attacks-per-round rate, where the rate's
-    /// denominator is the siege's own elapsed length
-    /// `min(threat_window, rounds since the first current-lifecycle
-    /// attack)` — a siege that started this round is measured at its full
-    /// rate, not diluted by the rounds before it began.
-    fn rounds_until_collapse(
-        &self,
-        obs: &Observation,
-        params: &ValueParams,
-        cfg: &GameConfig,
-        portal: PortalId,
-        hp: u32,
-    ) -> u32 {
-        let Some(&(observed, first)) = self.sieges.get(&portal) else {
-            return u32::MAX;
-        };
-        let elapsed = obs
-            .round
-            .saturating_sub(first)
-            .min(params.threat_window_rounds)
-            .max(1);
-        // attacks_needed * elapsed / observed, in u64 before the u32 clamp.
-        let rounds = attacks_needed(hp, cfg) as u64 * elapsed as u64 / observed as u64;
-        rounds.min(u32::MAX as u64) as u32
-    }
 }
 
 /// Loss-risk discount (rounds): every candidate vertex under recent enemy
@@ -940,13 +911,6 @@ impl<'a> DefenseModel<'a> {
         if !hp_low && !self.threats.under_siege(portal) {
             return 0;
         }
-        // D20 alternates the first faction. Under continuing observed
-        // pressure, one enemy Major Action can destroy this anchor before
-        // even our first submission; do not promise an impossible rescue.
-        let acts_first = (self.obs.round % 2 == 1) == (self.faction == Faction::Enl);
-        if !acts_first && self.threats.under_siege(portal) && target.hp <= self.cfg.attack_damage {
-            return 0;
-        }
         let travel = if agent.keys.get(&portal).copied().unwrap_or(0) > 0 {
             0
         } else {
@@ -955,19 +919,16 @@ impl<'a> DefenseModel<'a> {
                 target.position,
                 self.cfg.portal_operation_range_cm,
                 self.cfg.move_budget_cm,
-                self.cfg.total_rounds.saturating_sub(self.obs.round),
+                self.cfg.total_rounds.saturating_sub(self.obs.round) + 1,
             ) else {
                 return 0;
             };
             moves
         };
-        let arrival = travel.saturating_add(1);
-        let collapse =
-            self.threats
-                .rounds_until_collapse(self.obs, self.params, self.cfg, portal, target.hp);
-        if travel > 0 && arrival >= collapse {
-            return 0;
-        }
+        // Move is auxiliary: reaching operation range permits Recharge in
+        // the same stream, exactly as for Attack. Only earlier moves delay it.
+        let delay = travel.saturating_sub(1);
+        let arrival = delay.saturating_add(1);
         // Credit only the extra lifetime bought by THIS Recharge. Under
         // observed pressure use its settled damage rate; a damaged, quiet
         // anchor uses one attack per round as a conservative reserve value.
@@ -988,11 +949,22 @@ impl<'a> DefenseModel<'a> {
         let damage = (hits as u128 * self.cfg.attack_damage.max(1) as u128)
             .div_ceil(elapsed as u128)
             .max(1);
-        let arrival_hp = (target.hp as u128).saturating_sub(damage * travel as u128);
+        let arrival_hp = (target.hp as u128).saturating_sub(damage * delay as u128);
         if arrival_hp == 0 {
             return 0;
         }
-        let remaining = self.economy.horizon_rounds.saturating_sub(travel) as u128;
+        // Arrival may be the nominal collapse round: a defender acting
+        // first can still rescue it. Evaluate initiative at that round,
+        // after charging the damage received during earlier movement.
+        let acts_first =
+            (self.obs.round.saturating_add(delay) % 2 == 1) == (self.faction == Faction::Enl);
+        if !acts_first
+            && self.threats.under_siege(portal)
+            && arrival_hp <= self.cfg.attack_damage as u128
+        {
+            return 0;
+        }
+        let remaining = self.economy.horizon_rounds.saturating_sub(delay) as u128;
         let unassisted = arrival_hp.saturating_sub(1) / damage;
         let heal = (self.cfg.recharge_amount as u128)
             .min((self.cfg.portal_max_hp as u128).saturating_sub(arrival_hp));
@@ -1007,6 +979,134 @@ impl<'a> DefenseModel<'a> {
             * self.economy.opportunity_per_round as u128
             / 1000;
         sat_i64((preserved as i128 - action_cost as i128 - supply_cost as i128) / arrival as i128)
+    }
+
+    /// Net value of one explicitly coordinated same-round rescue. This is
+    /// one batch of Recharge actions, not a promise of free future upkeep.
+    /// Remote Keys or one Move must make every member available now. Heals
+    /// are interleaved with estimated pressure using faction initiative
+    /// and an attack-first enemy queue (the actual future queue is unknown);
+    /// a dead anchor cannot be revived, and a redundant heal is rejected.
+    pub fn coordinated_value(&self, agents: &[AgentId], portal: PortalId) -> i64 {
+        if self.cfg.attack_damage == 0 || self.cfg.recharge_amount == 0 {
+            return 0;
+        }
+        if agents.len() == 1 {
+            return self
+                .obs
+                .own_agents
+                .iter()
+                .find(|a| a.id == agents[0])
+                .map_or(0, |agent| self.value(agent, portal));
+        }
+        let Some(target) = view(self.obs, portal) else {
+            return 0;
+        };
+        if agents.is_empty()
+            || target.owner != owners(self.faction).0
+            || target.hp >= self.cfg.portal_max_hp
+        {
+            return 0;
+        }
+        let hp_low = target.hp as u64 * 1000
+            < self.cfg.portal_max_hp as u64 * self.params.defend_hp_permille as u64;
+        if !hp_low && !self.threats.under_siege(portal) {
+            return 0;
+        }
+        if agents.iter().any(|id| {
+            self.obs
+                .own_agents
+                .iter()
+                .find(|a| a.id == *id)
+                .is_none_or(|a| !self.available_now(a, portal))
+        }) {
+            return 0;
+        }
+        if agents.iter().copied().collect::<BTreeSet<_>>().len() != agents.len() {
+            return 0;
+        }
+        let area: u128 = self
+            .obs
+            .fields
+            .iter()
+            .filter(|f| f.faction == self.faction && f.id.contains(portal))
+            .map(|f| f.area2 as u128)
+            .sum();
+        if area == 0 {
+            return 0;
+        }
+        let (hits, elapsed) = self
+            .threats
+            .sieges
+            .get(&portal)
+            .map_or((1, 1), |&(hits, first)| {
+                (
+                    hits,
+                    self.obs
+                        .round
+                        .saturating_sub(first)
+                        .min(self.params.threat_window_rounds)
+                        .max(1),
+                )
+            });
+        let damage = (hits as u128 * self.cfg.attack_damage as u128)
+            .div_ceil(elapsed as u128)
+            .max(1);
+        let own_first = (self.obs.round % 2 == 1) == (self.faction == Faction::Enl);
+        if !own_first && self.threats.under_siege(portal) && target.hp <= self.cfg.attack_damage {
+            return 0;
+        }
+        let mut hp = target.hp as u128;
+        let mut pending_damage = damage;
+        let mut healed = 0;
+        let mut own_turn = own_first;
+        while pending_damage > 0 || healed < agents.len() {
+            if own_turn && healed < agents.len() {
+                let next =
+                    (hp + self.cfg.recharge_amount as u128).min(self.cfg.portal_max_hp as u128);
+                if next == hp {
+                    return 0;
+                }
+                hp = next;
+                healed += 1;
+            } else if !own_turn && pending_damage > 0 {
+                let hit = pending_damage.min(self.cfg.attack_damage as u128);
+                hp = hp.saturating_sub(hit);
+                pending_damage -= hit;
+                if hp == 0 {
+                    return 0;
+                }
+            }
+            own_turn = !own_turn;
+        }
+        let horizon = self.economy.horizon_rounds as u128;
+        let unassisted = (target.hp as u128).saturating_sub(1) / damage;
+        let assisted = 1 + hp.saturating_sub(1) / damage;
+        let gained = assisted
+            .min(horizon)
+            .saturating_sub(unassisted.min(horizon));
+        let actions = agents.len() as u128 * self.economy.opportunity_per_round as u128;
+        let supply = actions
+            * self.cfg.recharge_cost_supply as u128
+            * self.params.supply_cost_permille as u128
+            / 1000;
+        sat_i64((area * gained) as i128 - actions as i128 - supply as i128)
+    }
+
+    pub fn available_now(&self, agent: &AgentPrivate, portal: PortalId) -> bool {
+        let Some(target) = view(self.obs, portal) else {
+            return false;
+        };
+        agent.supply >= self.cfg.recharge_cost_supply
+            && (agent.keys.get(&portal).copied().unwrap_or(0) > 0
+                || crate::common::movement_rounds_to_within(
+                    agent.position,
+                    target.position,
+                    self.cfg.portal_operation_range_cm,
+                    self.cfg.move_budget_cm,
+                    1,
+                )
+                .is_some())
     }
 }
 

@@ -902,13 +902,14 @@ impl BuilderCore {
                         && damaged
                         && me.supply >= cfg.recharge_cost_supply
                     {
-                        commands.mv(arena_core::types::Command::Move {
-                            destination: step_toward(
-                                me.position,
-                                target.position,
-                                cfg.move_budget_cm,
-                            ),
-                        });
+                        let destination =
+                            step_toward(me.position, target.position, cfg.move_budget_cm);
+                        if in_range(destination, target.position, cfg.portal_operation_range_cm) {
+                            commands.aux(arena_core::types::Command::Move { destination });
+                            commands.major(arena_core::types::Command::Recharge { portal });
+                        } else {
+                            commands.mv(arena_core::types::Command::Move { destination });
+                        }
                     }
                 }
                 // Hold station at the portal: approach, then wait for the
@@ -1049,57 +1050,88 @@ impl BuilderCore {
             self.compatible_link_grant(obs, agent, task, granted)
         };
         let mut grants = allocate_compatible(&mut board, &agents, &ready, compatible);
-        // Overlay values assume a complete strike. Building may win a
-        // required teammate, so validate the ACTUAL granted cohort and
-        // release an attack that can no longer finish within the horizon.
-        let mut rejected = std::collections::BTreeSet::new();
-        let targets: std::collections::BTreeSet<_> = grants
-            .values()
-            .filter_map(|task| {
-                if let Task::Attack { portal } = task {
-                    Some(*portal)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for portal in targets {
-            let target = common::portal(obs, portal);
-            let economy = self.economy(obs);
-            let team: Vec<_> = obs
-                .own_agents
-                .iter()
-                .filter(|agent| grants.get(&agent.id) == Some(&Task::Attack { portal }))
-                .filter_map(|agent| {
-                    crate::r2::value::AttackArrival::for_agent(
-                        agent,
-                        target.position,
-                        &self.cfg,
-                        economy.horizon_rounds,
-                    )
+        // Construction or another combat task may win a required teammate.
+        // Recheck actual cohorts until removing a failed plan no longer
+        // changes the others. Each iteration removes at least one request.
+        loop {
+            let mut rejected = std::collections::BTreeSet::new();
+            let targets: std::collections::BTreeSet<_> = grants
+                .values()
+                .filter_map(|task| {
+                    if let Task::Attack { portal } = task {
+                        Some(*portal)
+                    } else {
+                        None
+                    }
                 })
                 .collect();
-            let income = crate::r2::value::attack_income_per_round(
-                obs,
-                self.faction,
-                &self.cfg,
-                &self.params.value,
-                portal,
-            );
-            if crate::r2::value::strike_value(
-                &economy,
-                income,
-                crate::r2::value::attacks_needed(target.hp, &self.cfg),
-                &team,
-            )
-            .is_none_or(|value| value <= 0)
-            {
-                rejected.insert(portal);
+            for portal in targets {
+                let target = common::portal(obs, portal);
+                let economy = self.economy(obs);
+                let team: Vec<_> = obs
+                    .own_agents
+                    .iter()
+                    .filter(|agent| grants.get(&agent.id) == Some(&Task::Attack { portal }))
+                    .filter_map(|agent| {
+                        crate::r2::value::AttackArrival::for_agent(
+                            agent,
+                            target.position,
+                            &self.cfg,
+                            economy.horizon_rounds,
+                        )
+                    })
+                    .collect();
+                let income = crate::r2::value::attack_income_per_round(
+                    obs,
+                    self.faction,
+                    &self.cfg,
+                    &self.params.value,
+                    portal,
+                );
+                if crate::r2::value::strike_value(
+                    &economy,
+                    income,
+                    crate::r2::value::attacks_needed(target.hp, &self.cfg),
+                    &team,
+                )
+                .is_none_or(|value| value <= 0)
+                {
+                    rejected.insert(Task::Attack { portal });
+                }
             }
-        }
-        if !rejected.is_empty() {
+            let rescue_targets: std::collections::BTreeSet<_> = grants
+                .values()
+                .filter_map(|task| match task {
+                    Task::Recharge { portal } => Some(*portal),
+                    _ => None,
+                })
+                .collect();
+            if !rescue_targets.is_empty() {
+                let economy = self.economy(obs);
+                let defense = crate::r2::value::DefenseModel::new(
+                    obs,
+                    self.faction,
+                    &self.cfg,
+                    &self.params.value,
+                    &economy,
+                );
+                for portal in rescue_targets {
+                    let team: Vec<_> = grants
+                        .iter()
+                        .filter_map(|(&agent, task)| {
+                            (*task == Task::Recharge { portal }).then_some(agent)
+                        })
+                        .collect();
+                    if defense.coordinated_value(&team, portal) <= 0 {
+                        rejected.insert(Task::Recharge { portal });
+                    }
+                }
+            }
+            if rejected.is_empty() {
+                break;
+            }
             for mine in ready.values_mut() {
-                mine.retain(|request| !matches!(request.task, Task::Attack { portal } if rejected.contains(&portal)));
+                mine.retain(|request| !rejected.contains(&request.task));
             }
             board = TaskBoard::new(obs.round);
             grants = allocate_compatible(&mut board, &agents, &ready, compatible);

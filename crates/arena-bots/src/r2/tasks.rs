@@ -2,8 +2,8 @@
 //! 5.1 and 6.3): the decision layer proposes ranked [`TaskRequest`]s and
 //! this module decides who does what — at most one task per agent per
 //! round, at most one agent per one-shot task per round, with ONE
-//! explicit exception: a coordinated attack whose declared capacity
-//! admits several agents. Nothing here keys on `AgentId`: reinforcement
+//! explicit class of exceptions: coordinated attacks and rescues whose
+//! declared capacity admits several agents. Nothing here keys on `AgentId`: reinforcement
 //! agents enter through exactly the same allocation path (no hardcoded
 //! "first three build" roles), so a role is a grant, not an identity.
 //!
@@ -27,10 +27,10 @@ pub enum Task {
     KeyFarm { portal: PortalId },
     /// Create the link `source -> target` (consumes a Key of `target`).
     Link { source: PortalId, target: PortalId },
-    /// Attack an enemy portal. The ONLY task that may carry coordinated
-    /// capacity > 1 (plan 6.3's explicit exception).
+    /// Attack an enemy portal, optionally as a coordinated strike.
     Attack { portal: PortalId },
-    /// Recharge an own anchor (Major Action, consumes Supply).
+    /// Recharge an own anchor (Major Action, consumes Supply), optionally
+    /// as an explicitly valued and revalidated coordinated rescue.
     Recharge { portal: PortalId },
     /// Hold station at `portal` — walk there and wait (the link-source
     /// pre-positioning task: the stationed agent receives a key by
@@ -85,8 +85,8 @@ impl Task {
 /// One agent's ranked request for a task: `priority` orders requests (the
 /// value model's integer scores slot in directly) and
 /// `assignee_capacity` declares how many agents the task admits — `1` for
-/// every one-shot task, `> 1` ONLY for an explicit coordinated attack
-/// (plan section 6.3).
+/// every one-shot task, `> 1` only for an explicit coordinated attack or
+/// rescue; both require actual-cohort value checks in the builder core.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TaskRequest {
     pub task: Task,
@@ -104,8 +104,7 @@ impl TaskRequest {
         }
     }
 
-    /// A coordinated-attack request: the single sanctioned
-    /// multi-assignee exception, with its declared capacity.
+    /// An explicitly coordinated combat request with its declared capacity.
     pub fn coordinated(task: Task, priority: i64, capacity: u32) -> TaskRequest {
         TaskRequest {
             task,
@@ -143,7 +142,7 @@ impl TaskBoard {
 
     /// Tries to claim `task` for `agent`. The FIRST claim fixes the
     /// task's capacity for the round (`capacity_if_new`: 1 for one-shot
-    /// tasks, the declared headcount for a coordinated attack); later
+    /// tasks, the declared headcount for coordinated combat); later
     /// claims succeed only while capacity remains.
     pub fn claim(&mut self, agent: AgentId, task: Task, capacity_if_new: u32) -> bool {
         let task = task.reservation();

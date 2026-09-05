@@ -10,7 +10,7 @@
 //!   candidate generation), pure over the legal `Observation` and public
 //!   event history only;
 //! - [`tasks`]: the agent-task allocator with per-round target reservation
-//!   and the explicit coordinated-attack exception (plan 6.3);
+//!   and explicitly coordinated strikes/rescues;
 //! - [`sample`]: seeded tie-break and near-equal candidate sampling,
 //!   deterministic given `(observation, seed, faction, version)`;
 //! - [`opponent`]: the limited opponent model from the public event
@@ -29,12 +29,12 @@
 /// Fixed version tag of every B2 R2 policy (plan section 14 row B2; the
 /// policies are registered in `crate::policy` with exactly this version).
 ///
-/// r2.3 (2026-09-05 portfolio review): reuse partial fields, executable
-/// allocation previews and surplus expansion; marginal settled-income
-/// defense, feasible coordinated strikes, ordered same-round Key delivery,
-/// Move + Link/Attack, and adaptive roles based on actual grants. Frozen
-/// M6 policies and earlier experiment records retain their original version.
-pub const R2_VERSION: &str = "r2.3";
+/// r2.4 (2026-09-05 combat review): default adaptive attacks compete from
+/// the opening and while behind; same-round Move + Recharge and explicitly
+/// coordinated rescues share a bounded defender budget. Actual combat
+/// cohorts are revalidated after allocation. Frozen M6 policies, rule
+/// defaults, and earlier experiment records retain their original versions.
+pub const R2_VERSION: &str = "r2.4";
 
 pub mod adaptive_hybrid_r2;
 pub mod blocker_builder;

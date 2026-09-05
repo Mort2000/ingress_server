@@ -1,5 +1,6 @@
-//! Adaptive composition over the shared allocator. Opening favors building
-//! but permits urgent rescue. Later rounds can combine defense and attack;
+//! Adaptive composition over the shared allocator. Default combat candidates
+//! compete from the opening, independently of the score lead. Optional
+//! phase/lead gates remain recorded parameters for controlled contrasts;
 //! the endgame keeps actions that can preserve or deny remaining income.
 //! Role diagnostics describe the actual grants from the same request path.
 
@@ -25,18 +26,20 @@ use crate::r2::opponent::{OpponentModel, OpponentParams};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AdaptiveHybridParams {
     /// Rounds before this share (permille of `total_rounds`) are the
-    /// opening: build preference with urgent defense.
+    /// opening: build preference with urgent defense. Zero by default so
+    /// a profitable response is not hidden behind a fixed opening period.
     pub opening_permille: u32,
     /// Rounds from this share (permille) are the endgame: feasible build, defense and attack.
     pub endgame_permille: u32,
     /// The faction's score share (permille of the pair total) at or above
-    /// which the mid-game adds the disruptor overlay.
+    /// which the mid-game adds the disruptor overlay. Zero by default:
+    /// attack value, arrival and opportunity cost decide even while behind.
     pub attack_lead_share_permille: u32,
-    /// The disruptor overlay's attacker-share ceiling while leading
+    /// The disruptor overlay's attacker-share ceiling
     /// (permille of live agents; r2.0 default leaves attacks-needed
     /// operative).
     pub attack_share_permille: u32,
-    /// The defender overlay's concurrent-recharge cap.
+    /// The defender overlay's total simultaneous-defender budget.
     pub defense_task_cap: u32,
     /// The opponent model's windows.
     pub opponent: OpponentParams,
@@ -47,11 +50,11 @@ pub struct AdaptiveHybridParams {
 impl Default for AdaptiveHybridParams {
     fn default() -> Self {
         AdaptiveHybridParams {
-            opening_permille: 300,
+            opening_permille: 0,
             endgame_permille: 850,
-            attack_lead_share_permille: 550,
+            attack_lead_share_permille: 0,
             attack_share_permille: 1000,
-            defense_task_cap: 1,
+            defense_task_cap: 2,
             opponent: OpponentParams::default(),
             core: CoreParams::default(),
         }

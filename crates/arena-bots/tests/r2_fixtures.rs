@@ -1910,7 +1910,10 @@ fn adaptive_switches_roles_by_phase_score_and_threat() {
             Faction::Enl,
             0x0A0A_0000_0000_0001,
             &cfg,
-            Default::default(),
+            arena_bots::r2::adaptive_hybrid_r2::AdaptiveHybridParams {
+                opening_permille: 300,
+                ..Default::default()
+            },
         );
         assert_eq!(policy.role_mix(&obs), expected);
         let commands = round_of(&mut policy, &obs);

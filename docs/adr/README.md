@@ -1,5 +1,7 @@
 # 架构决策记录
 
+ADR 须先完成审计，并获得用户明确同意后，才能标记为 `accepted`；此前保持草案状态。单点 Bot 策略选择、参数调整及其实验结论记录在设计或平衡分析报告中，不作为 ADR 落库。
+
 | ADR | 状态 | 决定 |
 |---|---|---|
 | [0001](./0001-rust-mvp-language-neutral-protocol.md) | accepted | 用 Rust 实现 MVP，但保持竞技协议语言无关 |

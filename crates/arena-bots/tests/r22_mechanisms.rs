@@ -55,7 +55,8 @@ fn siege_observation(near_agent: bool) -> Observation {
 #[test]
 fn defense_deadlines_measure_only_settled_rounds() {
     let cfg = GameConfig::default();
-    let obs = siege_observation(false);
+    let mut obs = siege_observation(false);
+    obs.own_agents[0].position = Coord::new(65_000, 65_000);
     let core = BuilderCore::new(
         Faction::Enl,
         0x2202,
@@ -67,7 +68,7 @@ fn defense_deadlines_measure_only_settled_rounds() {
     let grants = allocate(&mut TaskBoard::new(obs.round), &[AgentId(1)], &requests);
     assert!(
         grants.is_empty(),
-        "one attack in the one settled round implies four rounds to collapse; three Moves plus Recharge cannot beat it: {grants:?}"
+        "one attack in the one settled round implies four rounds to collapse; five Moves cannot beat it even with same-round Recharge: {grants:?}"
     );
 }
 
@@ -317,11 +318,14 @@ impl Fixture {
 #[test]
 fn remote_key_holder_recharges_without_walking_and_preserves_the_key() {
     let mut fixture = Fixture::built_anchor();
-    let far = fixture.state.portal(PortalId(2)).unwrap().position;
+    // Non-key holders must need more than one Move: Move + Recharge now
+    // legitimately ties a remote Recharge when the walk fits this round.
+    let far = Coord::new(40_000, 40_000);
+    for id in 0..3 {
+        fixture.walk(id, far);
+    }
     fixture.step(
-        (0..3)
-            .map(|id| AgentSubmission::new(AgentId(id), vec![Command::Move { destination: far }]))
-            .collect(),
+        vec![],
         vec![AgentSubmission::new(AgentId(3), vec![Command::Attack])],
     );
     let obs = Observation::for_faction(&fixture.state, Faction::Enl);
@@ -439,35 +443,44 @@ fn defense_deadline_includes_integer_movement_at_the_operation_boundary() {
             .unwrap()
             .agents
             .iter()
-            .all(|agent| !matches!(
+            .any(|agent| matches!(
                 agent.grant,
                 Some(Task::Recharge {
                     portal: PortalId(0)
                 })
             )),
-        "two integer Moves plus Recharge cannot beat collapse in three rounds: {commands:?}"
+        "two integer Moves with Recharge on arrival beat collapse in three rounds: {commands:?}"
     );
-    // Verify the boundary against the real movement resolver, not just the ETA.
-    for (destination, within) in [
-        (Coord::new(7_536, 7_536), false),
-        (Coord::new(4_000, 4_000), true),
-    ] {
-        fixture.step(
-            vec![AgentSubmission::new(
-                AgentId(1),
-                vec![Command::Move { destination }],
-            )],
-            vec![],
-        );
-        assert_eq!(
-            arena_bots::common::in_range(
-                fixture.state.agent(AgentId(1)).unwrap().position,
-                obs.portals[0].position,
-                fixture.state.config().portal_operation_range_cm
-            ),
-            within
-        );
-    }
+    assert_eq!(
+        commands[0].commands,
+        vec![Command::Move {
+            destination: Coord::new(7_536, 7_536)
+        }]
+    );
+    let attack = || vec![AgentSubmission::new(AgentId(3), vec![Command::Attack])];
+    fixture.step(commands, attack());
+    assert!(!arena_bots::common::in_range(
+        fixture.state.agent(AgentId(1)).unwrap().position,
+        obs.portals[0].position,
+        fixture.state.config().portal_operation_range_cm
+    ));
+    let mut next = Observation::for_faction(&fixture.state, Faction::Enl);
+    next.own_agents.retain(|agent| agent.id == AgentId(1));
+    let commands = policy.submit_round(&next);
+    assert_eq!(
+        commands[0].commands,
+        vec![
+            Command::Move {
+                destination: Coord::new(4_000, 4_000)
+            },
+            Command::Recharge {
+                portal: PortalId(0)
+            },
+        ]
+    );
+    fixture.step(commands, attack());
+    assert_eq!(fixture.state.portal(PortalId(0)).unwrap().hp, 35);
+    assert_eq!(fixture.state.link_graph().fields().len(), 1);
 }
 
 #[test]
