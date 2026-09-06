@@ -134,10 +134,7 @@ pub fn tournament_json_text(cfg: &TournamentConfig, items: &[TournamentItem]) ->
                         env.join(", ")
                     )
                 }
-                crate::tournament::entrant::EntrantKind::InProcess { bot } => format!(
-                    "{{ \"mode\": \"in-process\", \"bot\": \"{}\" }}",
-                    bot.tag()
-                ),
+
             };
             let provenance = &entrant.provenance;
             let optional = |value: &Option<String>| match value {
@@ -318,13 +315,7 @@ pub fn parse_tournament_json(text: &str) -> Result<TournamentEcho, String> {
             }
             crate::tournament::entrant::EntrantKind::External { binary, env }
         } else {
-            let bot = kind_value
-                .get("bot")
-                .and_then(Json::as_str)
-                .ok_or("kind.bot")?;
-            crate::tournament::entrant::EntrantKind::InProcess {
-                bot: arena_bots::bot::BotKind::from_tag(bot).ok_or("unknown bot tag")?,
-            }
+            return Err("only external client entrants are supported".into());
         };
         let provenance_value = entry.get("provenance").ok_or("entrants.provenance")?;
         let optional = |key: &str| -> Result<Option<String>, String> {

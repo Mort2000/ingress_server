@@ -181,7 +181,13 @@ mod tests {
     /// several portals), and cooldown 1 (same-pair hacks on consecutive
     /// rounds exercise the D31 lifetime ordinal).
     fn canon_cfg() -> GameConfig {
-        let mut cfg = GameConfig::default();
+        // Frozen vectors encode the pre-Alpha rules. Defaults may change;
+        // the old encoding and hashes must remain readable without a format bump.
+        let mut cfg = GameConfig {
+            recharge_amount: 15,
+            max_link_distance_cm: 200_000,
+            ..GameConfig::default()
+        };
         cfg.map_width_cm = 40_000;
         cfg.map_height_cm = 40_000;
         cfg.portal_count = 6;

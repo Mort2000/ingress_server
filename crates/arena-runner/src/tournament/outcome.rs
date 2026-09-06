@@ -212,29 +212,3 @@ pub fn from_server(
         },
     }
 }
-
-/// The in-process path's `Normal` mapping (M6 engine + M5 recorder).
-pub fn normal_inprocess(
-    result: MatchResult,
-    score_enl: Score2,
-    score_res: Score2,
-    rounds_completed: u32,
-    final_state_hash: [u8; 32],
-) -> TournamentOutcome {
-    TournamentOutcome::Normal {
-        result,
-        score_enl,
-        score_res,
-        rounds_completed,
-        final_state_hash,
-    }
-}
-
-/// The in-process crash mapping (a panicking bot/harness is a RUNNER-side
-/// fault in tournament mode — never a score result).
-pub fn inprocess_crash(reason: &str) -> TournamentOutcome {
-    TournamentOutcome::Unscored {
-        stage: Stage::RunnerFault,
-        reason: reason.to_string(),
-    }
-}

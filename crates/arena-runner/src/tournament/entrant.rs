@@ -1,5 +1,5 @@
-//! Entrant registry and provenance-as-data (D79, P5): an entrant is either
-//! an external client binary or an in-process bot. Provenance is PURE
+//! Entrant registry and provenance-as-data (D79, P5): an entrant is
+//! an external client binary. Provenance is PURE
 //! DATA — the runner computes only the binary hash itself (blake3 over
 //! the file bytes under the frozen m9 domain); the tree/lock/toolchain
 //! hashes and the manifest id are RECORDED LITERALS from `tools/provenance`
@@ -8,8 +8,6 @@
 
 use std::io;
 use std::path::Path;
-
-use arena_bots::bot::{BOT_VERSION, BotKind};
 
 use crate::tournament::BINARY_HASH_DOMAIN;
 
@@ -35,16 +33,12 @@ pub enum EntrantKind {
         binary: std::path::PathBuf,
         env: Vec<(String, String)>,
     },
-    /// The M6 engine in-process (`BotKind` + `BotRng`), recorded through
-    /// the M5 recorder.
-    InProcess { bot: BotKind },
 }
 
 impl EntrantKind {
     pub fn tag(&self) -> &'static str {
         match self {
             EntrantKind::External { .. } => "external",
-            EntrantKind::InProcess { .. } => "in-process",
         }
     }
 }
@@ -67,20 +61,11 @@ pub struct EntrantProvenance {
     pub toolchain_hash: Option<String>,
     /// Build-manifest location, e.g. `runs/builds/<id>` (recorded literal).
     pub manifest_id: Option<String>,
-    /// Entrant self-reported version (in-process entrants record
-    /// `arena_bots::BOT_VERSION` + `"in-process"`).
+    /// Entrant self-reported strategy version.
     pub bot_version: Option<String>,
 }
 
 impl EntrantProvenance {
-    /// Provenance of an in-process entrant.
-    pub fn in_process(bot_version: &str) -> Self {
-        EntrantProvenance {
-            bot_version: Some(bot_version.to_string()),
-            ..Default::default()
-        }
-    }
-
     /// Recorded literals from a `tools/provenance` manifest.
     pub fn recorded(
         tree_hash: Option<String>,
@@ -98,28 +83,22 @@ impl EntrantProvenance {
     }
 
     /// Compact per-match provenance id for `index.tsv`: the binary hash
-    /// (first 16 hex) for external entrants, `in-process:<bot>` otherwise.
+    /// (first 16 hex) for external entrants.
     pub fn id_tag(&self, kind: &EntrantKind) -> String {
         match kind {
             EntrantKind::External { .. } => match &self.binary_blake3 {
                 Some(hash) => format!("blake3:{}", &hash[..hash.len().min(16)]),
                 None => "blake3:unhashed".to_string(),
             },
-            EntrantKind::InProcess { bot } => {
-                format!("in-process:{}/{}", bot.tag(), BOT_VERSION)
-            }
         }
     }
 }
 
 impl Entrant {
-    /// Fills `provenance.binary_blake3` for external entrants (no-op for
-    /// in-process entrants).
+    /// Computes `provenance.binary_blake3` for the executable.
     pub fn compute_binary_hash(&mut self) -> io::Result<()> {
-        if let EntrantKind::External { binary, .. } = &self.kind {
-            let hash = compute_binary_hash(binary)?;
-            self.provenance.binary_blake3 = Some(hash);
-        }
+        let EntrantKind::External { binary, .. } = &self.kind;
+        self.provenance.binary_blake3 = Some(compute_binary_hash(binary)?);
         Ok(())
     }
 }
@@ -146,31 +125,14 @@ pub fn validate_entrants(entrants: &[Entrant]) -> Result<(), String> {
         }
     }
     for entrant in entrants {
-        if let EntrantKind::External { binary, .. } = &entrant.kind {
-            if !binary.is_file() {
-                return Err(format!(
-                    "entrant {:?} binary missing: {}",
-                    entrant.name,
-                    binary.display()
-                ));
-            }
+        let EntrantKind::External { binary, .. } = &entrant.kind;
+        if !binary.is_file() {
+            return Err(format!(
+                "entrant {:?} binary missing: {}",
+                entrant.name,
+                binary.display()
+            ));
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn in_process_provenance_carries_bot_version() {
-        let provenance = EntrantProvenance::in_process(BOT_VERSION);
-        assert_eq!(provenance.bot_version.as_deref(), Some("m6.0"));
-        assert!(provenance.tree_hash.is_none());
-        let id = provenance.id_tag(&EntrantKind::InProcess {
-            bot: BotKind::Hybrid,
-        });
-        assert_eq!(id, "in-process:hybrid/m6.0");
-    }
 }

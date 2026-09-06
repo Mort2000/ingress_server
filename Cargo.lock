@@ -9,14 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "arena-bots"
-version = "0.1.0"
-dependencies = [
- "arena-core",
- "blake3",
-]
-
-[[package]]
 name = "arena-client-sdk"
 version = "0.1.0"
 dependencies = [
@@ -54,7 +46,6 @@ dependencies = [
 name = "arena-runner"
 version = "0.1.0"
 dependencies = [
- "arena-bots",
  "arena-core",
  "arena-replay",
  "arena-server",
@@ -116,17 +107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "combat-validate"
-version = "0.1.0"
-dependencies = [
- "arena-bots",
- "arena-core",
- "arena-replay",
- "arena-runner",
- "blake3",
-]
-
-[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -171,28 +151,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "hybrid-client"
-version = "0.1.0"
-dependencies = [
- "arena-bots",
- "arena-client-sdk",
- "arena-core",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "nearest-client"
-version = "0.1.0"
-dependencies = [
- "arena-bots",
- "arena-client-sdk",
- "arena-core",
-]
 
 [[package]]
 name = "planus"
@@ -221,21 +183,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "r22-micro"
-version = "0.1.0"
-dependencies = [
- "arena-bots",
- "arena-core",
- "arena-replay",
- "arena-runner",
- "blake3",
-]
-
-[[package]]
 name = "replay-export"
 version = "0.1.0"
 dependencies = [
- "arena-bots",
  "arena-core",
  "arena-replay",
 ]

@@ -109,7 +109,7 @@ impl Default for GameConfig {
 
             portal_max_hp: 100,
             attack_damage: 20,
-            recharge_amount: 15,
+            recharge_amount: 20,
             recharge_cost_supply: 1,
 
             hack_supply_yield: 1,
@@ -118,7 +118,7 @@ impl Default for GameConfig {
             hack_cooldown_rounds: 3,
             hack_limit_per_epoch: 5,
 
-            max_link_distance_cm: 200_000,
+            max_link_distance_cm: 150_000,
 
             max_commands_per_agent_round: 10,
             max_frame_payload_bytes: 65_536,
@@ -257,14 +257,14 @@ mod tests {
         assert_eq!(cfg.max_supply, 100);
         assert_eq!(cfg.portal_max_hp, 100);
         assert_eq!(cfg.attack_damage, 20);
-        assert_eq!(cfg.recharge_amount, 15);
+        assert_eq!(cfg.recharge_amount, 20);
         assert_eq!(cfg.recharge_cost_supply, 1);
         assert_eq!(cfg.hack_supply_yield, 1);
         assert_eq!(cfg.hack_key_yield_min, 1);
         assert_eq!(cfg.hack_key_yield_max, 3);
         assert_eq!(cfg.hack_cooldown_rounds, 3);
         assert_eq!(cfg.hack_limit_per_epoch, 5);
-        assert_eq!(cfg.max_link_distance_cm, 200_000);
+        assert_eq!(cfg.max_link_distance_cm, 150_000);
         assert_eq!(cfg.max_commands_per_agent_round, 10);
         assert_eq!(cfg.max_frame_payload_bytes, 65_536);
     }

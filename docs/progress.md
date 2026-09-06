@@ -1,5 +1,7 @@
 # Implementation Progress
 
+> 2026-09-06 Alpha 更新：默认 20 HP 充电、1500 m 链距；参赛策略迁到同级独立 bot 仓，server 保留平台与协议测试夹具。当前布局见 [Alpha 迁移记录](design/alpha-reference.md)。以下 M0–M10 与 D 编号内容是历史记录，其中旧策略路径和冻结命令不再是当前入口。
+
 Handoff doc between milestone implementation rounds. The orchestrator updates it
 after each milestone; every agent should read it before starting work.
 

@@ -7,13 +7,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use arena_bots::bot::{BotKind, BotStrategy, make_bot};
 use arena_core::config::GameConfig;
-use arena_core::harness::MatchHarness;
-use arena_core::map::{MapDefinition, generate_map};
+use arena_core::harness::{AgentSubmission, MatchHarness, ScriptedStrategy};
+use arena_core::map::MapDefinition;
 use arena_core::spawn::validate_initial_spawn_set;
 use arena_core::state::GameState;
-use arena_core::types::{Faction, Score2};
+use arena_core::types::{Coord, Faction, Owner, Portal, PortalId, Score2};
 use arena_replay::canon;
 use arena_replay::format::EndOfMatch;
 use arena_replay::recorder::ReplayWriter;
@@ -27,62 +26,132 @@ use replay_export::views::{View, event_visible, visible_agents, visible_factions
 // ---------------------------------------------------------------------------
 
 const GAME_SEED: u64 = 0x006d_3a00_0000_0033;
-const BOT_SEED: u64 = 0x5eed_006d_3a00_0001;
-const MAP_SEED: u64 = 0x006d_3a00_0000_0034;
-
+// Six known portals and a fixed three-round construction script keep the
+// exporter fixture independent of evolving participant strategies.
 fn fixture_config() -> GameConfig {
-    let mut cfg = GameConfig::default();
-    // 150 rounds with one reinforcement at round 75 (M-final review fix:
-    // the old 100-round fixture with the default interval-100 never once
-    // fired a reinforcement — the boundary `round % 100 == 0 && round < 100`
-    // is empty — so the export path was never exercised over reinforcement
-    // data). Interval 75, not the suggested 50: on this fixture map the
-    // GreedyField builder completes its first triangle around round 87, and
-    // an earlier reinforcement (interval 50 measured) adds a fourth agent
-    // to the FIXED tour plan whose duplicated stations break the build for
-    // the rest of the match — the fixture's own "must score" pin fails.
-    // One reinforcement at 75 keeps the fixture non-vacuous while still
-    // exercising both factions' newcomer rows in the embedded data.
-    cfg.total_rounds = 150;
-    cfg.reinforcement_interval_rounds = 75;
-    cfg.map_width_cm = 300_000;
-    cfg.map_height_cm = 300_000;
-    cfg.portal_count = 40;
-    cfg.portal_min_distance_cm = 8_000;
-    cfg.initial_agents_per_faction = 3;
-    cfg
+    GameConfig {
+        total_rounds: 150,
+        reinforcement_interval_rounds: 75,
+        // Every scripted destination is reachable, including reinforcement spawns.
+        move_budget_cm: 60_000,
+        map_width_cm: 40_000,
+        map_height_cm: 40_000,
+        portal_count: 6,
+        portal_cluster_count: 6,
+        portal_min_distance_cm: 4_000,
+        ..GameConfig::default()
+    }
 }
 
 fn fixture_map() -> MapDefinition {
-    let cfg = fixture_config();
-    for seed in MAP_SEED..MAP_SEED + 64 {
-        if let Ok(map) = generate_map(seed, &cfg) {
-            return map;
-        }
-    }
-    panic!("no feasible fixture map in 64 seeds");
+    let positions = [
+        (4_000, 4_000),
+        (16_000, 4_000),
+        (4_000, 16_000),
+        (36_000, 4_000),
+        (36_000, 16_000),
+        (24_000, 16_000),
+    ];
+    MapDefinition::new(
+        positions
+            .into_iter()
+            .enumerate()
+            .map(|(id, (x, y))| Portal {
+                id: PortalId(id as u32),
+                position: Coord::new(x, y),
+                owner: Owner::Neutral,
+                hp: 0,
+            })
+            .collect(),
+    )
 }
 
-/// Plays `rounds` rounds of GreedyField vs Hybrid and returns the finished
+fn fixture_spawns(faction: Faction) -> arena_core::spawn::InitialSpawns {
+    let cfg = fixture_config();
+    let (enl, res) = GameState::initial_roster(&cfg);
+    let roster = if faction == Faction::Enl { enl } else { res };
+    let offset = if faction == Faction::Enl { 0 } else { 3 };
+    let map = fixture_map();
+    let entries: Vec<_> = roster
+        .iter()
+        .enumerate()
+        .map(|(i, &agent)| {
+            (
+                agent,
+                map.portal(PortalId(offset + i as u32)).unwrap().position,
+            )
+        })
+        .collect();
+    validate_initial_spawn_set(&roster, &entries, &cfg).unwrap()
+}
+
+fn fixture_script(faction: Faction) -> ScriptedStrategy {
+    use arena_core::types::{AgentId, Command};
+    let (enl, res) = GameState::initial_roster(&fixture_config());
+    let roster = if faction == Faction::Enl { enl } else { res };
+    let offset = if faction == Faction::Enl { 0 } else { 3 };
+    let map = fixture_map();
+    let mut rounds = vec![vec![]; 150];
+    for (i, agent) in roster.into_iter().enumerate() {
+        let target = PortalId(offset + i as u32);
+        let source = PortalId(offset + ((i + 2) % 3) as u32);
+        rounds[0].push(AgentSubmission::new(
+            agent,
+            vec![Command::Capture { portal: target }],
+        ));
+        rounds[1].push(AgentSubmission::new(
+            agent,
+            vec![Command::Hack { portal: target }],
+        ));
+        rounds[2].push(AgentSubmission::new(
+            agent,
+            vec![
+                Command::Move {
+                    destination: map.portal(source).unwrap().position,
+                },
+                Command::Link {
+                    source_portal: source,
+                    target_portal: target,
+                },
+            ],
+        ));
+    }
+    // Keep telemetry non-vacuous with deterministic patrols and inventory changes.
+    // Both factions stay on their disjoint triangles, including reinforcements,
+    // so a privacy test never mistakes identical friendly/enemy row values for a leak.
+    for round in 4..=150 {
+        for i in 0..3 {
+            let agent = AgentId(offset + i);
+            let portal = PortalId(offset + (i + round) % 3);
+            let mut commands = vec![Command::Move {
+                destination: map.portal(portal).unwrap().position,
+            }];
+            if round == 4 || round == 101 {
+                commands.push(Command::Hack { portal });
+            }
+            rounds[round as usize - 1].push(AgentSubmission::new(agent, commands));
+        }
+        for epoch in 1..=round / 75 {
+            let agent = AgentId(6 + (epoch - 1) * 2 + if faction == Faction::Enl { 0 } else { 1 });
+            let portal = PortalId(offset + round % 3);
+            rounds[round as usize - 1].push(AgentSubmission::new(
+                agent,
+                vec![Command::Move {
+                    destination: map.portal(portal).unwrap().position,
+                }],
+            ));
+        }
+    }
+    ScriptedStrategy::new(rounds)
+}
+
+/// Plays `rounds` rounds of the fixed construction script and returns the finished
 /// NORMAL IARP plus the per-round deltas.
 fn play_rounds(rounds: u32) -> (Vec<u8>, Vec<(Score2, Score2)>) {
     let cfg = fixture_config();
     let map = fixture_map();
-    let mut enl_bot = make_bot(BotKind::GreedyField, Faction::Enl, BOT_SEED, &cfg, &map);
-    let mut res_bot = make_bot(BotKind::Hybrid, Faction::Res, BOT_SEED, &cfg, &map);
-    let (enl_roster, res_roster) = GameState::initial_roster(&cfg);
-    let enl_spawns = validate_initial_spawn_set(
-        &enl_roster,
-        &enl_bot.choose_spawns(&cfg, &map, &enl_roster),
-        &cfg,
-    )
-    .expect("ENL spawns");
-    let res_spawns = validate_initial_spawn_set(
-        &res_roster,
-        &res_bot.choose_spawns(&cfg, &map, &res_roster),
-        &cfg,
-    )
-    .expect("RES spawns");
+    let enl_spawns = fixture_spawns(Faction::Enl);
+    let res_spawns = fixture_spawns(Faction::Res);
     let mut writer = ReplayWriter::new(GAME_SEED, &cfg, &map, &enl_spawns, &res_spawns);
     let mut harness = MatchHarness::new(
         GAME_SEED,
@@ -90,8 +159,8 @@ fn play_rounds(rounds: u32) -> (Vec<u8>, Vec<(Score2, Score2)>) {
         &map,
         &enl_spawns,
         &res_spawns,
-        Box::new(BotStrategy(enl_bot)),
-        Box::new(BotStrategy(res_bot)),
+        Box::new(fixture_script(Faction::Enl)),
+        Box::new(fixture_script(Faction::Res)),
     )
     .expect("harness");
     let mut deltas = Vec::new();
@@ -130,21 +199,8 @@ fn abnormal_iarp() -> &'static [u8] {
     BYTES.get_or_init(|| {
         let cfg = fixture_config();
         let map = fixture_map();
-        let mut enl_bot = make_bot(BotKind::GreedyField, Faction::Enl, BOT_SEED, &cfg, &map);
-        let mut res_bot = make_bot(BotKind::Hybrid, Faction::Res, BOT_SEED, &cfg, &map);
-        let (enl_roster, res_roster) = GameState::initial_roster(&cfg);
-        let enl_spawns = validate_initial_spawn_set(
-            &enl_roster,
-            &enl_bot.choose_spawns(&cfg, &map, &enl_roster),
-            &cfg,
-        )
-        .expect("ENL spawns");
-        let res_spawns = validate_initial_spawn_set(
-            &res_roster,
-            &res_bot.choose_spawns(&cfg, &map, &res_roster),
-            &cfg,
-        )
-        .expect("RES spawns");
+        let enl_spawns = fixture_spawns(Faction::Enl);
+        let res_spawns = fixture_spawns(Faction::Res);
         let mut writer = ReplayWriter::new(GAME_SEED, &cfg, &map, &enl_spawns, &res_spawns);
         let mut harness = MatchHarness::new(
             GAME_SEED,
@@ -152,8 +208,8 @@ fn abnormal_iarp() -> &'static [u8] {
             &map,
             &enl_spawns,
             &res_spawns,
-            Box::new(BotStrategy(enl_bot)),
-            Box::new(BotStrategy(res_bot)),
+            Box::new(fixture_script(Faction::Enl)),
+            Box::new(fixture_script(Faction::Res)),
         )
         .expect("harness");
         for _ in 0..37 {

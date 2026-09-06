@@ -360,7 +360,7 @@ fn dotted_and_triple_target_dep_sections_fail_r2() {
 /// `cheat = { path = "../../ext/cheat" }` linked unaudited code into
 /// the audited build while the participant crate itself stayed clean
 /// (verified live). A path dep must resolve to a workspace member
-/// crate (crates/*, bots/*, tools/* under the audit root).
+/// crate (crates/*, tools/* under the audit root).
 #[test]
 fn path_dep_escaping_the_workspace_fails_r2() {
     for (label, path) in [
@@ -500,13 +500,24 @@ fn closure_native_report_flags_unknown_and_sanctions_the_frozen_pair() {
 
 // ------------------------------------------- real participants + boundary
 
-/// The CI-style gate: the audit PASSES on the real `bots/*` crates.
+/// Participant checkout is outside the server workspace, with official SDK paths.
+fn external_participant(tag: &str) -> PathBuf {
+    let dir = temp_fixture(tag);
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src/lib.rs"), "#![forbid(unsafe_code)]\n").unwrap();
+    fs::write(dir.join("Cargo.toml"), format!(
+        "[package]\nname = \"reference-client\"\nversion = \"0.1.0\"\n[dependencies]\narena-client-sdk = {{ path = \"{}\" }}\n",
+        workspace_root().join("crates/arena-client-sdk").display()
+    )).unwrap();
+    fs::copy(workspace_root().join("Cargo.lock"), dir.join("Cargo.lock")).unwrap();
+    dir
+}
+
 #[test]
-fn audit_passes_on_real_participants() {
+fn audit_passes_on_external_participant_with_official_sdk() {
     let root = workspace_root();
-    let participants = audit::participant_dirs(&root);
-    assert!(participants.len() >= 3, "bots exist");
-    let report = run(&root, &participants, &audit::operator_dirs(&root));
+    let participant = external_participant("external-sdk");
+    let report = run(&root, &[participant], &audit::operator_dirs(&root));
     assert!(report.pass(), "{}", report.render());
 }
 
@@ -520,7 +531,7 @@ fn frozen_allowlist_matches_the_lockfile_closure() {
 /// The SDK exemption boundary, pinned from both sides: the operator
 /// SDK/server crates DO carry the sanctioned `extern "C"` tokens (they
 /// would fail if audited as participants), and they are excluded from
-/// the participant set by `participant_dirs` (bots/* only).
+/// the explicit participant set.
 #[test]
 fn operator_crates_are_the_documented_exemption() {
     let root = workspace_root();
@@ -541,10 +552,6 @@ fn operator_crates_are_the_documented_exemption() {
         "the SDK's sanctioned shm.rs trips R5 when audited as a participant: {}",
         as_participant.render()
     );
-    // And every real participant is under bots/.
-    for p in audit::participant_dirs(&root) {
-        assert!(p.starts_with(root.join("bots")), "{}", p.display());
-    }
 }
 
 /// Real closure facts as they exist today (D94: no vendored closure —
@@ -557,8 +564,7 @@ fn real_closure_has_no_unknown_native_capability() {
     let root = workspace_root();
     audit::allowlist_matches_lock(&root)
         .expect("frozen allowlist tracks the Cargo.lock external set");
-    let participants = audit::participant_dirs(&root);
-    let report = run(&root, &participants, &audit::operator_dirs(&root));
+    let report = run(&root, &[], &audit::operator_dirs(&root));
     for native in &report.natives {
         if native.kind == "build.rs" {
             assert!(
@@ -593,6 +599,8 @@ fn audit_bin_exit_codes_and_output() {
     let ok = Command::new(bin)
         .arg("--root")
         .arg(workspace_root())
+        .arg("--participant")
+        .arg(external_participant("bin-pass"))
         .output()
         .expect("run audit bin");
     assert!(
@@ -619,9 +627,16 @@ fn audit_bin_exit_codes_and_output() {
     )
     .unwrap();
     fs::copy(workspace_root().join("Cargo.lock"), tmp.join("Cargo.lock")).unwrap();
+    fs::copy(
+        workspace_root().join("Cargo.lock"),
+        tmp.join("bots/unsafe-block/Cargo.lock"),
+    )
+    .unwrap();
     let bad = Command::new(bin)
         .arg("--root")
         .arg(&tmp)
+        .arg("--participant")
+        .arg(tmp.join("bots/unsafe-block"))
         .output()
         .expect("run");
     assert_eq!(bad.status.code(), Some(1));
@@ -645,4 +660,48 @@ fn allowlist_shape() {
     assert!(ALLOWED_EXTERNAL.contains(&"blake3"));
     assert!(ALLOWED_EXTERNAL.contains(&"planus"));
     assert!(!ALLOWED_EXTERNAL.contains(&"serde"));
+}
+
+#[test]
+fn independent_lock_allows_subset_and_rejects_unknown_or_git_source() {
+    let root = temp_fixture("participant-lock");
+    for (name, source, allowed) in [
+        (
+            "blake3",
+            "registry+https://github.com/rust-lang/crates.io-index",
+            true,
+        ),
+        (
+            "evil",
+            "registry+https://github.com/rust-lang/crates.io-index",
+            false,
+        ),
+        ("blake3", "git+https://example.org/blake3", false),
+    ] {
+        fs::write(root.join("Cargo.lock"), format!(
+            "version = 4\n[[package]]\nname = \"{name}\"\nversion = \"1.0.0\"\nsource = \"{source}\"\n"
+        )).unwrap();
+        assert_eq!(audit::participant_lock_is_allowed(&root).is_ok(), allowed);
+    }
+    fs::remove_file(root.join("Cargo.lock")).unwrap();
+    assert!(audit::participant_lock_is_allowed(&root).is_err());
+}
+
+#[test]
+fn independent_participant_cannot_override_cargo_sources() {
+    for name in ["config", "config.toml"] {
+        let participant = external_participant(&format!("source-override-{name}"));
+        fs::create_dir_all(participant.join(".cargo")).unwrap();
+        fs::write(
+            participant.join(".cargo").join(name),
+            "paths = [\"/outside/replacement-blake3\"]\n",
+        )
+        .unwrap();
+        let report = run(&workspace_root(), &[participant], &[]);
+        assert!(
+            report.failing_rules().contains(&"R2"),
+            "{}",
+            report.render()
+        );
+    }
 }

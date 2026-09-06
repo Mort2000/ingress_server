@@ -8,21 +8,17 @@ use std::time::{Duration, Instant};
 use arena_replay::format::{EndOfMatch, decode as decode_replay};
 
 fn target_bin(name: &str) -> PathBuf {
-    if let Ok(path) = std::env::var(format!("CARGO_BIN_EXE_{name}")) {
-        return PathBuf::from(path);
-    }
-    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!("binary {name} not built (run cargo build --workspace)");
+    // Use the same Cargo target directory/profile as this test binary.
+    // Looking in debug first can silently execute a stale fixture in release tests.
+    let executable = std::env::current_exe().expect("test executable");
+    let profile = executable.parent().unwrap().parent().unwrap();
+    let candidate = profile.join(name);
+    assert!(
+        candidate.is_file(),
+        "{} not built; run cargo build --workspace with this profile",
+        candidate.display()
+    );
+    candidate
 }
 
 fn temp(tag: &str) -> PathBuf {
@@ -172,21 +168,7 @@ fn probe_giant_name_frame_is_processed() {
 // ---------------------------------------------------------------------------
 
 fn sandbox_runner_bin() -> PathBuf {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_sandbox-runner") {
-        return PathBuf::from(path);
-    }
-    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join("sandbox-runner");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!("sandbox-runner not built (run cargo build --workspace)");
+    target_bin("sandbox-runner")
 }
 
 /// P4-GATE / A-RUNTIME: a client killed by the sandbox's resource

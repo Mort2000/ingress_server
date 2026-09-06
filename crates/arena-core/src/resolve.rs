@@ -2437,10 +2437,10 @@ mod tests {
             CommandOutcome::Ok(CommandEffect::Recharged {
                 portal: PortalId(0),
                 hp_before: 40,
-                hp_after: 55
+                hp_after: 60
             })
         );
-        assert_eq!(state.portal(PortalId(0)).map(|p| p.hp), Some(55));
+        assert_eq!(state.portal(PortalId(0)).map(|p| p.hp), Some(60));
         assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(19));
         assert!(
             state.events().is_empty(),
@@ -2480,7 +2480,7 @@ mod tests {
         );
         assert!(matches!(
             report.execution_order[0].outcomes[0],
-            CommandOutcome::Ok(CommandEffect::Recharged { hp_after: 55, .. })
+            CommandOutcome::Ok(CommandEffect::Recharged { hp_after: 60, .. })
         ));
         // Remote recharge requires holding a key but never consumes it.
         assert_eq!(
@@ -2666,7 +2666,7 @@ mod tests {
         );
         assert!(matches!(
             report.execution_order[0].outcomes[0],
-            CommandOutcome::Ok(CommandEffect::Recharged { hp_after: 55, .. })
+            CommandOutcome::Ok(CommandEffect::Recharged { hp_after: 60, .. })
         ));
         assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(0));
     }

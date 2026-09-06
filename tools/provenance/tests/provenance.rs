@@ -292,9 +292,9 @@ fn binary_collection_hashes_products() {
     let target = fixture("bins");
     let dir = target.join("release");
     write(&dir.join("arena-server"), b"server-bytes");
-    write(&dir.join("nearest-client"), b"client-bytes");
-    let records =
-        collect_binaries(&target, "release", &["arena-server", "nearest-client"]).expect("collect");
+    write(&dir.join("reference-client"), b"client-bytes");
+    let records = collect_binaries(&target, "release", &["arena-server", "reference-client"])
+        .expect("collect");
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].name, "arena-server");
     assert_eq!(records[0].size, 12);

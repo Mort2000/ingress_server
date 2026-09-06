@@ -288,7 +288,10 @@ fn probe(mode: &str, socket: &str, arg: u64) -> Result<i32, Box<dyn std::error::
             }
             Some(Envelope::RoundClosed { .. }) => {}
             Some(Envelope::SubmissionResult { .. }) => {}
-            Some(Envelope::GameEnd { .. }) => return Ok(0),
+            Some(end @ Envelope::GameEnd { .. }) => {
+                println!("outcome={end:?}");
+                return Ok(0);
+            }
             Some(other) => return Err(format!("unexpected {other:?}").into()),
             None => return Ok(0),
         }

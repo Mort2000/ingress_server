@@ -1,532 +1,157 @@
-//! The frozen 10,000-match M6 experiment (P2.5-GATE, D58/D59):
-//!
-//! ```text
-//! Random x Random            1000      Greedy x DestroyAnchor  1750
-//! Nearest x Nearest          1500      Greedy x Hybrid         1750
-//! Nearest x Greedy           1750      Hybrid x Hybrid         2250
-//! ```
-//!
-//! on 500 distinct generated default-config maps (shared across matchups),
-//! `Flat(0)` virtual buckets, 12 threads, all seeds derived from one
-//! master seed. Artifacts land in `runs/m6-r1/`. A second, explicit
-//! cross-bucket batch (120 Hybrid x Hybrid matches under
-//! `Factions { enl: 0, res: 1 }`) lands in `runs/m6-r1-crossbucket/` —
-//! end-to-end evidence that bucket order dominates parity (D19/D20/D56).
-
+//! Run a tournament between independently built external clients.
 #![forbid(unsafe_code)]
 
-use std::time::Instant;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-use arena_bots::bot::BotKind;
 use arena_core::config::GameConfig;
-use arena_runner::batch::{BatchConfig, Matchup};
-use arena_runner::policy::BucketPolicy;
-use arena_runner::report::{BatchSummary, summary_text, write_artifacts};
-use arena_runner::run::{MAX_WORKERS, run_batch};
-use arena_runner::tournament::config::{ClientSandbox, EloConfig, TMatchup, TournamentConfig};
-use arena_runner::tournament::entrant::{Entrant, EntrantKind, EntrantProvenance};
-use arena_runner::tournament::run::{run_external_tournament, run_inprocess_tournament};
-use arena_runner::tournament::write_tournament_artifacts;
+use arena_runner::tournament::{
+    ClientSandbox, EloConfig, Entrant, EntrantKind, EntrantProvenance, TMatchup, TournamentConfig,
+    run_external_tournament, write_tournament_artifacts,
+};
 
-/// The frozen master seed of experiment round 1 (D58).
-pub const M6_R1_MASTER_SEED: u64 = 0x006D_3600_0000_0031;
+const USAGE: &str = "Usage: arena-runner tournament --out <new-directory> --client <binary> --client <binary> [options]\n\
+  --client <binary>   Repeat for each entrant (at least two).\n\
+  --matches <even>    Matches per distinct entrant pair (default: 2).\n\
+  --maps <count>      Generated map pool (default: 1).\n\
+  --rounds <count>    Rounds per match (default: 500).\n\
+  --seed <decimal>    Master seed (default: 12648430).\n\
+  --workers <count>  Concurrent matches (default: 1).\n\
+  --sandbox <binary> Run clients through sandbox-runner.\n\
+  --fast             Short decision windows for protocol smoke tests.";
 
-/// The frozen master seed of tournament round 1 (M9, D80): the Benchmark
-/// Seed Set (map seeds, schedule seed, game/client seeds) all derive from
-/// it and the derivation is disjoint from every M6 domain.
-pub const M9_R1_MASTER_SEED: u64 = 0x006D_3900_0000_0032;
-
-/// Recorded build provenance for the r1 clients (D79): the id of the
-/// `tools/provenance` manifest recorded for this tree. The tree/lock/
-/// toolchain hashes are READ from that manifest at run time (a manifest
-/// can never hash the sentence citing it — the M8 convention), and the
-/// runner computes the exact binary hashes itself over the files it
-/// actually executes.
-pub const M9_R1_MANIFEST_ID: &str = "runs/builds/20260903-0221-578243c3d20f";
-
-/// Provenance-as-data for one r1 entrant: the recorded manifest's
-/// tree/lock/toolchain literals (when the manifest file exists) plus the
-/// computed binary hash.
-fn m9_provenance(binary: Option<String>) -> EntrantProvenance {
-    let (tree_hash, lock_hash, toolchain_hash) = match std::fs::read_to_string(
-        std::path::Path::new(M9_R1_MANIFEST_ID).join("manifest.json"),
-    ) {
-        Ok(text) => match arena_runner::tournament::archive::parse_json(&text) {
-            Ok(json) => {
-                let field = |path: [&str; 2]| -> Option<String> {
-                    json.get(path[0])
-                        .and_then(|value| value.get(path[1]))
-                        .and_then(|value| value.as_str())
-                        .map(|text| text.to_string())
-                };
-                (
-                    field(["tree", "hash"]),
-                    field(["lock", "hash"]),
-                    field(["toolchain", "hash"]),
-                )
-            }
-            Err(_) => (None, None, None),
-        },
-        Err(_) => (None, None, None),
+fn execute(args: &[String]) -> Result<(), String> {
+    if args.first().map(String::as_str) != Some("tournament") {
+        return Err(USAGE.into());
+    }
+    let mut out = None;
+    let mut clients = Vec::new();
+    let mut matches = 2u32;
+    let mut maps = 1u32;
+    let mut rounds = 500u32;
+    let mut seed = 12_648_430u64;
+    let mut workers = 1usize;
+    let mut sandbox = None;
+    let mut fast = false;
+    let mut options = args[1..].iter();
+    while let Some(flag) = options.next() {
+        if flag == "--fast" {
+            fast = true;
+            continue;
+        }
+        let value = options
+            .next()
+            .ok_or_else(|| format!("{flag} requires a value"))?;
+        let bad = || format!("invalid {flag}: {value}");
+        match flag.as_str() {
+            "--out" => out = Some(PathBuf::from(value)),
+            "--client" => clients.push(PathBuf::from(value)),
+            "--matches" => matches = value.parse().map_err(|_| bad())?,
+            "--maps" => maps = value.parse().map_err(|_| bad())?,
+            "--rounds" => rounds = value.parse().map_err(|_| bad())?,
+            "--seed" => seed = value.parse().map_err(|_| bad())?,
+            "--workers" => workers = value.parse().map_err(|_| bad())?,
+            "--sandbox" => sandbox = Some(PathBuf::from(value)),
+            _ => return Err(format!("unknown option: {flag}")),
+        }
+    }
+    let out = out.ok_or("--out is required")?;
+    if clients.len() < 2 {
+        return Err("at least two --client entries are required".into());
+    }
+    if matches == 0 || matches % 2 != 0 {
+        return Err("--matches must be positive and even".into());
+    }
+    let config = if fast {
+        arena_server::fast_config(rounds)
+    } else {
+        GameConfig {
+            total_rounds: rounds,
+            ..GameConfig::default()
+        }
     };
-    EntrantProvenance {
-        binary_blake3: binary,
-        tree_hash,
-        lock_hash,
-        toolchain_hash,
-        manifest_id: Some(M9_R1_MANIFEST_ID.to_string()),
-        bot_version: Some(arena_bots::bot::BOT_VERSION.to_string()),
+    config
+        .validate()
+        .map_err(|error| format!("invalid rules: {error:?}"))?;
+    let mut entrants = Vec::new();
+    for (index, binary) in clients.into_iter().enumerate() {
+        let binary = binary
+            .canonicalize()
+            .map_err(|error| format!("{}: {error}", binary.display()))?;
+        let label = binary
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("client");
+        let mut entrant = Entrant {
+            name: format!("{label}-{}", index + 1),
+            kind: EntrantKind::External {
+                binary,
+                env: vec![],
+            },
+            provenance: EntrantProvenance::default(),
+        };
+        entrant
+            .compute_binary_hash()
+            .map_err(|error| error.to_string())?;
+        entrants.push(entrant);
     }
-}
-
-fn external_entrant(name: &str, binary_name: &str, env: &[(&str, &str)]) -> Option<Entrant> {
-    let binary = arena_runner::tournament::exec_external::find_workspace_binary(binary_name)?;
-    let hash = arena_runner::tournament::entrant::compute_binary_hash(&binary).ok()?;
-    Some(Entrant {
-        name: name.to_string(),
-        kind: EntrantKind::External {
-            binary,
-            env: env
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect(),
-        },
-        provenance: m9_provenance(Some(hash)),
-    })
-}
-
-fn in_process_entrant(name: &str, bot: BotKind) -> Entrant {
-    Entrant {
-        name: name.to_string(),
-        kind: EntrantKind::InProcess { bot },
-        provenance: EntrantProvenance::in_process(arena_bots::bot::BOT_VERSION),
+    let mut matchups = Vec::new();
+    for a in 0..entrants.len() as u32 {
+        for b in a + 1..entrants.len() as u32 {
+            matchups.push(TMatchup::new(&format!("{a}-{b}"), a, b, matches));
+        }
     }
-}
-
-/// The frozen external tournament r1 (D80/D85): 14 single matches over a
-/// 4-map Benchmark Seed Set, sandboxed clients, 100 rounds each, every
-/// count even so the D55 balance holds exactly. (The plan sketch said 24
-/// rounds; the smoke run showed 24 ends before ANY faction completes a
-/// field — all matches 0-0 draws, no ranking signal — so r1 runs 100
-/// rounds. Prompt COMMITs settle rounds early, so wall clock stays ~2-3 s
-/// per match.) Entrants:
-/// `nearest` / `hybrid` (the frozen M6 algorithms as external SDK
-/// clients) and `probe` (the diagnostic fixture in its well-behaved
-/// mode — it commits promptly and plays empty rounds).
-fn frozen_tournament_r1() -> Option<TournamentConfig> {
-    let nearest = external_entrant("nearest", "nearest-client", &[])?;
-    let hybrid = external_entrant("hybrid", "hybrid-client", &[])?;
-    let probe = external_entrant("probe", "probe-client", &[("PROBE_MODE", "valid")])?;
-    let sandbox_runner =
-        arena_runner::tournament::exec_external::find_workspace_binary("sandbox-runner")?;
-    Some(TournamentConfig {
-        name: "r1".to_string(),
-        master_seed: M9_R1_MASTER_SEED,
-        entrants: vec![nearest, hybrid, probe],
-        matchups: vec![
-            TMatchup::new("nearest-hybrid", 0, 1, 6),
-            TMatchup::new("nearest-probe", 0, 2, 4),
-            TMatchup::new("hybrid-probe", 1, 2, 4),
-        ],
-        map_count: 4,
-        rounds_per_match: 100,
-        config: arena_server::fast_config(100),
-        elo: EloConfig::default(),
-        concurrency: 3,
-        sandbox: ClientSandbox::SandboxRunner {
-            runner: sandbox_runner,
-            wall_ms: 20_000,
-            address_space_bytes: 2 << 30,
+    let budget = config.initial_spawn_window_ms as u64
+        + rounds as u64 * (config.decision_window_ms as u64 + 100)
+        + 20_000;
+    let sandbox = match sandbox {
+        Some(runner) => ClientSandbox::SandboxRunner {
+            runner: runner.canonicalize().map_err(|error| error.to_string())?,
+            wall_ms: budget,
+            address_space_bytes: 512 * 1024 * 1024,
         },
-        per_match_budget_ms: 20_000,
-    })
-}
-
-/// The frozen in-process tournament r1 (D86): the M6 engine + M5 recorder
-/// path over the same scheduling machinery.
-fn frozen_tournament_inprocess_r1() -> TournamentConfig {
-    let entrants = vec![
-        in_process_entrant("nearest", BotKind::NearestPortal),
-        in_process_entrant("greedy", BotKind::GreedyField),
-        in_process_entrant("hybrid", BotKind::Hybrid),
-    ];
-    let mut config = GameConfig::default();
-    config.total_rounds = 60;
-    TournamentConfig {
-        name: "inproc-r1".to_string(),
-        master_seed: M9_R1_MASTER_SEED ^ 0x1D0C_E5E5_0000_0000,
+        None => ClientSandbox::Off,
+    };
+    let cfg = TournamentConfig {
+        name: out
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("tournament")
+            .into(),
+        master_seed: seed,
         entrants,
-        matchups: vec![
-            TMatchup::new("nearest-greedy", 0, 1, 2),
-            TMatchup::new("greedy-hybrid", 1, 2, 2),
-        ],
-        map_count: 2,
-        rounds_per_match: 60,
+        matchups,
+        map_count: maps,
+        rounds_per_match: rounds,
         config,
         elo: EloConfig::default(),
-        concurrency: 2,
-        sandbox: ClientSandbox::Off,
-        per_match_budget_ms: 30_000,
-    }
-}
-
-fn run_tournament_r1(output_root: &std::path::Path) {
-    let cfg = frozen_tournament_r1().expect(
-        "client binaries + sandbox-runner must be built (cargo build --release --workspace)",
-    );
-    println!(
-        "arena-runner: tournament r1 — {} matches over {} maps, sandbox on, budget {} ms",
-        cfg.total_matches(),
-        cfg.map_count,
-        cfg.per_match_budget_ms
-    );
-    let start = Instant::now();
-    let root = output_root.join("tournaments").join(&cfg.name);
-    let run = run_external_tournament(&cfg, &root).expect("the frozen tournament runs");
-    let doc = output_root.join("..").join("docs").join("tournament-r1.md");
-    write_tournament_artifacts(&cfg, &run, &root, Some(&doc)).expect("artifacts write");
-    let scored = run.outcomes.iter().filter(|o| o.elo_relevant()).count();
-    let technical = run
-        .outcomes
-        .iter()
-        .filter(|o| {
-            matches!(
-                o,
-                arena_runner::tournament::TournamentOutcome::TechnicalWin { .. }
-            )
-        })
-        .count();
-    let unscored = run.outcomes.len() - scored - technical;
-    println!(
-        "arena-runner: tournament r1 done in {:?} ({} matches: {} scored, {} technical, {} unscored)",
-        start.elapsed(),
-        run.outcomes.len(),
-        scored,
-        technical,
-        unscored
-    );
-    println!("arena-runner: artifacts in {}", root.display());
-    println!("arena-runner: committed report at {}", doc.display());
-    print!(
-        "{}",
-        std::fs::read_to_string(root.join("standings.txt")).expect("standings")
-    );
-}
-
-fn run_tournament_inprocess_r1(output_root: &std::path::Path) {
-    let cfg = frozen_tournament_inprocess_r1();
-    println!(
-        "arena-runner: in-process tournament r1 — {} matches, {} rounds each",
-        cfg.total_matches(),
-        cfg.rounds_per_match
-    );
-    let start = Instant::now();
-    let root = output_root.join("tournaments").join(&cfg.name);
-    let run = run_inprocess_tournament(&cfg, &root).expect("the frozen in-process tournament runs");
-    write_tournament_artifacts(&cfg, &run, &root, None).expect("artifacts write");
-    println!(
-        "arena-runner: in-process tournament r1 done in {:?} ({} matches)",
-        start.elapsed(),
-        run.outcomes.len()
-    );
-    println!("arena-runner: artifacts in {}", root.display());
-    print!(
-        "{}",
-        std::fs::read_to_string(root.join("standings.txt")).expect("standings")
-    );
-}
-
-/// The frozen matchup table (all counts even; each bot gets exactly M/2
-/// ENL and M/2 RES slots, D55).
-pub fn frozen_matchups() -> Vec<Matchup> {
-    vec![
-        Matchup::new("Random-Random", BotKind::Random, BotKind::Random, 1000),
-        Matchup::new(
-            "Nearest-Nearest",
-            BotKind::NearestPortal,
-            BotKind::NearestPortal,
-            1500,
-        ),
-        Matchup::new(
-            "Nearest-Greedy",
-            BotKind::NearestPortal,
-            BotKind::GreedyField,
-            1750,
-        ),
-        Matchup::new(
-            "Greedy-DestroyAnchor",
-            BotKind::GreedyField,
-            BotKind::DestroyAnchor,
-            1750,
-        ),
-        Matchup::new("Greedy-Hybrid", BotKind::GreedyField, BotKind::Hybrid, 1750),
-        Matchup::new("Hybrid-Hybrid", BotKind::Hybrid, BotKind::Hybrid, 2250),
-    ]
-}
-
-fn main() {
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(MAX_WORKERS);
-    let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(|s| s.as_str()) {
-        Some("tournament-r1") => {
-            let output_root =
-                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
-            run_tournament_r1(&output_root);
-            return;
-        }
-        Some("tournament-inprocess-r1") => {
-            let output_root =
-                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
-            run_tournament_inprocess_r1(&output_root);
-            return;
-        }
-        Some("conflict-stats") => {
-            // A-LATENCY offline conflict analysis (D70 realized): a frozen
-            // 8-match self-play batch plus every archived tournament IARP.
-            let output_root =
-                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
-            std::process::exit(arena_runner::conflict::run_conflict_stats(&output_root));
-        }
-        Some("drop-reasons") => {
-            // B0 evidence pass: re-execute every match of a frozen batch
-            // archive (seeds read back from its matches.tsv), verify each
-            // re-execution against the archived row, and tally DropReason
-            // counts per BotKind into a NEW runs/balance/ directory — the
-            // per-reason breakdown behind docs/balance/balance-report-r1.md.
-            let usage =
-                "usage: arena-runner drop-reasons <frozen-run-dir> [output-root] [base-commit]";
-            let Some(frozen) = args.get(2) else {
-                eprintln!("{usage}");
-                std::process::exit(1);
-            };
-            let output_root =
-                std::path::PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or("runs"));
-            let base_commit = args.get(4).map(|s| s.as_str());
-            std::process::exit(arena_runner::drops::run_drop_reasons(
-                std::path::Path::new(frozen),
-                &output_root,
-                base_commit,
-            ));
-        }
-        Some("balance-r21-verify") => {
-            // r2.1 post-audit verification (the 2026-09-05 bot action
-            // audit's step 4, small scale): the two audited pairings plus
-            // idle readiness of every competitive policy, 4 maps x 2 legs
-            // (8 matches per combination, under the operator's 10-cap),
-            // archived with the audit's own metrics in verify.tsv.
-            let output_root =
-                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
-            let base_commit = args.get(3).map(|s| s.as_str());
-            std::process::exit(arena_runner::balance::r21verify::run_r21_verify(
-                &output_root,
-                base_commit,
-            ));
-        }
-        Some("balance-b3") => {
-            // B3 default-config ablation (docs/balance/ai-balance-plan.md section
-            // 7.2,): the frozen 8-policy same-map faction-swap
-            // matrix + the idle benchmark of the three arms, archived with
-            // the plan-section-9 analysis.txt.
-            let mut rest = args.iter().skip(2).cloned();
-            let output_root = std::path::PathBuf::from(
-                rest.next()
-                    .filter(|s| !s.starts_with("--"))
-                    .unwrap_or_else(|| "runs".to_string()),
-            );
-            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
-            let pilot = rest.any(|s| s == "--pilot");
-            std::process::exit(arena_runner::balance::ablation::run_b3_ablation(
-                &output_root,
-                base_commit.as_deref(),
-                pilot,
-            ));
-        }
-        Some("balance-b4") => {
-            // B4 parameter sensitivity (docs/balance/ai-balance-plan.md sections
-            // 7.3/7.4/8.3,): the frozen 13-candidate single-grid
-            // pilot (default), the scratch pilot, the Full runs over the
-            // stability-derived roster, and the plan-7.4 interaction
-            // experiments — each archived with theeffects.txt.
-            let mut rest = args.iter().skip(2).cloned();
-            let output_root = std::path::PathBuf::from(
-                rest.next()
-                    .filter(|s| !s.starts_with("--"))
-                    .unwrap_or_else(|| "runs".to_string()),
-            );
-            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
-            let rest: Vec<String> = rest.collect();
-            let mode = if rest.iter().any(|s| s == "--pilot") {
-                arena_runner::balance::sensitivity::B4Mode::ScratchPilot
-            } else if let Some(index) = rest.iter().position(|s| s == "--full") {
-                match rest.get(index + 1) {
-                    Some(dir) => arena_runner::balance::sensitivity::B4Mode::Full {
-                        pilot_dir: std::path::PathBuf::from(dir),
-                    },
-                    None => {
-                        eprintln!(
-                            "usage: arena-runner balance-b4 <output-root> [base-commit] [--pilot | --full <pilot-dir> | --interaction <full-dir,...>]"
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            } else if let Some(index) = rest.iter().position(|s| s == "--interaction") {
-                match rest.get(index + 1) {
-                    Some(dirs) => arena_runner::balance::sensitivity::B4Mode::Interaction {
-                        full_dirs: dirs.split(',').map(std::path::PathBuf::from).collect(),
-                    },
-                    None => {
-                        eprintln!(
-                            "usage: arena-runner balance-b4 <output-root> [base-commit] [--pilot | --full <pilot-dir> | --interaction <full-dir,...>]"
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                arena_runner::balance::sensitivity::B4Mode::Pilot
-            };
-            std::process::exit(arena_runner::balance::sensitivity::run_b4(
-                &output_root,
-                base_commit.as_deref(),
-                mode,
-            ));
-        }
-        Some("balance-drop-reasons") => {
-            // B3 per-reason Drop breakdown over a balance archive: verified
-            // offline re-execution of every in-scope row (plan section 16
-            // step 5). Positional args after the run dir are policy-tag
-            // filters (empty = all rows).
-            let usage = "usage: arena-runner balance-drop-reasons <balance-run-dir> [output-root] [base-commit] [policy tags...]";
-            let Some(run_dir) = args.get(2) else {
-                eprintln!("{usage}");
-                std::process::exit(1);
-            };
-            let output_root =
-                std::path::PathBuf::from(args.get(3).map(|s| s.as_str()).unwrap_or("runs"));
-            let base_commit = args.get(4).map(|s| s.as_str());
-            let filters: Vec<String> = args.iter().skip(5).cloned().collect();
-            std::process::exit(arena_runner::drops::run_balance_drop_reasons(
-                std::path::Path::new(run_dir),
-                &output_root,
-                base_commit,
-                &filters,
-            ));
-        }
-        Some("balance-b2") => {
-            // B2 readiness runs (docs/balance/ai-balance-plan.md section 10.1,
-            //): the frozen round-robin / idle / blocking-probe
-            // validation batches with gate evaluation.
-            let mut rest = args.iter().skip(2).cloned();
-            let output_root = std::path::PathBuf::from(
-                rest.next()
-                    .filter(|s| !s.starts_with("--"))
-                    .unwrap_or_else(|| "runs".to_string()),
-            );
-            let base_commit = rest.next().filter(|s| !s.starts_with("--"));
-            let pilot = rest.any(|s| s == "--pilot");
-            std::process::exit(arena_runner::balance::readiness::run_b2_readiness(
-                &output_root,
-                base_commit.as_deref(),
-                pilot,
-            ));
-        }
-        Some("balance-b1") => {
-            // B1 smoke run (docs/balance/ai-balance-plan.md section 14 row B1): the
-            // frozen two-variant x two-policy same-map faction-swap batch,
-            // archived into a NEW runs/balance/b1-smoke-r1/ directory.
-            let output_root =
-                std::path::PathBuf::from(args.get(2).map(|s| s.as_str()).unwrap_or("runs"));
-            let base_commit = args.get(3).map(|s| s.as_str());
-            std::process::exit(arena_runner::balance::smoke::run_b1_smoke(
-                &output_root,
-                base_commit,
-            ));
-        }
-        Some(other) if other.starts_with("tournament") => {
-            eprintln!(
-                "unknown tournament subcommand {other:?} (tournament-r1 | tournament-inprocess-r1)"
-            );
-            std::process::exit(1);
-        }
-        _ => {}
-    }
-    let output_root = std::path::PathBuf::from(args.get(1).map(|s| s.as_str()).unwrap_or("runs"));
-
-    // ---------------------------------------------------------------
-    // The frozen 10,000-match balance batch (Flat(0)).
-    // ---------------------------------------------------------------
-    let balance = BatchConfig {
-        batch_id: "m6-r1".to_string(),
-        matchups: frozen_matchups(),
-        map_count: 500,
-        master_seed: M6_R1_MASTER_SEED,
-        bucket_policy: BucketPolicy::Flat(0),
-        config: GameConfig::default(),
+        concurrency: workers,
+        sandbox,
+        per_match_budget_ms: budget,
     };
-    println!(
-        "arena-runner: {} matches on {} maps, {workers} threads, bucket policy {}",
-        balance.total_matches(),
-        balance.map_count,
-        balance.bucket_policy.tag()
-    );
-    let start = Instant::now();
-    let run = run_batch(&balance, workers).expect("the frozen batch runs");
-    println!(
-        "arena-runner: batch m6-r1 done in {:?} ({} matches, {} crashes)",
-        start.elapsed(),
-        run.records.len(),
-        run.records
-            .iter()
-            .filter(|r| r.result == arena_runner::metrics::Outcome::Crash)
-            .count()
-    );
-    let dir = output_root.join("m6-r1");
-    write_artifacts(&dir, &balance, &run.records, run.workers, run.elapsed_ms)
-        .expect("write m6-r1 artifacts");
-    let summary = BatchSummary::from_records(&run.records, &balance.matchups);
-    println!(
-        "arena-runner: artifacts in {} (manifest.txt, matches.tsv, summary.txt)",
-        dir.display()
-    );
-    println!();
-    print!(
-        "{}",
-        summary_text(&summary, balance.config.portal_count as u64)
-    );
+    cfg.validate()?;
+    if let Some(parent) = out.parent().filter(|path| !path.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    // A fresh directory is mandatory: never overwrite an archived tournament.
+    std::fs::create_dir(&out).map_err(|error| format!("{}: {error}", out.display()))?;
+    let run = run_external_tournament(&cfg, &out).map_err(|error| format!("{error:?}"))?;
+    write_tournament_artifacts(&cfg, &run, &out, None).map_err(|error| error.to_string())?;
+    println!("{} matches archived in {}", run.items.len(), out.display());
+    Ok(())
+}
 
-    // ---------------------------------------------------------------
-    // The explicit cross-bucket batch (D56): bucket order dominates
-    // parity — ENL always executes first. Still equal ENL/RES exposure
-    // per bot through the schedule.
-    // ---------------------------------------------------------------
-    let cross = BatchConfig {
-        batch_id: "m6-r1-crossbucket".to_string(),
-        matchups: vec![Matchup::new(
-            "Hybrid-Hybrid",
-            BotKind::Hybrid,
-            BotKind::Hybrid,
-            120,
-        )],
-        map_count: 60,
-        master_seed: M6_R1_MASTER_SEED ^ 0xC505_B0C0_0000_0000,
-        bucket_policy: BucketPolicy::Factions { enl: 0, res: 1 },
-        config: GameConfig::default(),
-    };
-    let start = Instant::now();
-    let run = run_batch(&cross, workers).expect("the cross-bucket batch runs");
-    println!(
-        "arena-runner: batch m6-r1-crossbucket done in {:?} ({} matches)",
-        start.elapsed(),
-        run.records.len()
-    );
-    let dir = output_root.join("m6-r1-crossbucket");
-    write_artifacts(&dir, &cross, &run.records, run.workers, run.elapsed_ms)
-        .expect("write cross-bucket artifacts");
-    let summary = BatchSummary::from_records(&run.records, &cross.matchups);
-    print!(
-        "{}",
-        summary_text(&summary, cross.config.portal_count as u64)
-    );
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    match execute(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
 }

@@ -1,19 +1,10 @@
-//! The M9 tournament layer (P5): entrant registry with provenance-as-data
-//! (D79), single-match scheduling over the frozen Benchmark Seed Set
-//! (P5-SCHEDULING, D80), external orchestration through the in-process
-//! `serve_match` plus real client binaries (D81), outcome normalization
-//! that never dresses a technical termination as a score result (D82),
-//! the archive layout (D83), integer Elo (D84), and the standings/report
-//! format (D85). The M6 engine + M5 recorder serve the in-process path
-//! (D86). One match per scheduling item — no auto faction-swap rematch
-//! anywhere; faction balance comes from the reused D55 schedule seed.
+//! External-client tournaments with recorded seeds, provenance, replays, and ratings.
 
 pub mod archive;
 pub mod config;
 pub mod elo;
 pub mod entrant;
 pub mod exec_external;
-pub mod exec_inprocess;
 pub mod outcome;
 pub mod report;
 pub mod run;
@@ -22,7 +13,7 @@ pub mod schedule;
 pub use config::{ClientSandbox, EloConfig, TMatchup, TournamentConfig};
 pub use entrant::{Entrant, EntrantId, EntrantKind, EntrantProvenance};
 pub use outcome::{Stage, TournamentOutcome};
-pub use run::{TournamentRun, run_external_tournament, run_inprocess_tournament};
+pub use run::{TournamentRun, run_external_tournament};
 pub use schedule::{TournamentError, TournamentItem, build_items};
 
 /// Seed domain labels (D80) — re-exported for tests and artifact docs.

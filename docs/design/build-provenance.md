@@ -1,5 +1,7 @@
 # Build provenance: audited builds (M8 / P4-BUILD)
 
+> Alpha 布局更新：参赛源码位于独立 bot 仓，通过 `audit --root <server> --participant <bot>` 审核；官方 path 依赖目标为 server 的 `crates/*`／`tools/*`，并检查选手自身的 Cargo.lock。原 `probe-client` 已移至 `tools/probe-client`。旧版本路径只表示历史布局，当前接入见 [Alpha 记录](alpha-reference.md)。
+
 Status: implemented (M8; dependency resolution reversed by D94 — see
 §2). Every match product must be traceable to the exact audited inputs:
 source tree, lockfile, toolchain identity, and binary hashes (ADR-0005,
@@ -149,8 +151,7 @@ same domain.
 Fixed key order; **no wall-clock fields in the body** — two
 computations over the same tree are byte-identical (pinned by
 `double_compute_is_deterministic`); the timestamp lives only in the
-build id/directory name. Recorded products: `arena-server`, all
-`bots/*` clients, and the tools binaries (`provenance`, `audit`,
+build id/directory name. Recorded products: `arena-server`, the `probe-client` protocol fixture, and the tools binaries (`provenance`, `audit`,
 `sandbox-runner`, the five sb-fixtures).
 
 ## 7. Reproducibility and mutation evidence

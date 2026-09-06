@@ -15,7 +15,7 @@
 //! * **R2 DEP-ALLOWLIST** — every dependency entry of a participant
 //!   manifest (plain, dotted `[dependencies.name]`, and
 //!   `target.*.dependencies` tables alike) must be a `path =` dep that
-//!   resolves to a workspace MEMBER crate (`crates/*`, `bots/*`,
+//!   resolves to a workspace MEMBER crate (`crates/*`,
 //!   `tools/*`) or one of the frozen 15 sanctioned external names;
 //!   `git =`/registry/renamed (`package =`) sources FAIL even with
 //!   allowed names, and out-of-workspace path deps FAIL (they would
@@ -217,15 +217,10 @@ impl Report {
     }
 }
 
-/// Participant crate directories: every `bots/*` subdir with a manifest.
-pub fn participant_dirs(root: &Path) -> Vec<PathBuf> {
-    crate_dirs(&root.join("bots"))
-}
-
 /// Operator crate directories: `crates/*` and `tools/*` (SDK, server,
 /// and tooling — their one sanctioned module each is exempt per the
 /// frozen operator list; P4-CAPABILITY scopes the participant rules to
-/// `bots/*`).
+/// independently selected participant roots).
 pub fn operator_dirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs = crate_dirs(&root.join("crates"));
     dirs.extend(crate_dirs(&root.join("tools")));
@@ -248,13 +243,12 @@ fn crate_dirs(parent: &Path) -> Vec<PathBuf> {
 }
 
 /// Workspace member crate directories (the workspace glob of the root
-/// `Cargo.toml`): `crates/*`, `bots/*`, `tools/*`. These — and only
+/// `Cargo.toml`): `crates/*`, `tools/*`. These — and only
 /// these — are legal `path =` dependency targets for a participant:
 /// every member is inside the operator-built, provenance-hashed tree
 /// and operator crates are on the exempt side of the boundary.
 fn workspace_member_dirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs = crate_dirs(&root.join("crates"));
-    dirs.extend(crate_dirs(&root.join("bots")));
     dirs.extend(crate_dirs(&root.join("tools")));
     dirs.into_iter().map(|d| normalize_path(&d)).collect()
 }
@@ -293,7 +287,7 @@ fn is_workspace_member(members: &[PathBuf], resolved: &Path) -> bool {
     })
 }
 
-/// Runs the full ruleset. `root` is the repository root; `participants`
+/// Runs the full ruleset. `root` is the official server repository; `participants`
 /// are audited; `workspace` (operator crates) are recorded as the
 /// exempt side of the boundary.
 pub fn run(root: &Path, participants: &[PathBuf], workspace: &[PathBuf]) -> Report {
@@ -306,12 +300,29 @@ pub fn run(root: &Path, participants: &[PathBuf], workspace: &[PathBuf]) -> Repo
     };
     for participant in participants {
         audit_participant(participant, &mut report);
+        if participant != root && participant.join("Cargo.lock").is_file() {
+            audit_closure(participant, &mut report);
+        }
     }
     audit_closure(root, &mut report);
     report
 }
 
 fn audit_participant(crate_dir: &Path, report: &mut Report) {
+    // An independent participant must not redirect official SDK/registry
+    // dependencies through an unaudited Cargo source or compiler override.
+    for name in [".cargo/config", ".cargo/config.toml"] {
+        let path = crate_dir.join(name);
+        if path.exists() {
+            report.findings.push(Finding {
+                rule: RuleId::R2DepAllowlist,
+                severity: Severity::Fail,
+                path: path.display().to_string(),
+                detail: "participant-owned Cargo configuration requires operator review".into(),
+            });
+        }
+    }
+
     let rel = |p: &Path| -> String {
         p.strip_prefix(&report.root)
             .unwrap_or(p)
@@ -444,7 +455,7 @@ fn audit_participant(crate_dir: &Path, report: &mut Report) {
             if !is_workspace_member(&members, &resolved) {
                 report.findings.push(detail_fail(format!(
                     "path dep `{path}` escapes the audited workspace (resolves \
-                     to {}, not a crates/*/bots/*/tools/* member)",
+                     to {}, not a crates/*/tools/* member)",
                     resolved.display()
                 )));
             }
@@ -706,6 +717,28 @@ pub fn allowlist_matches_lock(root: &Path) -> Result<(), String> {
         return Err(format!(
             "Cargo.lock external set {external:?} != frozen allowlist {allowed:?}"
         ));
+    }
+    Ok(())
+}
+
+/// Independent participants may use a subset of the official external closure.
+/// Their own lockfile must be present and must not introduce alternate sources.
+pub fn participant_lock_is_allowed(root: &Path) -> Result<(), String> {
+    let path = root.join("Cargo.lock");
+    let text = fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    for package in text.split("[[package]]").skip(1) {
+        let name = toml::string_value(package, "name")
+            .ok_or_else(|| format!("{}: package without name", path.display()))?;
+        if let Some(source) = toml::string_value(package, "source") {
+            if !ALLOWED_EXTERNAL.contains(&name.as_str())
+                || source != "registry+https://github.com/rust-lang/crates.io-index"
+            {
+                return Err(format!(
+                    "{}: disallowed dependency {name} from {source}",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(())
 }

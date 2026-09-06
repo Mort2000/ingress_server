@@ -1,30 +1,8 @@
-//! Batch self-play runner (P2.5, M6): builds the frozen experiment
-//! schedule, executes matches in parallel over scoped worker threads,
-//! folds per-match metrics incrementally from round reports, and writes
-//! hand-rolled std-only text artifacts (`manifest.txt`, `matches.tsv`,
-//! `summary.txt`). Wall-clock time is recorded as METADATA only — it never
-//! enters a policy decision, a seed, or a result.
-
+//! External-client tournament scheduling, execution, replay archives, and ratings.
 #![forbid(unsafe_code)]
 
-pub mod balance;
-pub mod batch;
-pub mod conflict;
-pub mod drops;
-pub mod metrics;
-pub mod policy;
-pub mod report;
-pub mod run;
 pub mod schedule;
 pub mod tournament;
-
-pub use balance::execute::{BalanceRunResult, run_balance_batch};
-pub use balance::plan::{ExperimentPlan, SeedSet};
-pub use batch::{BatchConfig, MatchDescriptor, Matchup};
-pub use metrics::{FactionMatchStats, MatchRecord, MatchStats, Outcome};
-pub use policy::BucketPolicy;
-pub use report::{BatchSummary, MatchupSummary, SnowballCheckpoint};
-pub use run::{BatchError, BatchRun, RecordedMatch, run_batch, run_match, run_match_recorded};
 
 /// `LE-u64(blake3(label || payload))` — the frozen seed-derivation helper
 /// (D58, the M5 gate pattern): one distinct stream per domain label.

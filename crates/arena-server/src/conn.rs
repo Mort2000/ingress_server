@@ -18,7 +18,7 @@ use arena_protocol::frame::FrameReader;
 #[derive(Debug)]
 pub enum ConnEvent {
     /// A connection was accepted; the driver owns the write half from now
-    /// on (the accept thread spawned the reader on a cloned read half).
+    /// on (the accept thread starts its reader after publishing this event).
     Connected { conn: u8, stream: UnixStream },
     /// A surplus (third or later) connection was rejected with
     /// SERVER_HELLO status=2 and closed by the accept thread.

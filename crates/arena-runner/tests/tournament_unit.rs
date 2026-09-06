@@ -4,11 +4,8 @@
 //! mapping table, and the integer Elo golden vectors. No processes, no
 //! I/O outside `std::env::temp_dir`.
 
-use arena_bots::bot::BotKind;
 use arena_core::config::GameConfig;
 use arena_core::types::{Faction, MatchResult};
-use arena_runner::batch::BatchConfig;
-use arena_runner::policy::BucketPolicy;
 use arena_runner::tournament::config::{ClientSandbox, EloConfig, TMatchup, TournamentConfig};
 use arena_runner::tournament::elo::{EloTable, expected_score_q, round_half_away};
 use arena_runner::tournament::entrant::{
@@ -25,37 +22,40 @@ fn entrant(name: &str, kind: EntrantKind) -> Entrant {
     Entrant {
         name: name.to_string(),
         kind,
-        provenance: EntrantProvenance::in_process(arena_bots::bot::BOT_VERSION),
+        provenance: EntrantProvenance::default(),
     }
 }
 
-fn in_process_config() -> TournamentConfig {
+fn fixture_config() -> TournamentConfig {
     TournamentConfig {
         name: "unit".into(),
         master_seed: 0x006D_3600_0000_0093,
         entrants: vec![
             entrant(
-                "nearest",
-                EntrantKind::InProcess {
-                    bot: BotKind::NearestPortal,
+                "client_a",
+                EntrantKind::External {
+                    binary: std::env::current_exe().unwrap(),
+                    env: vec![],
                 },
             ),
             entrant(
-                "greedy",
-                EntrantKind::InProcess {
-                    bot: BotKind::GreedyField,
+                "client_b",
+                EntrantKind::External {
+                    binary: std::env::current_exe().unwrap(),
+                    env: vec![],
                 },
             ),
             entrant(
-                "hybrid",
-                EntrantKind::InProcess {
-                    bot: BotKind::Hybrid,
+                "client_c",
+                EntrantKind::External {
+                    binary: std::env::current_exe().unwrap(),
+                    env: vec![],
                 },
             ),
         ],
         matchups: vec![
-            TMatchup::new("nearest-greedy", 0, 1, 6),
-            TMatchup::new("greedy-hybrid", 1, 2, 4),
+            TMatchup::new("client_a-client_b", 0, 1, 6),
+            TMatchup::new("client_b-client_c", 1, 2, 4),
         ],
         map_count: 4,
         rounds_per_match: 8,
@@ -77,7 +77,7 @@ fn in_process_config() -> TournamentConfig {
 
 #[test]
 fn schedule_is_deterministic_and_seed_sensitive() {
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     let items = build_items(&cfg).expect("items");
     let again = build_items(&cfg).expect("items");
     assert_eq!(items, again, "identical item list for the same config");
@@ -86,7 +86,7 @@ fn schedule_is_deterministic_and_seed_sensitive() {
 
     // A different master seed changes the faction assignment (the whole
     // schedule derives from it).
-    let mut other = in_process_config();
+    let mut other = fixture_config();
     other.master_seed ^= 1;
     let other_items = build_items(&other).expect("items");
     let assignments: Vec<bool> = items.iter().map(|i| i.a_is_enl).collect();
@@ -106,7 +106,7 @@ fn schedule_is_deterministic_and_seed_sensitive() {
 
 #[test]
 fn schedule_balances_factions_exactly_per_matchup() {
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     let items = build_items(&cfg).expect("items");
     for matchup in &cfg.matchups {
         let mine: Vec<&TournamentItem> = items.iter().filter(|i| i.tag == matchup.tag).collect();
@@ -125,33 +125,20 @@ fn schedule_balances_factions_exactly_per_matchup() {
 
 #[test]
 fn benchmark_seed_set_is_disjoint_from_the_m6_tuning_pool() {
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     // The M9 Benchmark Seed Set uses a NEW domain (D80): formal scoring
     // samples are separated from the M6 tuning pool. Different labels (and
     // a master-bound payload) must give different values for equal k.
     assert_eq!(MAP_SEED_LABEL, b"ingress-arena-m9-benchmap");
-    assert_ne!(
-        MAP_SEED_LABEL,
-        arena_runner::batch::MAP_SEED_LABEL,
-        "the m9 map domain is not the m6 tuning domain"
-    );
-    let m6 = BatchConfig {
-        batch_id: "x".into(),
-        matchups: vec![],
-        map_count: 1,
-        master_seed: 0,
-        bucket_policy: BucketPolicy::Flat(0),
-        config: GameConfig::default(),
-    };
+    assert_ne!(MAP_SEED_LABEL, b"ingress-arena-m6-map");
     for k in 0u32..8 {
         assert_ne!(
             cfg.map_seed(k),
-            m6.map_seed(k),
-            "map seed k={k} must not collide with the m6 pool"
+            arena_runner::derive_seed(b"ingress-arena-m6-map", &k.to_le_bytes())
         );
     }
     // Master binding: the same k under a different master changes the map.
-    let mut other = in_process_config();
+    let mut other = fixture_config();
     other.master_seed ^= 0xABCD;
     assert_ne!(cfg.map_seed(0), other.map_seed(0));
 
@@ -171,24 +158,20 @@ fn benchmark_seed_set_is_disjoint_from_the_m6_tuning_pool() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn extracted_config_identity_equals_the_m6_value() {
+fn alpha_config_has_new_identity_and_legacy_encoding_is_unchanged() {
     let cfg = GameConfig::default();
-    let batch = BatchConfig {
-        batch_id: "identity".into(),
-        matchups: vec![],
-        map_count: 1,
-        master_seed: 1,
-        bucket_policy: BucketPolicy::Flat(0),
-        config: cfg,
-    };
-    let expected = batch.config_hash();
-    assert_eq!(expected, 0x9ead_0522_19fa_7ff3, "the frozen M6 identity");
+    let mut legacy = cfg;
+    legacy.recharge_amount = 15;
+    legacy.max_link_distance_cm = 200_000;
     assert_eq!(
-        arena_runner::tournament::config::config_identity(&cfg),
-        expected,
-        "the extracted helper is a pure refactor of BatchConfig::config_hash"
+        arena_runner::tournament::config::config_identity(&legacy),
+        0x9ead_0522_19fa_7ff3
     );
-    let tournament = in_process_config();
+    assert_ne!(
+        arena_runner::tournament::config::config_identity(&cfg),
+        0x9ead_0522_19fa_7ff3
+    );
+    let tournament = fixture_config();
     assert_eq!(
         tournament.config_identity(),
         arena_runner::tournament::config::config_identity(&tournament.config),
@@ -201,14 +184,16 @@ fn entrant_registry_rejects_duplicates_and_hashes_binaries() {
     let mut entrants = vec![
         entrant(
             "a",
-            EntrantKind::InProcess {
-                bot: BotKind::Random,
+            EntrantKind::External {
+                binary: std::env::current_exe().unwrap(),
+                env: vec![],
             },
         ),
         entrant(
             "a",
-            EntrantKind::InProcess {
-                bot: BotKind::Hybrid,
+            EntrantKind::External {
+                binary: std::env::current_exe().unwrap(),
+                env: vec![],
             },
         ),
     ];
@@ -268,20 +253,20 @@ fn entrant_registry_rejects_duplicates_and_hashes_binaries() {
 
 #[test]
 fn tournament_config_validation_rejects_defects() {
-    let mut cfg = in_process_config();
+    let mut cfg = fixture_config();
     assert!(cfg.validate().is_ok());
     cfg.matchups[0].count = 7;
     assert!(cfg.validate().is_err(), "odd counts break D55 balance");
-    let mut cfg = in_process_config();
+    let mut cfg = fixture_config();
     cfg.matchups[0].b = 9;
     assert!(cfg.validate().is_err(), "entrant id out of range");
-    let mut cfg = in_process_config();
+    let mut cfg = fixture_config();
     cfg.config.total_rounds = 5;
     assert!(
         cfg.validate().is_err(),
         "config.total_rounds must equal rounds_per_match"
     );
-    let mut cfg = in_process_config();
+    let mut cfg = fixture_config();
     cfg.entrants[1].name = cfg.entrants[0].name.clone();
     assert!(cfg.validate().is_err(), "names are unique");
 }
@@ -590,9 +575,12 @@ fn elo_four_match_hand_worked_sequence_is_pinned() {
     //   m4 A beats B : E=0.494243791589   A 1506 B 1494  (K=16)
     // A = entrant 0 = matchup entrant `a`; the result tag is derived from
     // the item's own faction assignment so the sequence is seed-proof.
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     let items = build_items(&cfg).expect("items");
-    let ab: Vec<&TournamentItem> = items.iter().filter(|i| i.tag == "nearest-greedy").collect();
+    let ab: Vec<&TournamentItem> = items
+        .iter()
+        .filter(|i| i.tag == "client_a-client_b")
+        .collect();
     let a_wins = |item: &TournamentItem| TournamentOutcome::Normal {
         result: if item.a_is_enl {
             MatchResult::EnlWin
@@ -646,9 +634,12 @@ fn elo_four_match_hand_worked_sequence_is_pinned() {
 
 #[test]
 fn technical_outcomes_never_move_ratings_or_counts() {
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     let items = build_items(&cfg).expect("items");
-    let ab: Vec<&TournamentItem> = items.iter().filter(|i| i.tag == "nearest-greedy").collect();
+    let ab: Vec<&TournamentItem> = items
+        .iter()
+        .filter(|i| i.tag == "client_a-client_b")
+        .collect();
     let mut table = EloTable::new(&EloConfig::default(), 3);
     let before: Vec<i64> = table.ratings().to_vec();
     table.apply(
@@ -779,7 +770,7 @@ fn seed_domains_are_disjoint_labels() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(sorted.len(), labels.len(), "four distinct domains");
-    let cfg = in_process_config();
+    let cfg = fixture_config();
     let items = build_items(&cfg).expect("items");
     for item in &items {
         assert_eq!(item.game_seed, cfg.game_seed(&item.tag, item.j));

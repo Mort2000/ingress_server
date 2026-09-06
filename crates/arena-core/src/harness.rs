@@ -448,7 +448,7 @@ mod tests {
         let reports: Vec<&RoundReport> = std::iter::once(&first).chain(rest.iter()).collect();
 
         // Round 2 (even => RES first): attack 100 -> 40, then ENL's
-        // defensive recharge heals 40 -> 55.
+        // defensive recharge heals 40 -> 60.
         assert_eq!(
             reports[1].execution_order[0].outcomes[0],
             crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Attacked {
@@ -464,11 +464,11 @@ mod tests {
             crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Recharged {
                 portal: p0,
                 hp_before: 40,
-                hp_after: 55
+                hp_after: 60
             })
         );
 
-        // Round 3: 55 - 60 clamps to 0 => neutralized; ENL auto-PASSes.
+        // Round 3: 60 - 60 reaches 0 => neutralized; ENL auto-PASSes.
         assert_eq!(
             reports[2].execution_order[0].outcomes[0],
             crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Attacked {
@@ -812,7 +812,7 @@ mod tests {
         );
 
         // Round 102: A0 on cooldown (101 -> 102 leaves 2 rounds); A1 remote-
-        // recharges P0 via the key path: hp 40 -> 55, key NOT consumed.
+        // recharges P0 via the key path: hp 40 -> 60, key NOT consumed.
         let r102 = &reports[101];
         assert_eq!(r102.execution_order.len(), 2);
         assert_eq!(
@@ -828,14 +828,14 @@ mod tests {
             crate::resolve::CommandOutcome::Ok(crate::resolve::CommandEffect::Recharged {
                 portal: p0,
                 hp_before: 40,
-                hp_after: 55,
+                hp_after: 60,
             })
         );
 
         // Exact final world.
         assert_eq!(
             state.portal(p0).map(|p| (p.owner, p.hp)),
-            Some((Owner::Enl, 55))
+            Some((Owner::Enl, 60))
         );
         assert_eq!(state.agent(AgentId(0)).map(|a| a.supply), Some(21));
         assert_eq!(state.agent(AgentId(1)).map(|a| a.supply), Some(21));

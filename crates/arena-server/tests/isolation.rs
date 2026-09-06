@@ -12,21 +12,17 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn target_bin(name: &str) -> PathBuf {
-    if let Ok(path) = std::env::var(format!("CARGO_BIN_EXE_{name}")) {
-        return PathBuf::from(path);
-    }
-    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!("binary {name} not built (run cargo build --workspace)");
+    // Use the same Cargo target directory/profile as this test binary.
+    // Looking in debug first can silently execute a stale fixture in release tests.
+    let executable = std::env::current_exe().expect("test executable");
+    let profile = executable.parent().unwrap().parent().unwrap();
+    let candidate = profile.join(name);
+    assert!(
+        candidate.is_file(),
+        "{} not built; run cargo build --workspace with this profile",
+        candidate.display()
+    );
+    candidate
 }
 
 fn temp(tag: &str) -> PathBuf {

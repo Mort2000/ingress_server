@@ -1,146 +1,89 @@
-# Ingress Arena
+# Ingress Arena Server
 
-**AI 代码竞技场 v0.1**：参赛者各自编写一段程序（Client），让它在整场比赛中自主决策，控制一个阵营的 Agent 与其他程序实时对抗。比赛发生在一张 6 km × 6 km 的二维整数地图上：
+AI 代码竞技场的官方规则与运行平台。参赛程序控制 ENL 或 RES 阵营，在 6 km × 6 km 的整数地图上占领 Portal、获取 Key、连接 Link，并以 Field 的面积和存续时间累计得分。默认地图 120 个 Portal，每方初始 3 个 Agent，比赛 500 轮。
 
-- 双方阵营 **ENL** 与 **RES** 各派出 3 个 Agent；
-- 占领 **Portal**（地图上 120 个固定节点）、获取 **Key**、搭建互不相交的 **Link**；
-- 三个同阵营 Portal 用 Link 闭合后自动形成 **Field**，每个 Field 以面积 × 时间累积得分；
-- 默认 500 轮（游戏内每分钟一轮），结束时累计分更高的一方获胜。
+Alpha 默认规则采用 **20 HP／1 Supply 充电、1500 m 最大链距**。本仓包含权威结算、服务器、参赛 SDK、外部比赛调度、审核、沙箱和回放工具。参赛策略位于同级独立 [bot 仓](../bot/README.md)，仅保留 Adaptive 参考选手。
 
-本仓库同时是**规则、引擎与平台**：包含规则文档、权威服务器与结算引擎、参赛方 SDK、示例参赛程序、锦标赛调度器和回放观看器。
+## 构建
 
-## 快速开始
-
-前置条件：Rust 工具链 1.98.0（由 `rust-toolchain.toml` 固定）。依赖按提交的 [`Cargo.lock`](./Cargo.lock) 经 cargo 镜像解析：
+需要 Linux 和 `rust-toolchain.toml` 固定的 Rust 1.98.0：
 
 ```sh
 rustup toolchain install 1.98.0 --profile minimal --component rustfmt
-cargo build --release
-cargo test --workspace
+cargo build --release --workspace --locked
+cargo test --release --workspace --locked
 ```
 
-## 回放观看器
-
-正式 [Tactical Replay 前端](./viewer/app/README.md) 支持在浏览器直接打开 / 拖入 `.iarp`，本地校验后显示 HUD、局部缩放、Agent 逐命令轨迹及当轮高亮、Supply / Key 库存与 Portal 双向关联。采用 Vite + TypeScript + Rust WASM，无需上传或预先导出 HTML。首次安装、运行和测试步骤见前端 README。
-
-
-[`replay-export`](./tools/replay-export/) 把一份胜负记录（`.iarp`）导出成自包含的观看页面：
+server 可独立构建和测试，不依赖 bot 仓。参考选手单独构建：
 
 ```sh
-cargo run --release -p replay-export -- <replay.iarp> -o out.html --faction enl
+cargo build --release --locked --manifest-path ../bot/Cargo.toml
 ```
-
-| 操作 | 效果 |
-|---|---|
-| 空格 / Play 按钮 | 播放 / 暂停 |
-| `←` / `→` | 逐轮步进 |
-| `Home` / `End` | 跳到开头 / 最后一轮 |
-| `+` / `−` | 加速 / 减速 |
-| 滑块 | 快速跳转到任意轮 |
-| `V` | 切换视角（ENL 视角 → RES 视角 → 公开视角 → 上帝视角） |
-
-导出前会先完整验证回放（逐轮状态哈希、得分增量、事件序列全部重算一致）；未通过验证的输入不会写出任何 HTML。`--faction enl|res` 是生产导出，只嵌入该阵营的私有信息；调参和分析可用 `--dev 1` 嵌入双方阵营。页面零外部请求；在 URL 后加 `?selftest=1` 打开可在页内运行数据自检。观看器格式详见 [`docs/design/viewer.md`](./docs/design/viewer.md)。
 
 ## 运行比赛
 
-[`arena-runner`](./crates/arena-runner/) 是比赛调度器，几条常用入口：
+一场 Adaptive 自对战，自动启动服务器和两个客户端并导出回放：
 
 ```sh
-cargo run --release -p arena-runner -- tournament-r1             # 冻结的 r1 锦标赛：3 个基线程序 × 14 场，沙箱内运行
-cargo run --release -p arena-runner -- tournament-inprocess-r1   # 同赛程但全部在进程内运行，速度快
-cargo run --release -p arena-runner -- conflict-stats            # 对归档回放做冲突结算统计
-cargo run --release -p arena-runner -- drop-reasons runs/m6-r1 runs  # 重放冻结批次逐场并按 DropReason 统计丢弃原因（先逐场校验状态哈希）
-cargo run --release -p arena-runner                              # 不带参数：运行冻结的平衡实验批次（m6-r1，10000 场）
+scripts/run-external-match.sh --match-id adaptive-demo --export dev
 ```
 
-产物写入 `runs/...`：每场含比赛记录 `replay.iarp`、服务器日志 `result.txt` / `journal.txt`、`meta.json`；锦标赛还生成 `index.tsv`、`ratings.tsv`（Q32.32 整数 Elo）与 `standings.txt`。每场的派系分配、种子、地图哈希与参赛程序溯源信息都记录在案。`runs/` 是本地实验证据、不入版本库，正式结论见 `docs/` 下的报告。
+默认客户端为 `../bot/target/release/adaptive-bot`，也可通过 `--client <binary>` 替换。产物在 `runs/external/adaptive-demo/`，每次使用新的 match id。脚本直接运行客户端；首个连接分配为 ENL，进程启动先后不保证阵营。两个客户端必须都在握手窗口内连接。
 
-**跑一场自己的比赛**（一条命令：一台服务器 + 两个客户端进程，可选自动导出观看页面）：
+用调度器运行不同选手，按赛程分配阵营并使用沙箱：
 
 ```sh
-scripts/run-external-match.sh --client target/release/hybrid-client \
-  --match-id hh-1 --config default --export dev
+target/release/arena-runner tournament --out runs/alpha-duel \
+  --client ../bot/target/release/adaptive-bot --client /absolute/path/to/your-bot \
+  --matches 2 --maps 1 --rounds 500 --seed 12648430 \
+  --sandbox target/release/sandbox-runner
 ```
 
-要点：
+`--client` 可重复，任意两名选手之间进行 `--matches` 指定的偶数场比赛；同一路径可登记两次自对战。`--workers` 默认 1；输出目录必须是新的。省略 `--sandbox` 可直接运行开发客户端。种子使用十进制。
 
-- 先连上的客户端视为 **ENL**，后连上的视为 **RES**；两者都必须在握手窗口内完成连接（`INITIAL_SPAWN_WINDOW + 5 s`，默认配置约 10 s）。脚本把它们在同一进程组内背靠背启动，因此在两个终端里手工分步启动很容易超时并得到 `setup_error`。
-- 种子一律十进制（如 `--seed 12648430`，即 `0xC0FFEE`）。
-- 产物在 `--out` 目录下按 match id 存放：`replay.iarp`、`journal.txt`、`result.txt`；`--export dev`（或 `enl` / `res`）会再把回放导出成自包含 HTML 供浏览器直接观看。
-- 脚本直接运行客户端二进制（不放沙箱）；正式赛事由 `arena-runner` 经 `sandbox-runner` 执行。
+锦标赛保存每场 IARP、日志、完整规则、地图、阵营映射、种子与二进制哈希，并输出赛程、排名和整数 Elo。正式锦标赛中的每一场单独计分；这里的偶数赛程用于两边覆盖。
 
-等价的手工命令（与脚本内部做法相同）：
+`--fast`（单场脚本中为 `--config fast`）使用 40 ms 决策窗口，只适用于协议冒烟。测试 Adaptive 时使用默认 1 s 窗口；缩短比赛可用 `--rounds 50`。
+
+## 编写与审核参赛程序
+
+从 [Adaptive 仓 README](../bot/README.md) 的 `main.rs → client.rs → adaptive.rs` 路径入手。客户端启动接口为 `<server-socket> <decimal-seed>`，由官方 SDK 接收阵营、地图与配置，读取本阵营观察并提交动作流。
+
+审核独立仓库：
 
 ```sh
-target/release/arena-server --socket /tmp/match.s --seed 12648430 \
-  --map-seed 7 --config default --match-id m-0001 --out runs/external &
-target/release/hybrid-client /tmp/match.s 12648430 &   # 先连者：ENL
-target/release/hybrid-client /tmp/match.s 12648430 &   # 后连者：RES
+target/release/audit --root . --participant ../bot
 ```
 
-## 游戏机制速览
+`--participant` 可重复。审核检查选手源码、依赖声明与各仓 Cargo.lock，合法的官方路径依赖指向本仓 `crates/*`／`tools/*` 成员。准入仍要求安全 Rust、获批依赖和官方 SDK 系统接口；沙箱说明见 [sandbox.md](docs/design/sandbox.md)。
 
-完整规则见 [`规则文档`](./docs/spec/rules/README.md)，这里只讲用户需要知道的部分：
+## 规则与回放
 
-```plantuml
-@startuml
-loop 每一轮
-  :Server 发布只读快照并通知双方;
-  :双方 Client 在决策窗口（默认 1 s）内提交动作流;
-  :Server 按确定性顺序结算并广播事件;
-end
-:比较累计得分，产生胜者;
-@enduml
+- [规则文档](docs/spec/rules/README.md) 是规则事实源；[配置表](docs/spec/rules/06-configuration.md) 列出默认值。
+- Attack／Recharge／Capture 共用每轮一个主动作槽；Move／Hack／Link／Transfer 按各自限制组合，移动预算每轮 200 m。Attack 不消耗 Supply，Recharge 消耗 1 Supply。
+- Field 每轮按面积计分，`score2` 为两倍面积的整数累积值；中和锚点会删除相关 Link 与 Field。
+- 权威结算、状态哈希和回放验证均使用确定性整数规则。客户端实际提交时间影响 Priority Bucket。
+
+[Tactical Replay](viewer/app/README.md) 可以直接打开 `.iarp`，无需上传。也可导出自包含 HTML：
+
+```sh
+target/release/replay-export <replay.iarp> -o out.html --dev 1
 ```
 
-- **Portal / Link / Field**：占领 Portal、持有对应 Key 即可在己方两个 Portal 之间连线（新线不许穿过其他 Portal、不许与既有线非法相交）；三线闭合自动形成 Field，无需显式声明。
-- **计分**：每个存在的 Field 每轮按面积累加得分，即「面积 × 时间」积分；`score2` 用 2×面积、128 位整数表示并逐轮公开，胜负只比较它。
-- **Agent 与动作**：主动作（Attack / Recharge / Capture）每轮每 Agent 一次；移动、连线、Hack、转移等辅动作按各自规则多次；每轮共 200 m 移动预算。攻防由 Supply 一补给驱动，Hack Portal 产生补给与 1–3 把 Key，每 Epoch（100 轮）重置次数与冷却并追加增援。
-- **公平性与可验证**：权威结算只用整数运算且完全确定；每轮结束对权威状态做 BLAKE3 状态哈希，回放任何一步都以哈希校验；参赛程序只能通过官方 SDK 观察世界，读取不到敌方私有状态，也读不到结算阶段的共享内存。提交时机按 Priority Bucket 计入调度，响应速度快有实际收益。
+导出前完整验证回放。`--dev 1` 包含双方私有信息，供开发复盘；阵营导出使用 `--dev 0 --faction enl` 或 `res`。
 
-## 编写参赛程序
+## 仓库导航
 
-v0.1 的唯一准入类型是 **Audited Client**：
-
-- 安全 Rust、只使用获批的冻结依赖闭包；源码与全部依赖可由主办方离线构建并接受白盒审计（[`tools/audit`](./tools/audit/)）；
-- 只能通过官方 [`arena-client-sdk`](./crates/arena-client-sdk/) 访问系统边界（只读共享内存快照、零拷贝观察视图、阶段门禁）；
-- 资源与文件系统隔离由沙箱强制（rlimits + landlock，禁网络等），见 [`tools/sandbox-runner`](./tools/sandbox-runner/) 与 [`docs/design/sandbox.md`](./docs/design/sandbox.md)；
-- 提交后即冻结，不允许重连或修改。
-
-入手路径：[`bots/`](./bots/) 下三个可运行示例（`nearest-client` / `hybrid-client` / `probe-client`）是冻结基线策略通过 SDK 的完整包装，`crates/arena-bots` 是实现这 5 个基线策略的库；复制一个示例改策略即可。
-
-## 仓库结构
-
-| 路径 | 用途 |
+| 路径 | 职责 |
 |---|---|
-| [`crates/arena-core`](./crates/arena-core/) | 权威游戏模型与结算（规则实现，全部整数运算） |
-| [`crates/arena-server`](./crates/arena-server/) | 比赛服务器：回合驱动、共享内存发布、计时、记录 |
-| [`crates/arena-client-sdk`](./crates/arena-client-sdk/) | 参赛方 API：只读观察、零拷贝视图 |
-| [`crates/arena-protocol`](./crates/arena-protocol/) | 协议与共享内存布局（FlatBuffers 兼容 schema，代码已提交） |
-| [`crates/arena-replay`](./crates/arena-replay/) | 回放编解码、规范编码、BLAKE3 状态哈希与验证 |
-| [`crates/arena-runner`](./crates/arena-runner/) | 批量调度、锦标赛、统计、Elo 排名 |
-| [`crates/arena-bots`](./crates/arena-bots/) | 5 个内置基线策略（自博弈与基准） |
-| [`bots/`](./bots/) | 3 个示例参赛程序 |
-| [`viewer/`](./viewer/) | 正式 Vite 前端（`app/`）及原有自包含导出页面资源 |
-| [`tools/`](./tools/) | 审计、溯源、沙箱、回放导出等 CLI 工具 |
-| [`docs/`](./docs/) | 里程碑进度、验收、报告与决策记录 |
-| [`scripts/`](./scripts/) | 协议再生成、一键外部比赛等脚本 |
-| [`docs/spec/`](./docs/spec/) | 规则与 MVP 方案文档集 |
+| [crates/arena-core](crates/arena-core/) | 权威游戏模型、规则结算与通用测试 Harness |
+| [crates/arena-server](crates/arena-server/) | 实时服务器、共享内存、计时和比赛记录 |
+| [crates/arena-client-sdk](crates/arena-client-sdk/) | 参赛接口与合法观察 |
+| [crates/arena-protocol](crates/arena-protocol/) | 协议及共享内存布局 |
+| [crates/arena-replay](crates/arena-replay/) | 回放编解码、哈希与验证 |
+| [crates/arena-runner](crates/arena-runner/) | 外部选手比赛调度、归档与排名 |
+| [tools](tools/) | 审核、沙箱、溯源、回放导出；probe-client 仅是协议故障测试夹具 |
+| [viewer](viewer/) | 回放前端与导出资源 |
+| [docs](docs/README.md) | 规则、设计、进度和历史报告 |
 
-## 文档导航
-
-| 文档 | 内容 |
-|---|---|
-| [规则文档](docs/spec/rules/README.md) | 游戏规则唯一事实源（按领域分章，编号 `R-*`） |
-| [MVP 方案](docs/spec/mvp/README.md) | 分阶段实现方案与里程碑 M1–M10 |
-| [`CONTEXT.md`](./CONTEXT.md) | 统一术语表（Faction / Agent / Portal / Link / Field …） |
-| [ADR 索引](docs/adr/README.md) | 每条决策的取舍记录 |
-| [进度记录](docs/progress.md) | 里程碑日志与冻结的决策清单 |
-| [MVP 验收](docs/reports/acceptance-mvp.md) | 验收结论与已知残余风险 |
-| [r1 锦标赛报告](docs/reports/tournament-r1.md) | 首个排名锦标赛的结果与溯源 |
-| [平衡性报告](docs/balance/balance-report-r1.md) | 10000 场自博弈的平衡分析 |
-| [观看器](docs/design/viewer.md)、[沙箱](docs/design/sandbox.md)、[构建溯源](docs/design/build-provenance.md) | 观看器格式、隔离机制、可复现构建 |
-
-## 当前状态
-
-v0.1 MVP（M0–M10）已交付，全部测试在 debug 与 release 下通过。验收结论与**已知残余风险**（如平衡调参轮尚未执行、cgroup v2 未在本机委派等）见 [`docs/reports/acceptance-mvp.md`](./docs/reports/acceptance-mvp.md) 末节。
+旧内置策略、策略消融驱动及 `balance-*`／`tournament-*-r1` 冻结命令已退出当前源码。历史报告和配置保留原样，复现应检出对应历史提交；当前布局及规则采用依据见 [Alpha 迁移记录](docs/design/alpha-reference.md)。

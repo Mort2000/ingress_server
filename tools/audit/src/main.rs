@@ -1,41 +1,51 @@
-//! audit CLI: runs the white-box audit over the participants of a
-//! repository and exits 0 (PASS) / 1 (FAIL).
-//!
-//! ```text
-//! audit [--root <repo>] [--participants bots/*] [--operators crates/*,tools/*]
-//! ```
-
+//! Audit independently checked-out participants against the official SDK workspace.
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-fn main() {
-    let mut root = std::env::current_dir().expect("cwd");
+const USAGE: &str =
+    "Usage: audit [--root <server-repo>] --participant <bot-repo> [--participant <another-repo>]";
+
+fn execute() -> Result<bool, String> {
+    let mut root = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut participants = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
+        if flag == "--help" || flag == "-h" {
+            println!("{USAGE}");
+            return Ok(true);
+        }
+        let value = args
+            .next()
+            .ok_or_else(|| format!("{flag} requires a path"))?;
         match flag.as_str() {
-            "--root" => root = PathBuf::from(args.next().unwrap_or_default()),
-            other => {
-                eprintln!("unknown flag {other:?}");
-                std::process::exit(1);
-            }
+            "--root" => root = PathBuf::from(value),
+            "--participant" => participants.push(PathBuf::from(value)),
+            _ => return Err(format!("unknown option {flag:?}\n{USAGE}")),
         }
     }
-    let participants = audit::participant_dirs(&root);
-    let operators = audit::operator_dirs(&root);
     if participants.is_empty() {
-        eprintln!(
-            "audit: no participant crates found under {}",
-            root.join("bots").display()
-        );
-        std::process::exit(1);
+        return Err(USAGE.into());
     }
-    // The frozen allowlist must equal the real external closure.
-    if let Err(mismatch) = audit::allowlist_matches_lock(&root) {
-        eprintln!("audit: {mismatch}");
-        std::process::exit(1);
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    audit::allowlist_matches_lock(&root)?;
+    for participant in &mut participants {
+        *participant = participant
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        audit::participant_lock_is_allowed(participant)?;
     }
-    let report = audit::run(&root, &participants, &operators);
+    let report = audit::run(&root, &participants, &audit::operator_dirs(&root));
     print!("{}", report.render());
-    if !report.pass() {
-        std::process::exit(1);
+    Ok(report.pass())
+}
+
+fn main() -> ExitCode {
+    match execute() {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("audit: {error}");
+            ExitCode::FAILURE
+        }
     }
 }

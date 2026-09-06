@@ -13,9 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use arena_bots::bot::BotKind;
 use arena_core::config::GameConfig;
-use arena_core::types::{Coord, Faction};
 use arena_runner::tournament::archive::{
     index_record, index_records_to_tsv, parse_index_tsv, parse_ratings_tsv, parse_tournament_json,
     tournament_json_text,
@@ -25,9 +23,7 @@ use arena_runner::tournament::entrant::{
     Entrant, EntrantKind, EntrantProvenance, compute_binary_hash,
 };
 use arena_runner::tournament::outcome::{Stage, TournamentOutcome};
-use arena_runner::tournament::report;
-use arena_runner::tournament::run::{run_external_tournament, run_inprocess_tournament};
-use arena_runner::tournament::schedule::build_items;
+use arena_runner::tournament::run::run_external_tournament;
 use arena_runner::tournament::write_tournament_artifacts;
 
 /// Serializes the live-process tests within this binary: each spawns a
@@ -50,18 +46,17 @@ fn skip_live() -> bool {
 }
 
 fn target_bin(name: &str) -> PathBuf {
-    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!("binary {name} not built (run cargo build --workspace)");
+    // Use the same Cargo target directory/profile as this test binary.
+    // Looking in debug first can silently execute a stale fixture in release tests.
+    let executable = std::env::current_exe().expect("test executable");
+    let profile = executable.parent().unwrap().parent().unwrap();
+    let candidate = profile.join(name);
+    assert!(
+        candidate.is_file(),
+        "{} not built; run cargo build --workspace with this profile",
+        candidate.display()
+    );
+    candidate
 }
 
 fn external_entrant(name: &str, bin: &str, env: &[(&str, &str)]) -> Entrant {
@@ -390,17 +385,17 @@ fn external_tournament_gate_r1_shape_completes_and_ranks() {
         return;
     }
     let _live = live_slot();
-    let nearest = external_entrant("nearest", "nearest-client", &[]);
-    let hybrid = external_entrant("hybrid", "hybrid-client", &[]);
+    let client_a = external_entrant("client_a", "probe-client", &[]);
+    let client_c = external_entrant("client_c", "probe-client", &[]);
     let probe = external_entrant("probe", "probe-client", &[("PROBE_MODE", "valid")]);
     let cfg = TournamentConfig {
         name: "gate-r1".into(),
         master_seed: 0x006D_3600_0000_00F1,
-        entrants: vec![nearest, hybrid, probe],
+        entrants: vec![client_a, client_c, probe],
         matchups: vec![
-            TMatchup::new("nearest-hybrid", 0, 1, 6),
-            TMatchup::new("nearest-probe", 0, 2, 4),
-            TMatchup::new("hybrid-probe", 1, 2, 4),
+            TMatchup::new("client_a-client_c", 0, 1, 6),
+            TMatchup::new("client_a-probe", 0, 2, 4),
+            TMatchup::new("client_c-probe", 1, 2, 4),
         ],
         map_count: 4,
         rounds_per_match: 24,
@@ -422,14 +417,8 @@ fn external_tournament_gate_r1_shape_completes_and_ranks() {
     assert_eq!(records.len(), run.items.len());
     for outcome in &run.outcomes {
         assert!(
-            !matches!(
-                outcome,
-                TournamentOutcome::Unscored {
-                    stage: Stage::RunnerFault,
-                    ..
-                }
-            ),
-            "no unhandled runner fault: {outcome:?}"
+            matches!(outcome, TournamentOutcome::Normal { .. }),
+            "healthy protocol fixtures must finish normally with proven faction attribution: {outcome:?}"
         );
     }
     // Balance per matchup (D55 through the whole external path).
@@ -512,7 +501,7 @@ fn tournament_json_echo_round_trips_and_records_provenance() {
         return;
     }
     let _live = live_slot();
-    let nearest = external_entrant("nearest", "nearest-client", &[]);
+    let client_a = external_entrant("client_a", "probe-client", &[]);
     let probe = external_entrant(
         "probe",
         "probe-client",
@@ -520,8 +509,8 @@ fn tournament_json_echo_round_trips_and_records_provenance() {
     );
     let cfg = external_config(
         "echo",
-        vec![nearest, probe],
-        vec![TMatchup::new("nearest-probe", 0, 1, 2)],
+        vec![client_a, probe],
+        vec![TMatchup::new("client_a-probe", 0, 1, 2)],
         3,
         ClientSandbox::Off,
         15_000,
@@ -550,7 +539,7 @@ fn tournament_json_echo_round_trips_and_records_provenance() {
     }
     // Entrants: kinds, env pairs, and provenance literals verbatim.
     assert_eq!(echo.entrants.len(), 2);
-    assert_eq!(echo.entrants[0].name, "nearest");
+    assert_eq!(echo.entrants[0].name, "client_a");
     assert_eq!(
         echo.entrants[1].kind,
         EntrantKind::External {
@@ -742,181 +731,6 @@ fn name_of(
 }
 
 // ---------------------------------------------------------------------------
-// (14) In-process tournament + the crash seam.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn inprocess_tournament_archives_and_verifies_every_replay() {
-    let cfg = TournamentConfig {
-        name: "inproc-test".into(),
-        master_seed: 0x006D_3600_0000_0093,
-        entrants: vec![
-            Entrant {
-                name: "nearest".into(),
-                kind: EntrantKind::InProcess {
-                    bot: BotKind::NearestPortal,
-                },
-                provenance: EntrantProvenance::in_process(arena_bots::bot::BOT_VERSION),
-            },
-            Entrant {
-                name: "greedy".into(),
-                kind: EntrantKind::InProcess {
-                    bot: BotKind::GreedyField,
-                },
-                provenance: EntrantProvenance::in_process(arena_bots::bot::BOT_VERSION),
-            },
-            Entrant {
-                name: "hybrid".into(),
-                kind: EntrantKind::InProcess {
-                    bot: BotKind::Hybrid,
-                },
-                provenance: EntrantProvenance::in_process(arena_bots::bot::BOT_VERSION),
-            },
-        ],
-        matchups: vec![
-            TMatchup::new("nearest-greedy", 0, 1, 2),
-            TMatchup::new("greedy-hybrid", 1, 2, 2),
-        ],
-        map_count: 2,
-        rounds_per_match: 60,
-        config: {
-            let mut config = GameConfig::default();
-            config.total_rounds = 60;
-            config
-        },
-        elo: EloConfig::default(),
-        concurrency: 2,
-        sandbox: ClientSandbox::Off,
-        per_match_budget_ms: 30_000,
-    };
-    let root = temp_root("inproc");
-    let run = run_inprocess_tournament(&cfg, &root).expect("in-process tournament");
-    write_tournament_artifacts(&cfg, &run, &root, None).expect("archive");
-
-    assert_eq!(run.items.len(), 4, "two matchups x two matches");
-    for outcome in &run.outcomes {
-        assert!(
-            outcome.elo_relevant(),
-            "the frozen M6 bots never crash: {outcome:?}"
-        );
-        match outcome {
-            TournamentOutcome::Normal {
-                rounds_completed, ..
-            } => {
-                assert_eq!(*rounds_completed, 60);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-    // Every replay decodes and replays to identical per-round + final
-    // hashes (the M5 property through the tournament path).
-    for item in &run.items {
-        let bytes = std::fs::read(
-            root.join("matches")
-                .join(format!("m{}", item.index))
-                .join("replay.iarp"),
-        )
-        .expect("in-process IARP archived");
-        let file = arena_replay::replay::decode_log(&bytes).expect("decodes");
-        let replayed = arena_replay::replay::replay(&file).expect("replays");
-        assert_eq!(replayed.rounds_completed, 60);
-        let outcome = &run.outcomes[item.index as usize];
-        let TournamentOutcome::Normal {
-            final_state_hash,
-            score_enl,
-            score_res,
-            ..
-        } = outcome
-        else {
-            panic!()
-        };
-        assert_eq!(replayed.final_state_hash, *final_state_hash);
-        assert_eq!(replayed.final_scores, (*score_enl, *score_res));
-    }
-    // Ratings moved and the archive is consistent.
-    let ratings =
-        parse_ratings_tsv(&std::fs::read_to_string(root.join("ratings.tsv")).unwrap()).unwrap();
-    assert_eq!(ratings.len(), 4);
-    let splits = report::faction_splits(&cfg, &run.items, &run.outcomes);
-    let played_of = |name: &str| -> u64 {
-        splits
-            .iter()
-            .find(|split| split.name == name)
-            .map(|split| split.enl_played() + split.res_played())
-            .unwrap_or(0)
-    };
-    // nearest: 2, greedy: 2 + 2 = 4, hybrid: 2 — the scheduled share.
-    assert_eq!(played_of("nearest"), 2);
-    assert_eq!(played_of("greedy"), 4);
-    assert_eq!(played_of("hybrid"), 2);
-    // In-process provenance ids round-trip through index.tsv.
-    let records =
-        parse_index_tsv(&std::fs::read_to_string(root.join("index.tsv")).unwrap()).unwrap();
-    assert!(
-        records
-            .iter()
-            .all(|record| record.prov_a.starts_with("in-process:"))
-    );
-
-    // The crash seam: a panicking strategy is Unscored(RunnerFault) and
-    // the same wrapper never masquerades it as a score result.
-    struct PanicStrategy;
-    impl arena_core::harness::RoundStrategy for PanicStrategy {
-        fn submit_round(
-            &mut self,
-            _observation: &arena_core::observe::Observation,
-        ) -> Vec<arena_core::harness::AgentSubmission> {
-            panic!("entrant bug");
-        }
-    }
-    struct IdleStrategy;
-    impl arena_core::harness::RoundStrategy for IdleStrategy {
-        fn submit_round(
-            &mut self,
-            _observation: &arena_core::observe::Observation,
-        ) -> Vec<arena_core::harness::AgentSubmission> {
-            Vec::new()
-        }
-    }
-    let items = build_items(&cfg).unwrap();
-    let map = arena_runner::tournament::schedule::map_pool(&cfg).unwrap();
-    let spawns = |faction: Faction| {
-        let (enl_roster, res_roster) = arena_core::state::GameState::initial_roster(&cfg.config);
-        let roster = if faction == Faction::Enl {
-            &enl_roster
-        } else {
-            &res_roster
-        };
-        arena_core::spawn::validate_initial_spawn_set(
-            roster,
-            &roster
-                .iter()
-                .map(|&id| (id, Coord::new(1, 1)))
-                .collect::<Vec<_>>(),
-            &cfg.config,
-        )
-        .unwrap()
-    };
-    let result = arena_runner::tournament::exec_inprocess::run_item_inprocess_with(
-        &items[0],
-        &cfg,
-        &map[items[0].map_index as usize],
-        &spawns(Faction::Enl),
-        &spawns(Faction::Res),
-        Box::new(PanicStrategy),
-        Box::new(IdleStrategy),
-    );
-    match result.outcome {
-        TournamentOutcome::Unscored { stage, reason } => {
-            assert_eq!(stage, Stage::RunnerFault);
-            assert!(reason.contains("panicked"), "{reason}");
-        }
-        other => panic!("a crash never scores: {other:?}"),
-    }
-    assert!(result.replay_bytes.is_empty());
-}
-
-// ---------------------------------------------------------------------------
 // Regression: a RELATIVE archive root must work under the sandbox (the
 // sandbox sets the client cwd to the scratch dir; before the fix every
 // client died with ENOENT on the relative socket path and the whole
@@ -980,12 +794,12 @@ fn normal_external_matches_prove_the_served_faction_assignment() {
         return;
     }
     let _live = live_slot();
-    let nearest = external_entrant("nearest", "nearest-client", &[]);
+    let client_a = external_entrant("client_a", "probe-client", &[]);
     let probe = external_entrant("probe", "probe-client", &[("PROBE_MODE", "valid")]);
     let cfg = external_config(
         "connect-proof",
-        vec![nearest, probe],
-        vec![TMatchup::new("nearest-probe", 0, 1, 2)],
+        vec![client_a, probe],
+        vec![TMatchup::new("client_a-probe", 0, 1, 2)],
         6,
         ClientSandbox::Off,
         15_000,

@@ -300,8 +300,13 @@ fn tree_holds_connected_socket(pid: u32) -> bool {
 /// ENL client's — and [`verify_accept_order`] then proves it from the
 /// server's own accept record. Bounded by the REMAINING match budget
 /// (never a fixed constant).
-fn wait_for_enl_connect(child: &mut Child, deadline: Instant) -> bool {
+fn wait_for_enl_connect(
+    child: &mut Child,
+    deadline: Instant,
+    observed_pids: &mut BTreeSet<u32>,
+) -> bool {
     loop {
+        observed_pids.extend(tree_pids(child.id()));
         if tree_holds_connected_socket(child.id()) {
             return true;
         }
@@ -460,13 +465,7 @@ fn play(
     let mut res_child_pid: Option<u32> = None;
     for (side, entrant_id) in enl_first {
         let entrant = cfg.entrant(entrant_id);
-        let crate::tournament::entrant::EntrantKind::External { binary, env } = &entrant.kind
-        else {
-            return fault(
-                format!("entrant {entrant_id} is not external"),
-                start.elapsed().as_millis() as u64,
-            );
-        };
+        let crate::tournament::entrant::EntrantKind::External { binary, env } = &entrant.kind;
         let seed = item.client_seed.to_string();
         let mut sandboxed = false;
         let mut command = match &cfg.sandbox {
@@ -522,9 +521,14 @@ fn play(
                     // The ENL side goes first: hold the RES client until
                     // this connection has COMPLETED (bounded by the
                     // REMAINING budget, never a fixed constant).
-                    wait_for_enl_connect(&mut child, deadline);
+                    // A direct client may finish before the first poll after
+                    // both spawns. Its Child pid is already authoritative evidence.
+                    enl_pids.insert(pid);
+                    wait_for_enl_connect(&mut child, deadline, &mut enl_pids);
                     enl_child_pid = Some(pid);
                 } else {
+                    res_pids.insert(pid);
+                    res_pids.extend(tree_pids(pid));
                     res_child_pid = Some(pid);
                 }
                 guard.children.push((child, side, sandboxed));
@@ -692,20 +696,12 @@ mod tests {
     /// Test-target binary lookup: the unit-test executable lives in
     /// `target/<profile>/deps/`, where the binary-oriented
     /// [`find_workspace_binary`] (current_exe sits in `target/<profile>/`)
-    /// cannot see the tools — resolve them from the crate dir instead
-    /// (the integration tests' `target_bin` convention).
+    /// cannot see the tools — resolve them from this test executable's
+    /// Cargo target directory and profile instead.
     fn test_bin(name: &str) -> Option<PathBuf> {
-        let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)?
-            .join("target");
-        for profile in ["debug", "release"] {
-            let candidate = target.join(profile).join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        None
+        let executable = std::env::current_exe().ok()?;
+        let candidate = executable.parent()?.parent()?.join(name);
+        candidate.is_file().then_some(candidate)
     }
 
     /// Any live process whose command line mentions `needle` (NUL-separated

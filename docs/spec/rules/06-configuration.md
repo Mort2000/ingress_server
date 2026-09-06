@@ -28,13 +28,13 @@
 | Agent | `MAX_SUPPLY` | 100 |
 | Portal | `PORTAL_MAX_HP` | 100 HP |
 | Portal | `ATTACK_DAMAGE` | 20 HP |
-| Portal | `RECHARGE_AMOUNT` | 15 HP |
+| Portal | `RECHARGE_AMOUNT` | 20 HP |
 | Portal | `RECHARGE_COST` | 1 Supply |
 | Hack | `HACK_SUPPLY_YIELD` | 1 Supply |
 | Hack | `HACK_KEY_YIELD` | `DiscreteUniform{1,2,3}` Keys |
 | Hack | `HACK_COOLDOWN` | 3 Round |
 | Hack | `HACK_LIMIT_PER_EPOCH` | 5 / `(agent, portal)` |
-| Link | `MAX_LINK_DISTANCE` | 2000 m |
+| Link | `MAX_LINK_DISTANCE` | 1500 m |
 | 动作 | `MAX_COMMANDS_PER_AGENT_ROUND` | 10 |
 | 协议防护 | `MAX_FRAME_PAYLOAD_BYTES` | 65,536 bytes（64 KiB，硬上限） |
 

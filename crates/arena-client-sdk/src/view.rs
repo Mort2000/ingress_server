@@ -210,7 +210,7 @@ impl<'round> ObservationView<'round> {
         Ok(out)
     }
 
-    /// Full deep conversion for wrapping arena-bots strategies (the
+    /// Full deep conversion for wrapping external client strategies (the
     /// external-client path reuses the frozen M6 algorithms verbatim).
     /// Walks every field — also the strongest verification of the buffer.
     pub fn to_observation(&self) -> Result<Observation, SdkError> {
@@ -354,7 +354,7 @@ impl<'spawn> MapView<'spawn> {
         Ok(out)
     }
 
-    /// Deep conversion to a `MapDefinition` for arena-bots strategies.
+    /// Deep conversion to a `MapDefinition` for external client strategies.
     pub fn to_map_definition(&self) -> Result<arena_core::map::MapDefinition, SdkError> {
         self.phase.assert_read_licensed()?;
         Ok(arena_core::map::MapDefinition::new(self.portals()?))

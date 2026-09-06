@@ -1,13 +1,13 @@
 #!/bin/sh
 # One-shot external match: arena-server plus two client processes in one
-# process group (first connect = ENL, second = RES), then optional replay
+# run (first connection = ENL; launch order does not guarantee faction), then replay
 # export. Both clients MUST connect inside the handshake window
 # (INITIAL_SPAWN_WINDOW + 5 s from server start — ~10 s in the default
 # config, ~5.4 s in fast), so they are launched back to back here; running
 # them from separate shells is what produces setup_error.
 #
 # usage: run-external-match.sh [options]
-#   --client <path>      client binary        (target/release/hybrid-client)
+#   --client <path>      client binary        (../bot/target/release/adaptive-bot)
 #   --match-id <id>      match id             (m-<ppid>-<pid>-<seed>)
 #   --seed <n>           game seed (decimal)  (12648430 = 0xC0FFEE)
 #   --map-seed <n>       map seed             (7)
@@ -24,7 +24,7 @@
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-CLIENT="$ROOT/target/release/hybrid-client"
+CLIENT="$ROOT/../bot/target/release/adaptive-bot"
 MATCH_ID=""
 SEED=12648430
 MAP_SEED=7
@@ -35,7 +35,7 @@ EXPORT=""
 
 usage() {
     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
-    exit 1
+    exit "${1:-1}"
 }
 
 while [ $# -gt 0 ]; do
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
         --rounds) ROUNDS=${2:?--rounds needs a value}; shift 2 ;;
         --out) OUT=${2:?--out needs a value}; shift 2 ;;
         --export) EXPORT=${2:?--export needs a value}; shift 2 ;;
-        -h|--help) usage ;;
+        -h|--help) usage 0 ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
 done
@@ -58,7 +58,7 @@ case "$EXPORT" in ""|dev|enl|res) ;; *) echo "--export must be dev, enl or res" 
 
 SERVER_BIN="$ROOT/target/release/arena-server"
 EXPORT_BIN="$ROOT/target/release/replay-export"
-[ -x "$CLIENT" ] || { echo "client not found or not executable: $CLIENT (run: cargo build --release)" >&2; exit 1; }
+[ -x "$CLIENT" ] || { echo "client not found or not executable: $CLIENT (run: cargo build --release --manifest-path ../bot/Cargo.toml)" >&2; exit 1; }
 [ -x "$SERVER_BIN" ] || { echo "arena-server not found: $SERVER_BIN (run: cargo build --release)" >&2; exit 1; }
 [ -z "$EXPORT" ] || [ -x "$EXPORT_BIN" ] || { echo "replay-export not found: $EXPORT_BIN (run: cargo build --release)" >&2; exit 1; }
 
@@ -98,7 +98,7 @@ wait "$RES_PID"; RES_RC=$?
 wait "$SERVER_PID"; SERVER_RC=$?
 
 trap - EXIT INT TERM
-echo "server exit=$SERVER_RC enl_client exit=$ENL_RC res_client exit=$RES_RC"
+echo "server exit=$SERVER_RC first_client exit=$ENL_RC second_client exit=$RES_RC"
 echo "artifacts in $OUT/$MATCH_ID"
 
 if [ "$SERVER_RC" -ne 0 ]; then

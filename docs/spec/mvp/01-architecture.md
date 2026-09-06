@@ -1,5 +1,7 @@
 # 架构与模块边界
 
+> 本文保留 MVP 实施时的架构布局。Alpha 已将参赛策略移至同级独立 bot 仓，server 不再包含 `arena-bots`／`bots/`；当前职责与接入方式见 [Alpha 迁移记录](../../design/alpha-reference.md) 和 [server README](../../../README.md)。
+
 ## P-ARCH-01 工程原则
 
 | 优先级 | 原则 | 约束 |

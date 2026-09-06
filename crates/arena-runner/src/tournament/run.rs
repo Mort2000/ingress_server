@@ -2,22 +2,18 @@
 //! run every item on `concurrency` scoped worker threads (stride
 //! partition over the item indices — the M6 pattern; execution order
 //! cannot influence records because every result lands in its indexed
-//! slot). Both paths write per-match artifacts under
+//! slot). Writes per-match artifacts under
 //! `<root>/matches/m<index>/` and hand the rest of the archive to
 //! `archive.rs`.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
-
-use arena_core::map::MapDefinition;
 
 use crate::tournament::config::TournamentConfig;
 use crate::tournament::elo::AppliedRating;
 use crate::tournament::exec_external::run_item_external;
-use crate::tournament::exec_inprocess::run_item_inprocess;
 use crate::tournament::outcome::TournamentOutcome;
-use crate::tournament::schedule::{TournamentError, TournamentItem, build_items, map_pool};
+use crate::tournament::schedule::{TournamentError, TournamentItem, build_items};
 
 /// Everything one completed tournament contributes (items in index
 /// order; results in the matching slots).
@@ -32,7 +28,7 @@ pub struct TournamentRun {
     pub budget_exceeded: Vec<bool>,
     /// Per match: whether the served factions provably matched the
     /// schedule (external: the ENL client's connection was observed
-    /// first, D61 accept order; in-process: true by construction).
+    /// first, D61 accept order; verified from accepted connections).
     pub connect_order_verified: Vec<bool>,
     /// Scored matches in schedule order (the Elo replay).
     pub ratings: Vec<AppliedRating>,
@@ -101,79 +97,6 @@ pub fn run_external_tournament(
                 for (side, json) in sandbox {
                     let _ = std::fs::write(match_dir.join(format!("sandbox_{side}.json")), json);
                 }
-            }
-        }
-    });
-    finish_run(
-        cfg,
-        items,
-        outcome_slots,
-        elapsed_slots,
-        replay_slots,
-        budget_slots,
-        connect_slots,
-        start.elapsed().as_millis(),
-        workers,
-    )
-}
-
-/// Runs every IN-PROCESS item, archiving each match's IARP bytes under
-/// `<root>/matches/m<index>/replay.iarp`.
-pub fn run_inprocess_tournament(
-    cfg: &TournamentConfig,
-    root: &Path,
-) -> Result<TournamentRun, TournamentError> {
-    let start = Instant::now();
-    let items = build_items(cfg)?;
-    let pool: Vec<Arc<MapDefinition>> = map_pool(cfg)?.into_iter().map(Arc::new).collect();
-    let matches_dir = root.join("matches");
-    std::fs::create_dir_all(&matches_dir)
-        .map_err(|error| TournamentError::Invalid(format!("matches dir: {error}")))?;
-    let workers = cfg.concurrency.min(items.len().max(1));
-    let mut outcome_slots = slots(items.len());
-    let mut elapsed_slots = slots(items.len());
-    let mut replay_slots = slots(items.len());
-    let mut budget_slots = slots(items.len());
-    let mut connect_slots = slots(items.len());
-    std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(workers);
-        for worker in 0..workers {
-            let items = &items;
-            let pool = &pool;
-            handles.push(scope.spawn(move || {
-                let mut ours = Vec::new();
-                let mut index = worker;
-                while index < items.len() {
-                    let item = &items[index];
-                    let map = Arc::clone(&pool[item.map_index as usize]);
-                    let result = run_item_inprocess(item, cfg, &map);
-                    ours.push((
-                        index,
-                        result.outcome,
-                        result.elapsed_ms,
-                        result.replay_bytes,
-                    ));
-                    index += workers;
-                }
-                ours
-            }));
-        }
-        for handle in handles {
-            let records = handle.join().expect("tournament worker panicked");
-            for (index, outcome, elapsed, replay_bytes) in records {
-                let item = &items[index];
-                let match_dir = matches_dir.join(format!("m{}", item.index));
-                let _ = std::fs::create_dir_all(&match_dir);
-                let replay_rel = (!replay_bytes.is_empty()).then(|| {
-                    std::fs::write(match_dir.join("replay.iarp"), &replay_bytes)
-                        .ok()
-                        .map(|()| "replay.iarp".to_string())
-                });
-                replay_slots[index] = replay_rel.flatten();
-                outcome_slots[index] = Some(outcome);
-                elapsed_slots[index] = Some(elapsed);
-                budget_slots[index] = Some(false);
-                connect_slots[index] = Some(true); // by construction
             }
         }
     });

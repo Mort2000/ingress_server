@@ -289,10 +289,8 @@ pub fn channel_pin(root: &Path) -> Option<String> {
 
 /// Default product set recorded by the build proof: the server,
 /// every participant client, and the operator tools.
-pub const DEFAULT_BINARIES: [&str; 12] = [
+pub const DEFAULT_BINARIES: [&str; 10] = [
     "arena-server",
-    "nearest-client",
-    "hybrid-client",
     "probe-client",
     "provenance",
     "audit",

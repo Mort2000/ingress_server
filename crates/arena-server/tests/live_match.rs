@@ -1,5 +1,5 @@
 //! P3-GATE acceptance (a) + (b): a full live match — server binary plus
-//! two REAL external client binaries (nearest-client, hybrid-client) —
+//! two real external protocol fixture processes —
 //! completes 500 rounds, both clients receive GAME_END, the normal result
 //! and IARP replay are written, and the external runtime is EQUIVALENT to
 //! the local simulator: the recorded IARP replays through arena-replay,
@@ -27,25 +27,17 @@ fn maybe_skip() {
 }
 
 fn target_bin(name: &str) -> PathBuf {
-    // Under `cargo test`, CARGO_BIN_EXE_<name> points at this package's
-    // own binaries; the client binaries live in bots/, so locate them in
-    // the shared target dir.
-    if let Ok(path) = std::env::var(format!("CARGO_BIN_EXE_{name}")) {
-        return PathBuf::from(path);
-    }
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    let target = Path::new(manifest)
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("target");
-    for profile in ["debug", "release"] {
-        let candidate = target.join(profile).join(name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    panic!("binary {name} not built (run cargo build --workspace)");
+    // Use the same Cargo target directory/profile as this test binary.
+    // Looking in debug first can silently execute a stale fixture in release tests.
+    let executable = std::env::current_exe().expect("test executable");
+    let profile = executable.parent().unwrap().parent().unwrap();
+    let candidate = profile.join(name);
+    assert!(
+        candidate.is_file(),
+        "{} not built; run cargo build --workspace with this profile",
+        candidate.display()
+    );
+    candidate
 }
 
 struct Match {
@@ -120,8 +112,8 @@ fn live_match_500_rounds_with_external_clients() {
     let total_rounds = 500;
     let mut m = start_match(total_rounds);
     let socket = m._socket.clone();
-    let c1 = spawn_client("nearest-client", &socket, 11);
-    let c2 = spawn_client("hybrid-client", &socket, 22);
+    let c1 = spawn_client("probe-client", &socket, 11);
+    let c2 = spawn_client("probe-client", &socket, 22);
     let (code1, out1) = client_exit_status(c1);
     let (code2, out2) = client_exit_status(c2);
     let server_status = m.server.wait().expect("server exits");
@@ -129,8 +121,8 @@ fn live_match_500_rounds_with_external_clients() {
 
     // Both external clients received GAME_END and reported the SAME
     // result line (outcome + rounds + scores).
-    assert_eq!(code1, Some(0), "nearest-client failed: {out1}");
-    assert_eq!(code2, Some(0), "hybrid-client failed: {out2}");
+    assert_eq!(code1, Some(0), "probe-client failed: {out1}");
+    assert_eq!(code2, Some(0), "probe-client failed: {out2}");
     assert!(out1.starts_with("outcome="), "{out1}");
     assert_eq!(out1, out2, "both clients saw the same GAME_END payload");
 
@@ -323,8 +315,8 @@ fn run_quick_live_match(tag: &str, rounds: u32) -> QuickMatch {
         assert!(Instant::now() < deadline, "socket never appeared");
         std::thread::sleep(Duration::from_millis(5));
     }
-    let mut c1 = spawn_client("nearest-client", &socket, 1);
-    let mut c2 = spawn_client("hybrid-client", &socket, 2);
+    let mut c1 = spawn_client("probe-client", &socket, 1);
+    let mut c2 = spawn_client("probe-client", &socket, 2);
     let _ = c1.wait().expect("client 1 exits");
     let _ = c2.wait().expect("client 2 exits");
     let status = server.wait().expect("server exits");

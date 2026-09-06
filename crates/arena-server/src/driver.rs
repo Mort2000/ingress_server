@@ -374,13 +374,16 @@ fn spawn_accept_loop(
                             Ok(half) => half,
                             Err(_) => continue,
                         };
-                        crate::conn::spawn_reader(slot, read_half, tx.clone());
                         if tx
                             .send(ConnEvent::Connected { conn: slot, stream })
                             .is_err()
                         {
                             return;
                         }
+                        // Publish the stream and peer identity before its reader
+                        // can enqueue a buffered CLIENT_HELLO. Otherwise handshake
+                        // completion may race ahead of registering the write half.
+                        crate::conn::spawn_reader(slot, read_half, tx.clone());
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         if Instant::now() >= handshake_deadline {

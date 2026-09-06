@@ -1,5 +1,7 @@
 # Sandbox: capability boundaries and resource isolation (M8 / P4)
 
+> Alpha 布局更新：参赛源码位于独立 bot 仓，通过 `audit --root <server> --participant <bot>` 审核；官方 path 依赖目标为 server 的 `crates/*`／`tools/*`，并检查选手自身的 Cargo.lock。原 `probe-client` 已移至 `tools/probe-client`。旧版本路径只表示历史布局，当前接入见 [Alpha 记录](alpha-reference.md)。
+
 Status: implemented (M8). This document is the honest enforcement map:
 what is technically enforced, what is audit-enforced, and what is
 explicitly NOT claimed.

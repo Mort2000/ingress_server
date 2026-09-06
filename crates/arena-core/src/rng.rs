@@ -143,7 +143,7 @@ impl RandomOracle {
 /// multiple of `n` not exceeding `2^32`, so `x % n` is unbiased for accepted
 /// words. Never plain `x % n` without rejection.
 ///
-/// Public since M6: local bots (arena-bots) draw their own stream randomness
+/// Public since M6: client strategies draw their own stream randomness
 /// through this same frozen mapping (D53) — visibility only, the mapping is
 /// part of the rule version and never changes.
 pub fn uniform_from_words<R: WordSource>(words: &mut R, n_exclusive: u32) -> u32 {

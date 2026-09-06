@@ -9,11 +9,7 @@ publish.workspace = true
 # faction observations, and emits ONE self-contained HTML file (inline
 # CSS/JS, embedded data, zero external requests, opens from file://).
 # Dependencies: arena-core + arena-replay workspace path deps only
-# (lockfile unchanged, D79 precedent); arena-bots is a dev-dep for the
-# fixture matches of the integration tests.
+# Integration tests use fixed command scripts, independent of contestant strategies.
 [dependencies]
 arena-core = { path = "../../crates/arena-core" }
 arena-replay = { path = "../../crates/arena-replay" }
-
-[dev-dependencies]
-arena-bots = { path = "../../crates/arena-bots" }
