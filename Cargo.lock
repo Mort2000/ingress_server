@@ -62,6 +62,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-viewer"
+version = "0.1.0"
+dependencies = [
+ "arena-core",
+ "arena-replay",
+]
+
+[[package]]
 name = "array-init-cursor"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -180,14 +188,6 @@ name = "provenance"
 version = "0.1.0"
 dependencies = [
  "blake3",
-]
-
-[[package]]
-name = "replay-export"
-version = "0.1.0"
-dependencies = [
- "arena-core",
- "arena-replay",
 ]
 
 [[package]]

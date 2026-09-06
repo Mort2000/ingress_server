@@ -253,15 +253,8 @@ links, fields, and per-round scores.*
   rule failure (D24), so every illegal action carries its rule reason —
   the conflict analysis (A-LATENCY) consumes exactly these per-command
   outcomes offline.
-- **Portal/link/field/score per round**: broadcast events per kind
-  (R-EVENT-01), `score2_delta` per round (R-SCORE-01), and the M10 viewer
-  renders the whole timeline (`tools/replay-export` + `viewer/`): O(1)
-  jump to any round, three view modes honoring R-VIS, integer-exact
-  score display, and a machine-tested consistency suite over the emitted
-  HTML (`docs/design/viewer.md`); committed live sample `viewer/sample.html`
-  (the real r1 m11 match).
-- Reports: `arena-replay` test suites (decode/replay/intake), the
-  replay-export suite, `docs/design/viewer.md`.
+- **Portal/link/field/score per round**: Tactical Replay 展示逐轮状态与整数精确得分；实现、视角语义及测试见 `docs/design/viewer.md`。
+- Reports: `arena-replay` 与 `arena-viewer` 测试，以及 `viewer/app/` 浏览器测试。
 
 ---
 
@@ -288,13 +281,8 @@ links, fields, and per-round scores.*
    them); `merge_order` panics on `bucket_ms == 0` by contract;
    `remove_links_incident` scans the whole links map (perf only);
    `InitialSpawns::apply` silently skips unknown ids when misapplied.
-6. **Viewer human-verified half** (D93): canvas rendering, keyboard feel,
-   and animation are checked by hand in a browser; no browser automation
-   exists or is claimed. The pure-data half is machine-tested, and the
-   M-final review fixes (speed-key direction, marker-safe assembly, JSON
-   depth cap) are pinned by Rust-side tests.
+6. **Viewer**: 当前 Tactical Replay 的自动化覆盖见 `viewer/app/README.md`。
 7. **runs/ is local evidence**: every experiment artifact under `runs/`
    is untracked; the tracked stand-ins are the committed docs
-   (`balance-report-r1.md`, `tournament-r1.md`, `sandbox.md`,
-   `viewer/sample.html`, withdrawn by D95) and the tests that re-verify the artifacts
+   (`balance-report-r1.md`, `tournament-r1.md`, `sandbox.md`) and the tests that re-verify the artifacts
    wherever they exist (M9 skip-on-fresh-clone convention).

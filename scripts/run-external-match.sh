@@ -1,40 +1,37 @@
 #!/bin/sh
 # One-shot external match: arena-server plus two client processes in one
-# run (first connection = ENL; launch order does not guarantee faction), then replay
-# export. Both clients MUST connect inside the handshake window
+# run, recording an IARP archive (first connection = ENL; launch order does
+# not guarantee faction). Both clients MUST connect inside the handshake window
 # (INITIAL_SPAWN_WINDOW + 5 s from server start — ~10 s in the default
 # config, ~5.4 s in fast), so they are launched back to back here; running
 # them from separate shells is what produces setup_error.
 #
 # usage: run-external-match.sh [options]
-#   --client <path>      client binary        (../bot/target/release/adaptive-bot)
+#   --client <path>      client binary        (../adaptive_bot/target/release/adaptive-bot)
 #   --match-id <id>      match id             (m-<ppid>-<pid>-<seed>)
 #   --seed <n>           game seed (decimal)  (12648430 = 0xC0FFEE)
 #   --map-seed <n>       map seed             (7)
 #   --config <preset>    default|fast         (default)
 #   --rounds <n>         rounds               (preset default: 500 / 10)
 #   --out <dir>          output root          (runs/external)
-#   --export <dev|enl|res> also export the replay to <out>/<match-id>/*.html
 #   -h
 #
 # Exit status: the server's (0 normal, 3/4 spawn forfeit, 6/7 client
-# forfeit, 9 setup error, 1 usage/io); 1 also when an export is requested
-# and fails.
+# forfeit, 9 setup error, 1 usage/io).
 
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-CLIENT="$ROOT/../bot/target/release/adaptive-bot"
+CLIENT="$ROOT/../adaptive_bot/target/release/adaptive-bot"
 MATCH_ID=""
 SEED=12648430
 MAP_SEED=7
 CONFIG=default
 ROUNDS=""
 OUT="$ROOT/runs/external"
-EXPORT=""
 
 usage() {
-    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-1}"
 }
 
@@ -47,20 +44,16 @@ while [ $# -gt 0 ]; do
         --config) CONFIG=${2:?--config needs a value}; shift 2 ;;
         --rounds) ROUNDS=${2:?--rounds needs a value}; shift 2 ;;
         --out) OUT=${2:?--out needs a value}; shift 2 ;;
-        --export) EXPORT=${2:?--export needs a value}; shift 2 ;;
         -h|--help) usage 0 ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
 done
 
 case "$CONFIG" in default|fast) ;; *) echo "--config must be default or fast" >&2; exit 1 ;; esac
-case "$EXPORT" in ""|dev|enl|res) ;; *) echo "--export must be dev, enl or res" >&2; exit 1 ;; esac
 
 SERVER_BIN="$ROOT/target/release/arena-server"
-EXPORT_BIN="$ROOT/target/release/replay-export"
-[ -x "$CLIENT" ] || { echo "client not found or not executable: $CLIENT (run: cargo build --release --manifest-path ../bot/Cargo.toml)" >&2; exit 1; }
+[ -x "$CLIENT" ] || { echo "client not found or not executable: $CLIENT (run: cargo build --release --manifest-path ../adaptive_bot/Cargo.toml)" >&2; exit 1; }
 [ -x "$SERVER_BIN" ] || { echo "arena-server not found: $SERVER_BIN (run: cargo build --release)" >&2; exit 1; }
-[ -z "$EXPORT" ] || [ -x "$EXPORT_BIN" ] || { echo "replay-export not found: $EXPORT_BIN (run: cargo build --release)" >&2; exit 1; }
 
 [ -n "$MATCH_ID" ] || MATCH_ID="m-$$-$SEED"
 SOCKET="/tmp/ingress-arena-$MATCH_ID.sock"
@@ -105,15 +98,4 @@ if [ "$SERVER_RC" -ne 0 ]; then
     exit "$SERVER_RC"
 fi
 
-# -- optional replay export -------------------------------------------------
-if [ -n "$EXPORT" ]; then
-    REPLAY="$OUT/$MATCH_ID/replay.iarp"
-    HTML="$OUT/$MATCH_ID/$MATCH_ID.html"
-    case "$EXPORT" in
-        dev) "$EXPORT_BIN" "$REPLAY" -o "$HTML" --dev 1 || exit 1 ;;
-        enl) "$EXPORT_BIN" "$REPLAY" -o "$HTML" --dev 0 --faction enl || exit 1 ;;
-        res) "$EXPORT_BIN" "$REPLAY" -o "$HTML" --dev 0 --faction res || exit 1 ;;
-    esac
-    echo "viewer: $HTML"
-fi
 exit 0

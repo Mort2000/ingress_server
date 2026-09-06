@@ -209,11 +209,12 @@ R255 不补血时仍能结算该轮；在“一次性补血、不预支后续维
 700,000 Agent-round、494,504 次授予，无授予后空提交、无原地 Move、无零恢复 Recharge。
 实际命令 Drop 仍如实记录，未混入成功作用量，也未以零 Drop 作为验收承诺。
 
-`cargo test --workspace --release --exclude replay-export --offline --no-fail-fast -- --test-threads=1`
+Clippy 在该历史验证中未运行成功，固定工具链未安装该组件。
+
+当时可构建包的 release、offline、串行测试：
 最终 **692 项通过、0 失败、1 项既有 doctest 忽略**，其中新增 6 项 r2.4 回归；Python
 分析器另有 4 项测试通过。首次并行工作区测试出现 SDK 连接/读帧失败，相同代码的
 完整串行重跑通过；失败与重跑日志均保留，未把它伪装成策略修复。
-`replay-export` 沿用既有查看器资源缺失限制，明确排除；Clippy 未安装，不记为通过。
 本轮修改的 Rust 文件格式检查及 `git diff --check` 通过。
 运行冻结后只追加测试、分析/报告和非行为性说明/格式调整，没有再改实验策略轨迹。
 

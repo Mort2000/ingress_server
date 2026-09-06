@@ -19,11 +19,11 @@
 
 另外在开发页面读取现有 500 轮 / 120 Portal 对局，约 0.4 秒完成读取与校验；跳至 R350 后可见 12 个 Agent，未产生浏览器运行错误。该耗时为本机单次观察，不是性能保证。
 
-## 检查结果
+## 首次前端实现的检查结果
 
 - `npm run build`：WASM、TypeScript 与 Vite 生产构建通过。
 - `npm test`：4 项 Chromium 端到端测试通过。
-- `cargo test -p replay-export`：10 项单元测试、16 项集成测试通过。
+- 数据处理现由 `arena-viewer` 提供；当前验证命令见前端 README。
 - 根工作区回归按包完成验证：首次 `cargo test --workspace` 中包括耗时较长的 `arena-runner` 全部通过；修复下述依赖集成问题后运行 `cargo test --workspace --exclude arena-runner` 验证其余包，并对沙箱用例单独复核。
 - `cargo test -p audit --test audit`：最终目录布局下 24 项通过。
 - `cargo test -p sb-fixtures --test enforcement -- --test-threads=1`：释放本次 Vite 预览进程后 11 项全部通过。
@@ -32,3 +32,13 @@
 - Standards / Spec 双轴审查完成，发现的重复高亮调度与设计缺漏已修正。
 
 首次全量运行不是单次全绿：WASM 依赖加入根 lockfile 曾触发冻结白名单检查；现将桥接独立到 `viewer/wasm`，根 `Cargo.toml` 和 `Cargo.lock` 与开发前一致，保留原审计闭包。并行测试时沙箱出现过 `Cannot fork` 和内存测试超时；串行复核、释放预览进程后全部通过，沙箱实现和限制未修改。
+
+## 工作区清理后的验证
+
+正式前端的数据处理现位于 `crates/arena-viewer/`，WASM 直接调用该库。旧页面资源和 HTML 导出入口已移除。
+
+- `cargo test -p arena-viewer --locked`：10 项单元测试、7 项集成测试通过。
+- `npm run build`：WASM、TypeScript 与 Vite 生产构建通过。
+- Rust 全工作区经构建、串行测试与定向补跑，462 项不同测试均有通过记录，1 项文档示例忽略。首次实时测试使用了过期客户端二进制；重建后通过。沙箱测试缓存还保留工作区迁移前的绝对路径；清理并重新构建 `sandbox-runner`、`sb-fixtures` 后，两组测试共 21 项通过。这不是单次全仓测试全绿。
+- `npm test`：3 项通过、1 项失败。失败位于 `tests/replay.spec.ts:270`，Agent 的 `key-ring` 圆环遮挡 Portal 文本，导致悬停超时；WASM 与原生数据一致性检查通过。此次清理未修改前端交互代码。
+- Rust 格式、脚本语法和 `git diff --check` 通过。

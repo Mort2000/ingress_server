@@ -1,21 +1,6 @@
-//! D92 mini-JSON: a std-only compact writer plus a strict parser for the
-//! embedded viewer payload and the optional `meta.json` echo.
-//!
-//! The M9 hand-rolled mini-JSON precedent (`arena-runner` tournament
-//! archive) stays untouched; this crate owns its own copy because the
-//! viewer payload has one extra, load-bearing requirement: besides the
-//! JSON-mandated escapes the WRITER also escapes `<`, `>`, and `&` (as
-//! `<`, `>`, `&`), so a hostile string inside a
-//! `meta.json` can never contain the literal bytes `</script>` and break
-//! out of the page's `<script>` element. The emitted document is COMPACT
-//! (no whitespace anywhere); the parser accepts whitespace between tokens
-//! (real `meta.json` files are pretty-printed).
-//!
-//! Numbers are INTEGERS ONLY: the parser rejects `.`/`e`/`E` outright
-//! (D91 — floats never enter the embedded data; `score2` travels as
-//! decimal strings where u128 exactness matters). Every integer the
-//! exporter emits fits in i64 by construction (ids/coords/hp/supply are
-//! u32/i32, `area2` < 2^53 by the D10 bounds).
+//! Compact JSON writer and strict parser for Tactical Replay payloads.
+//! Numbers are integers only; u128 scores travel as decimal strings.
+//! The writer additionally escapes angle brackets and ampersands.
 
 use std::fmt;
 
@@ -49,7 +34,7 @@ impl Json {
         Json::Int(value)
     }
 
-    /// 64-bit unsigned constructor (values the exporter emits fit i64).
+    /// 64-bit unsigned constructor (viewer values fit i64).
     pub fn uint(value: u64) -> Json {
         Json::Int(value as i64)
     }

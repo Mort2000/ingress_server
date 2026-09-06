@@ -11,7 +11,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "playwright test",
     "format": "prettier --write \"src/*.ts\" src/style.css \"tests/*.ts\" \"*.ts\" \"*.json\" \"scripts/*.mjs\" index.html",
-    "fixtures": "cargo test -p replay-export hud_telemetry_and_browser_fixtures"
+    "fixtures": "cargo test -p arena-viewer hud_telemetry_and_browser_fixtures"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.0",

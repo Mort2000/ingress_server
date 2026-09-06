@@ -43,7 +43,7 @@ npm run dev
 
 ## 数据与验证
 
-原始 IARP 不保存逐轮私有完整快照。Worker 通过 `viewer/wasm` 的 wasm-bindgen 边界调用现有 `replay-export::build_payload`，复用 Rust 引擎完成解码、逐轮哈希 / 事件 / 得分 / 调度结果验证，再生成每轮状态。未通过验证的文件显示错误，保留上一份已载入回放；重新选择文件会终止上一 Worker，避免结果串场。零轮及技术性终止归档显示实际完成轮数和归档结果。
+原始 IARP 不保存逐轮私有完整快照。Worker 通过 `viewer/wasm` 的 wasm-bindgen 边界调用`arena_viewer::data::build_payload`，复用 Rust 引擎完成解码、逐轮哈希 / 事件 / 得分 / 调度结果验证，再生成每轮状态。未通过验证的文件显示错误，保留上一份已载入回放；重新选择文件会终止上一 Worker，避免结果串场。零轮及技术性终止归档显示实际完成轮数和归档结果。
 
 ```plantuml
 @startuml
@@ -63,7 +63,7 @@ UI -> UI: 构建索引、选择回合、绘制 HUD
 
 数据扩展在既有 `ingress-viewer-v1` 上增加 `keys[faction][roundIndex][agentId]` 与 `commands[faction][roundIndex][agentId]`。commands 保存最终 slot 状态、执行顺序 / bucket / seq、命令参数与结果，以及成功移动的 `from`、`to`、`cost_cm`。下标 0 对应第一轮结束；R0 的位置和 Supply 来自 Header。Key 通过权威 `Observation` 读取，命令使用第一份可定位提交及已验证 Resolver 报告；不从 Move 意图或公开事件猜测库存。
 
-当前页面是归档分析工具，IARP 包含双方私有信息。阵营 / PUBLIC 按显示视角过滤，不能据此把原始 IARP 当作保密分发格式。需要仅向一方分发时继续使用仓库现有 `replay-export --faction enl|res`；新增 keys / commands 同样遵守该导出的阵营过滤。
+当前页面是归档分析工具，IARP 包含双方私有信息。阵营 / PUBLIC 按显示视角过滤，不能据此把原始 IARP 当作保密分发格式。视角切换仅改变显示内容，归档本身保留双方私有数据。
 
 `score2` 用十进制字符串传输，比分由 BigInt 精确换算为面积分；曲线仅在绘图时转为浮点。首次载入需要完整验证和物化，耗时随回放规模增长；完成后跳转直接访问内存中的逐轮快照。`VERIFIED` 表示回放内部一致性，完整哈希可悬停该标签查看。
 
@@ -72,13 +72,13 @@ UI -> UI: 构建索引、选择回合、绘制 HUD
 从仓库根目录生成确定性浏览器测试归档及原生 JSON 对照：
 
 ```sh
-cargo test -p replay-export hud_telemetry_and_browser_fixtures
+cargo test -p arena-viewer hud_telemetry_and_browser_fixtures
 cd viewer/app
 npm run build
 npx playwright install chromium --no-shell
 npm test
 ```
 
-浏览器测试运行于生产构建，覆盖完整 WASM / 原生数据一致性、本地打开及拖入、损坏文件、异常及零轮结束、多段移动与失败命令、Supply、双向 Hover、框选 / 滚轮缩放 / 平移、播放 / 跳转 / 快捷键、增援和视角隔离，以及 390 px 窄屏布局。截图位于 `test-results/`。Rust 测试逐轮与 `Observation` 和 `RoundReport` 对比扩展数据，并检查单阵营导出不会携带另一方库存和命令。
+浏览器测试运行于生产构建，覆盖完整 WASM / 原生数据一致性、本地打开及拖入、损坏文件、异常及零轮结束、多段移动与失败命令、Supply、双向 Hover、框选 / 滚轮缩放 / 平移、播放 / 跳转 / 快捷键、增援和视角隔离，以及 390 px 窄屏布局。截图位于 `test-results/`。Rust 测试逐轮与 `Observation` 和 `RoundReport` 对比扩展数据。
 
 实现采用 [Vite 官方 Worker 入口形式](https://vite.dev/guide/features#web-workers) 与 [wasm-bindgen 的 web 输出模式](https://wasm-bindgen.github.io/wasm-bindgen/reference/deployment.html)。

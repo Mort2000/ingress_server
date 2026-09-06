@@ -1,13 +1,4 @@
-//! The `ingress-viewer-v1` payload builder + HTML assembly (D87–D91).
-//!
-//! Pipeline (D88): decode → `arena_replay::replay` (full verification —
-//! unverified input is REFUSED, no HTML is produced) → a second
-//! materialization pass over the same recorded submissions snapshotting
-//! `Observation::for_faction` per faction at every D45 round-close point →
-//! tripwires (per-round hash, public-section equality between the two
-//! faction observations, delta fold == observed cumulative score, final
-//! hash == the VERIFIED outcome's hash). The embedded `agents` object
-//! carries exactly the factions chosen by D90.
+//! Verified round snapshots and telemetry for Tactical Replay.
 
 use arena_core::config::GameConfig;
 use arena_core::event::{Event, EventKind};
@@ -26,72 +17,12 @@ use crate::json::Json;
 /// The embedded data schema identifier.
 pub const VIEWER_FORMAT: &str = "ingress-viewer-v1";
 
-/// Viewer source assets (P-ARCH-03: repository root `viewer/`, outside the
-/// Rust crates; `include_str!`-ed here, concatenated into ONE self-contained
-/// HTML page).
-const TEMPLATE: &str = include_str!("../../../viewer/template.html");
-const VIEWER_CSS: &str = include_str!("../../../viewer/viewer.css");
-const JS_DATA: &str = include_str!("../../../viewer/data.js");
-const JS_FILTER: &str = include_str!("../../../viewer/filter.js");
-const JS_RENDER: &str = include_str!("../../../viewer/render.js");
-const JS_PANELS: &str = include_str!("../../../viewer/panels.js");
-const JS_CONTROLS: &str = include_str!("../../../viewer/controls.js");
-const JS_SELFTEST: &str = include_str!("../../../viewer/selftest.js");
-
-/// What to embed and how (D90).
-#[derive(Clone, Debug)]
-pub struct ExportOptions {
-    /// `--dev 1`: embed BOTH factions' private agents, activate all four
-    /// view labels, set `header.dev = true` (debug/balance tool).
-    pub dev: bool,
-    /// `--faction enl|res`: required when `dev == false`; the single
-    /// faction whose private agents are embedded (R-VIS by construction —
-    /// enemy private data does not exist in the file).
-    pub faction: Option<Faction>,
-    /// Parsed `meta.json` echo for `header.meta` (None embeds null).
-    pub meta: Option<Json>,
-}
-
-impl Default for ExportOptions {
-    fn default() -> Self {
-        ExportOptions {
-            dev: false,
-            faction: None,
-            meta: None,
-        }
-    }
-}
-
-/// A finished export: the payload value, its compact JSON text, the
-/// assembled self-contained HTML, and the summary line (built from the
-/// SAME verified `ReplayOutcome` whose values are embedded, so the CLI
-/// text and the page can never disagree).
-#[derive(Clone, Debug)]
-pub struct Exported {
-    pub payload: Json,
-    pub payload_text: String,
-    pub html: String,
-    pub summary: String,
-}
-
-/// Decode → verify → materialize → build payload + summary. This is the
-/// whole export except writing the file.
-pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, String), String> {
+/// Decode, verify and materialize the complete archive for local analysis.
+pub fn build_payload(iarp: &[u8]) -> Result<Json, String> {
     let log = decode_log(iarp).map_err(|error| format!("replay decode failed: {error}"))?;
-    // The P6-GATE reference: every per-round hash/delta/event/intake fact
-    // and the trailer are verified BEFORE anything is embedded. An
-    // unverified IARP produces an error and no HTML (D88).
     let outcome = replay(&log).map_err(|error| format!("replay verification failed: {error}"))?;
 
-    let embedded_factions: Vec<Faction> = if options.dev {
-        vec![Faction::Enl, Faction::Res]
-    } else {
-        vec![
-            options
-                .faction
-                .ok_or("production exports must name --faction enl|res (or pass --dev 1)")?,
-        ]
-    };
+    let embedded_factions = [Faction::Enl, Faction::Res];
 
     let materialized = materialize(&log, &outcome, &embedded_factions)?;
 
@@ -143,30 +74,11 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
                 ),
             )]),
         ),
-        // R-VIS note: spawn coordinates are agent positions (private,
-        // R-VIS-02) — a faction export embeds ONLY its own faction's
-        // spawn list; the other key stays present-but-empty so the viewer
-        // reads a uniform shape. The IARP itself keeps both (replay needs
-        // them); the EXPORT does not.
         (
             "spawns".into(),
             Json::obj(vec![
-                (
-                    "enl",
-                    if embedded_factions.contains(&Faction::Enl) {
-                        spawns_json(&header.enl_spawns)
-                    } else {
-                        Json::arr(vec![])
-                    },
-                ),
-                (
-                    "res",
-                    if embedded_factions.contains(&Faction::Res) {
-                        spawns_json(&header.res_spawns)
-                    } else {
-                        Json::arr(vec![])
-                    },
-                ),
+                ("enl", spawns_json(&header.enl_spawns)),
+                ("res", spawns_json(&header.res_spawns)),
             ]),
         ),
     ];
@@ -183,7 +95,7 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
                 .collect(),
         ),
     ));
-    header_pairs.push(("dev".into(), Json::Bool(options.dev)));
+    header_pairs.push(("dev".into(), Json::Bool(true)));
     header_pairs.push((
         "factions_embedded".into(),
         Json::arr(
@@ -193,14 +105,14 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
                 .collect(),
         ),
     ));
-    header_pairs.push(("meta".into(), options.meta.clone().unwrap_or(Json::Null)));
+    header_pairs.push(("meta".into(), Json::Null));
 
     let payload = Json::obj(vec![
         ("format", Json::str(VIEWER_FORMAT)),
         (
             "generated",
             Json::obj(vec![
-                ("tool", Json::str("replay-export")),
+                ("tool", Json::str("arena-viewer")),
                 ("version", Json::str(env!("CARGO_PKG_VERSION"))),
                 (
                     "iarp_format",
@@ -214,78 +126,8 @@ pub fn build_payload(iarp: &[u8], options: &ExportOptions) -> Result<(Json, Stri
         ("keys", Json::Object(materialized.keys)),
         ("commands", Json::Object(materialized.commands)),
     ]);
-    Ok((payload, summary_line(&outcome)))
+    Ok(payload)
 }
-
-/// Decode → verify → materialize → payload → ONE self-contained HTML page.
-pub fn export(iarp: &[u8], options: &ExportOptions) -> Result<Exported, String> {
-    let (payload, summary) = build_payload(iarp, options)?;
-    let payload_text = crate::json::write_json(&payload).map_err(|error| error.to_string())?;
-    let html = assemble_html(&payload_text);
-    Ok(Exported {
-        payload,
-        payload_text,
-        html,
-        summary,
-    })
-}
-
-/// Assembles the final page: the template with the stylesheet, the
-/// `VIEWER_DATA` constant, and the six viewer scripts inlined.
-///
-/// Substitution is ONE-PASS and marker-exact: each marker is located only
-/// in the still-unconsumed TEMPLATE tail (M-final review fix — the previous
-/// `str::replace` chain rescanned already-inserted content, so a hostile
-/// payload string containing a marker token could pull the stylesheet or
-/// the whole script bundle into the data block). Inserted content is never
-/// searched for markers, so payload bytes cannot influence assembly.
-pub fn assemble_html(payload_text: &str) -> String {
-    let data_block = format!("const VIEWER_DATA = {payload_text};");
-    let scripts = [
-        JS_DATA,
-        JS_FILTER,
-        JS_RENDER,
-        JS_PANELS,
-        JS_CONTROLS,
-        JS_SELFTEST,
-    ]
-    .join("\n");
-
-    let mut page =
-        String::with_capacity(TEMPLATE.len() + VIEWER_CSS.len() + data_block.len() + scripts.len());
-    let mut rest = TEMPLATE;
-    for (marker, content) in [
-        ("/*__VIEWER_CSS__*/", VIEWER_CSS),
-        ("/*__VIEWER_DATA__*/", data_block.as_str()),
-        ("/*__VIEWER_JS__*/", scripts.as_str()),
-    ] {
-        let index = rest
-            .find(marker)
-            .unwrap_or_else(|| panic!("viewer template must carry the marker {marker}"));
-        page.push_str(&rest[..index]);
-        page.push_str(content);
-        rest = &rest[index + marker.len()..];
-    }
-    page.push_str(rest);
-    page
-}
-
-/// Extracts the embedded payload text back out of an emitted page (the
-/// inverse of [`assemble_html`]'s data block; used by every consistency
-/// test so the tests read exactly what a browser would execute).
-pub fn extract_embedded_json(html: &str) -> Option<&str> {
-    // Newline-anchored so the marker inside data.js's explanatory comment
-    // can never shadow the real data block.
-    const MARKER: &str = "\nconst VIEWER_DATA = ";
-    let start = html.find(MARKER)? + MARKER.len();
-    let end = html[start..].find("</script>")? + start;
-    let text = html[start..end].trim();
-    text.strip_suffix(';').map(str::trim)
-}
-
-// ---------------------------------------------------------------------------
-// Materialization (D88 second pass)
-// ---------------------------------------------------------------------------
 
 struct Materialized {
     rounds: Vec<Json>,
@@ -665,33 +507,6 @@ fn outcome_json(outcome: &arena_replay::replay::ReplayOutcome) -> Json {
             ),
             ("final_score2", scores),
         ]),
-    }
-}
-
-/// The CLI summary line, built from the SAME verified outcome whose values
-/// are embedded (rounds, result/outcome tag, final hash hex, final score2).
-fn summary_line(outcome: &arena_replay::replay::ReplayOutcome) -> String {
-    match outcome.abnormal_outcome {
-        None => format!(
-            "verified rounds={} result={} final_hash={} score2_enl={} score2_res={}",
-            outcome.rounds_completed,
-            match outcome.result {
-                arena_core::types::MatchResult::EnlWin => "enl_win",
-                arena_core::types::MatchResult::ResWin => "res_win",
-                arena_core::types::MatchResult::Draw => "draw",
-            },
-            canon::hex(&outcome.final_state_hash),
-            outcome.final_scores.0,
-            outcome.final_scores.1
-        ),
-        Some(tag) => format!(
-            "verified rounds={} outcome_tag={} last_hash={} score2_enl={} score2_res={}",
-            outcome.rounds_completed,
-            tag,
-            canon::hex(&outcome.final_state_hash),
-            outcome.final_scores.0,
-            outcome.final_scores.1
-        ),
     }
 }
 

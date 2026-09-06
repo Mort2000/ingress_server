@@ -53,7 +53,6 @@
 
 例如该追加批次 m0 leg0：R192–193，Agent 2 在 P73 连续完成有效补血；R491–493，Agent 10 使用 P93 Key 远程 Recharge，分别恢复 80→95、75→90、70→85 HP，说明收官阶段没有机械关闭防守。追加对局不是普遍强度证据，Adaptive 在这四场均负于 Disruptor。
 
-
 ## 运输对照与关键窗口
 
 针对 Development 中实际出现的交接，额外固定一场 `builder-disruptor-r2--logistics-builder-r2-m1-leg1`，仅将 Logistics 的 `max_transfers_per_round` 设为 0，保留策略身份、其余参数、seed 和出生初始化，输出到 `runs/balance/r23-transfer-counterfactual-r3`。这是定向机制对照，不纳入上面的 48 场汇总。
@@ -76,12 +75,11 @@ R458，Agent 6 将一枚 P100 Key 交给 Agent 0，Supply 转移量为 0。接�
 - 最终源码及工具快照：`.scratch/r23-optimization-20260905/final-source.tar.gz`，逐文件 SHA-256 见同目录 `final-source-hashes.json`。
 - 最终验证工具：同目录 `verify/`，独立 Cargo 包；默认输出新目录，拒绝覆盖。完整输入来源为 `runs/balance/r21-verify-r1`。
 - 最终汇总和证据：`policy-summary.json`、`artifact-hashes.json`、`challenge-summary.json`、`drop-audit.json`、`37-workspace.log`，以及运行目录中的 `matches.tsv`、`replays.tsv`、`decisions.tsv`、`windows.tsv`。
-- 验证命令：`cargo test --workspace --release --exclude replay-export`；格式和空白检查覆盖本轮改动。
+- 验证命令：当时可构建包的 release 测试；格式和空白检查覆盖本轮改动。
 
 最终检查结果：**686 项通过、0 失败、1 项既有 doctest 忽略**；其中新增 22 项 r2.3 机制回归。所列 Rust 文件的 `rustfmt --check` 与 `git diff --check` 通过。主矩阵 48 场、追加攻防 4 场和运输关闭对照 1 场，共 **53 场**均通过完整规则回放和独立策略提交复现。
 
-
-`replay-export` 的既有查看器资源缺失问题沿用 r2.2 记录；本轮工作区测试明确排除了该包。固定工具链未安装 Clippy，本轮不将其记为通过。
+Clippy 在该历史验证中未运行成功，固定工具链未安装该组件。
 
 ## 结论边界
 

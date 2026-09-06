@@ -18,6 +18,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-viewer"
+version = "0.1.0"
+dependencies = [
+ "arena-core",
+ "arena-replay",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -116,18 +124,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "replay-export"
-version = "0.1.0"
-dependencies = [
- "arena-core",
- "arena-replay",
-]
-
-[[package]]
 name = "replay-web"
 version = "0.1.0"
 dependencies = [
- "replay-export",
+ "arena-viewer",
  "wasm-bindgen",
 ]
 
