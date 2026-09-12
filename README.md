@@ -1,8 +1,8 @@
 # Ingress Arena Server
 
-AI 代码竞技场的官方规则与运行平台。参赛程序控制 ENL 或 RES 阵营，在 6 km × 6 km 的整数地图上占领 Portal、获取 Key、连接 Link，并以 Field 的面积和存续时间累计得分。默认地图 120 个 Portal，每方初始 3 个 Agent，比赛 500 轮。
+AI 代码竞技场的官方规则与运行平台。参赛程序控制 ENL 或 RES 阵营，在 6 km × 6 km 的整数地图上占领 Portal、获取 Key、连接 Link，并以 Field 的面积和存续时间累计得分。默认地图 120 个 Portal，每方初始 3 个 Agent，比赛 800 轮，每方累计增援最多 4 个 Agent。
 
-Alpha 默认规则采用 **20 HP／1 Supply 充电、1500 m 最大链距**。本仓包含权威结算、服务器、参赛 SDK、外部比赛调度、审核、沙箱和回放工具。参赛策略位于同级独立 [bot 仓](../adaptive_bot/README.md)，仅保留 Adaptive 参考选手。
+当前 Alpha 默认规则采用 **20 HP／1 Supply 充电、8000 m 最大链距**，完整参数见[规则配置](docs/spec/rules/06-configuration.md)。本仓包含权威结算、服务器、参赛 SDK、外部比赛调度、审核、沙箱和回放工具。参赛策略位于同级独立 [bot 仓](../adaptive_bot/README.md)，仅保留 Adaptive 参考选手。
 
 ## 构建
 
@@ -27,7 +27,7 @@ cargo build --release --locked --manifest-path ../adaptive_bot/Cargo.toml
 ```sh
 target/release/arena-runner tournament --out runs/alpha-duel \
   --client ../adaptive_bot/target/release/adaptive-bot --client /absolute/path/to/your-bot \
-  --matches 2 --maps 1 --rounds 500 --seed 12648430 \
+  --matches 2 --maps 1 --rounds 800 --seed 12648430 \
   --sandbox target/release/sandbox-runner
 ```
 

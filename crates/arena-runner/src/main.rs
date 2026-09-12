@@ -14,7 +14,7 @@ const USAGE: &str = "Usage: arena-runner tournament --out <new-directory> --clie
   --client <binary>   Repeat for each entrant (at least two).\n\
   --matches <even>    Matches per distinct entrant pair (default: 2).\n\
   --maps <count>      Generated map pool (default: 1).\n\
-  --rounds <count>    Rounds per match (default: 500).\n\
+  --rounds <count>    Rounds per match (default: 800).\n\
   --seed <decimal>    Master seed (default: 12648430).\n\
   --workers <count>  Concurrent matches (default: 1).\n\
   --sandbox <binary> Run clients through sandbox-runner.\n\
@@ -119,7 +119,7 @@ fn execute(args: &[String]) -> Result<(), String> {
     let mut clients = Vec::new();
     let mut matches = 2u32;
     let mut maps = 1u32;
-    let mut rounds = 500u32;
+    let mut rounds = GameConfig::default().total_rounds;
     let mut seed = 12_648_430u64;
     let mut workers = 1usize;
     let mut sandbox = None;

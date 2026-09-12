@@ -4,13 +4,13 @@
 
 ## 当前状态
 
-- **已进入 Alpha**：2026-09-06 采用 20 HP／1 Supply 充电、1500 m 最大链距；规则与配置以 [规则文档](spec/rules/README.md) 为准。
+- **已进入 Alpha**：2026-09-06 进入 Alpha；2026-09-12 默认规则更新为 20 HP／1 Supply 充电、8000 m 最大链距、800 轮比赛，每方累计增援最多 4 个 Agent（默认总人数最多 7）。规则与配置以 [规则文档](spec/rules/README.md) 为准。
 - **平台与选手已拆仓**：server 维护规则、结算、协议、SDK、比赛调度、审核、沙箱与回放；Adaptive 参考选手位于同级独立 `adaptive_bot/`，server 可独立构建和测试。
 - **独立选手验证延续 Alpha 决策**：Alpha 决策时尚未开展工作区 `reports/` 下的后续分析；之后引入 Astra 等多个独立 Bot，再开展策略、回放与参数复核。这是在落实“由独立选手提供新策略和反例”，并非恢复围绕旧参考 Bot 的细粒度扫描；见 [Alpha 决策](design/alpha-reference.md#决策依据与适用范围)与[独立选手分析](../../reports/README.md)。
 - **正式回放工具已就绪**：[Tactical Replay](../viewer/app/README.md) 在浏览器本地打开 `.iarp`，完整验证后展示逐轮状态、库存、轨迹和命令结果。
 - **Viewer 独立赛事监控已交付**：独立只读后台提供同源页面、进度、最新结果、暂定排名、名称／版本筛选及历史 replay；通过增量扫描官方归档与 runner 解耦，不提供运行控制，文件中 running 不代表进程存活。静态手动文件模式保留。见 [使用与规范](spec/viewer-tournaments.md)、[验收与边界](reports/viewer-tournaments.md)。
-- **四参数 Development 复核已完成**：综合 Astra 策略自博弈、抽样回放与外部对照，建议暂保留 20 HP 充电／20 HP 攻击／1500 m 链距／200 m 移动。15 HP 维修保留为候选方向，其结论受连续维修与协同策略能力限制；见 [实验报告](../../reports/astra-selfplay-balance-20260911/README.md)。
-- **6000 m Link 已形成首轮适配结果**：六个现有 Bot 保留策略，完成单图、共同参考对手的 20 场规则配对（18 场正常、2 场技术判负）。Sol 份额提高，Astra 保持优势，GLM／Kimi 下降；DeepSeek 的 6000 m 运行失败在补充三图换边中重复。仅为 Development 简单回归，不改变正式 1500 m 默认值；见[首轮报告](../../reports/long-link-6000-20260912/first-pass.md)，三图全对阵 180 场的进度与最终结果见[实验首页](../../reports/long-link-6000-20260912/README.md)。
+- **四参数 Development 复核已完成**：综合 Astra 策略自博弈、抽样回放与外部对照，当时建议暂保留 20 HP 充电／20 HP 攻击／1500 m 链距／200 m 移动。15 HP 维修保留为候选方向，其结论受连续维修与协同策略能力限制；见 [实验报告](../../reports/astra-selfplay-balance-20260911/README.md)。
+- **6000 m Link 已形成首轮适配结果**：六个现有 Bot 保留策略，完成单图、共同参考对手的 20 场规则配对（18 场正常、2 场技术判负）。Sol 份额提高，Astra 保持优势，GLM／Kimi 下降；DeepSeek 的 6000 m 运行失败在补充三图换边中重复。该轮仅为 Development 简单回归，未单独调整当时的正式默认值；见[首轮报告](../../reports/long-link-6000-20260912/first-pass.md)，三图全对阵 180 场的进度与最终结果见[实验首页](../../reports/long-link-6000-20260912/README.md)。
 - **基础工程三批已交付**：第一批提供可信执行、恢复补赛、日志与回放身份；第二批补齐地图集、声明式赛事、冻结构建与版本对照；第三批提供 SDK 回执／计时、共享策略适配、从开局恢复的离线场景与 trace、动态领取及合作运行器本机资源池。见 [第一批说明](spec/iteration-batch-1.md)、[第二批说明](spec/iteration-batch-2.md)、[第三批说明](spec/iteration-batch-3.md)、[第三批验收](reports/iteration-batch-3.md)。离线复现及资源准入的适用边界已明确，cgroup 限制未消除；继续调参不作为本阶段主线。
 
 ## 关键里程碑

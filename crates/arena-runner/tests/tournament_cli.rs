@@ -60,6 +60,10 @@ fn help_and_missing_clients_have_distinct_exit_codes() {
     let help = Command::new(binary).arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("--client"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains(&format!(
+        "Rounds per match (default: {}).",
+        arena_core::config::GameConfig::default().total_rounds
+    )));
     let out = output_path("missing");
     let missing = Command::new(binary)
         .args(["tournament", "--out"])
@@ -77,9 +81,7 @@ fn plan_is_saved_before_execution_and_status_is_read_only() {
     let planned = Command::new(binary)
         .args(["plan", "--out"])
         .arg(&out)
-        .args([
-            "--client", binary, "--client", binary, "--rounds", "1", "--fast",
-        ])
+        .args(["--client", binary, "--client", binary])
         .output()
         .unwrap();
     assert!(
@@ -90,6 +92,10 @@ fn plan_is_saved_before_execution_and_status_is_read_only() {
     assert!(out.join("plan/tournament.json").is_file());
     assert!(out.join("plan/config.bin").is_file());
     assert!(out.join("plan/maps/0.bin").is_file());
+    let plan = arena_runner::tournament::durable::load(&out).unwrap();
+    let default_rounds = arena_core::config::GameConfig::default().total_rounds;
+    assert_eq!(plan.config.config.total_rounds, default_rounds);
+    assert_eq!(plan.config.rounds_per_match, default_rounds);
     let status = Command::new(binary)
         .args(["status", "--out"])
         .arg(&out)

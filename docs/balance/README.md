@@ -1,6 +1,6 @@
 # 平衡评估档案
 
-当前阶段已转入 Alpha：采用 **20 HP 充电、1500 m 最大链距**，停止围绕现有 Bot 的细粒度规则扫描，Transfer 稳定收益专项暂缓。依据、能力边界和独立参考选手迁移见 [Alpha 记录](../design/alpha-reference.md)。
+当前阶段已转入 Alpha：默认采用 **20 HP／1 Supply 充电、8000 m 最大链距、800 轮比赛、每方累计最多 4 个增援 Agent**，以[规则配置](../spec/rules/06-configuration.md)为准。围绕现有 Bot 的细粒度规则扫描已停止，Transfer 稳定收益专项暂缓。进入 Alpha 时的决策依据、能力边界和独立参考选手迁移见 [Alpha 记录](../design/alpha-reference.md)。
 
 以下报告均为历史实验记录。文中的“当前／默认规则”、策略版本、源码路径和命令按报告当时的归档理解；不会随 Alpha 更新改写历史数据。旧实验源码与入口从当前 server 移出，复现需检出报告指定的提交或冻结源码。
 
