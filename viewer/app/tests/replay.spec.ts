@@ -56,7 +56,9 @@ test("standalone replay identity keeps versions and sources distinct and resets 
   await expect(page.locator("#identity-details")).not.toContainText(
     "different-self-report",
   );
-  await page.locator("#file-input").setInputFiles(resolve(fixtures, "identity-abnormal.iarp"));
+  await page
+    .locator("#file-input")
+    .setInputFiles(resolve(fixtures, "identity-abnormal.iarp"));
   await expect(page.locator("#identity-enl")).toHaveText("self-reported");
   await expect(page.locator("#version-enl")).toHaveText("own-v3");
   await expect(page.locator("#version-res")).toHaveText("版本未知");

@@ -9,6 +9,7 @@
 | 游戏规则 | 定义比赛中什么行为合法、如何结算；属于规则事实源 | [rules/README.md](./rules/README.md) |
 | MVP 方案 | 定义以什么顺序实现、验证和交付；不得覆盖规则 | [mvp/README.md](./mvp/README.md) |
 | Alpha 基础设施改进 | 选手自主迭代、地图资产、赛事调度、回放身份及三批交付计划 | [iteration-infrastructure.md](./iteration-infrastructure.md) |
+| 第一批使用说明 | 可信执行、恢复补赛、日志、选手身份及 IARP v2 兼容 | [iteration-batch-1.md](./iteration-batch-1.md) |
 | 领域语言 | 统一规则与实现使用的核心名词 | [CONTEXT.md](../../CONTEXT.md) |
 | 决策记录 | 记录难以反转且存在真实取舍的决定 | [ADR 索引](../adr/README.md) |
 

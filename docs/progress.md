@@ -9,7 +9,7 @@
 - **独立选手验证延续 Alpha 决策**：Alpha 决策时尚未开展工作区 `reports/` 下的后续分析；之后引入 Astra 等多个独立 Bot，再开展策略、回放与参数复核。这是在落实“由独立选手提供新策略和反例”，并非恢复围绕旧参考 Bot 的细粒度扫描；见 [Alpha 决策](design/alpha-reference.md#决策依据与适用范围)与[独立选手分析](../../reports/README.md)。
 - **正式回放工具已就绪**：[Tactical Replay](../viewer/app/README.md) 在浏览器本地打开 `.iarp`，完整验证后展示逐轮状态、库存、轨迹和命令结果。
 - **四参数 Development 复核已完成**：综合 Astra 策略自博弈、抽样回放与外部对照，建议暂保留 20 HP 充电／20 HP 攻击／1500 m 链距／200 m 移动。15 HP 维修保留为候选方向，其结论受连续维修与协同策略能力限制；见 [实验报告](../../reports/astra-selfplay-balance-20260911/README.md)。
-- **下一阶段先改进基础工程**：[需求与三批交付计划](spec/iteration-infrastructure.md)已落地，待实施；覆盖选手自主迭代、多样化地图、多选手调度，以及 Replay Viewer 显示选手名与版本。优先交付可信且可恢复的执行，再打通地图与版本对照工作流；继续调参不作为本阶段主线。
+- **基础工程第一批已交付**：执行实例隔离、服务端连接确认、计划先落盘、逐场归档、恢复补赛与日志，以及 Replay Viewer 的名称／版本完整链路已实现并通过验收。见 [使用与兼容说明](spec/iteration-batch-1.md)、[验收记录](reports/iteration-batch-1.md)。[第二、三批](spec/iteration-infrastructure.md)仍待实施；继续调参不作为本阶段主线。
 
 ## 关键里程碑
 
@@ -28,7 +28,7 @@
 | Alpha：规则采用与拆仓 | 已完成 | server／Bot 独立构建测试、64 场逐轮命令对照、SDK 实际比赛、沙箱接入和回放验证通过；见 [迁移验收](design/alpha-reference.md#验证范围)。 |
 | Alpha 后续：独立选手与新反例 | 已开展并形成分析 | 引入 Astra 等多个独立 Bot 后，开展工作区 `reports/` 下的策略比较、回放审查和攻防实验，承接 Alpha 的独立选手验证路线；见 [分析索引](../../reports/README.md)。 |
 | 独立选手四参数复核 | Development 评估已完成 | 984 场固定桶自博弈、192 场有效外部对照／时序复核及 14 场预选回放审查；结果与限制见 [实验报告](../../reports/astra-selfplay-balance-20260911/README.md)，不替代 B5。 |
-| Alpha 基础设施改进 | 第一批实现进入验收 | 已实现执行实例隔离、服务端连接确认、持久化计划／尝试／采用记录、恢复补赛、客户端日志和 IARP v2 身份展示；正在完成全量测试与双轴审查。见 [第一批说明](spec/iteration-batch-1.md)；第二、三批仍待实施。 |
+| Alpha 基础设施改进 | 第一批已完成 | INFRA-01／02／07 交付；Rust 全量、CLI 故障恢复及浏览器测试通过，双轴审查问题已关闭。见 [第一批说明](spec/iteration-batch-1.md)、[验收记录](reports/iteration-batch-1.md)；第二、三批仍待实施。 |
 
 历史 B2–B4 的完成状态仅对应报告中的策略版本和归档配置。后续策略修复未替代正式重验，Alpha 参数采用也不代表完成了 B5 或找到了最优参数。
 
