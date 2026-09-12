@@ -112,7 +112,13 @@ pub fn tournament_json_text(cfg: &TournamentConfig, items: &[TournamentItem]) ->
         maps.push(format!(
             "    {{ \"index\": {}, \"seed\": \"{}\", \"hash\": \"{}\" }}",
             k,
-            hex64(cfg.map_seed(k)),
+            hex64(
+                items
+                    .iter()
+                    .find(|item| item.map_index == k)
+                    .map(|item| item.map_seed)
+                    .unwrap_or_else(|| cfg.map_seed(k))
+            ),
             json_escape(&hash)
         ));
     }

@@ -206,10 +206,27 @@ pub fn run_item_external_on_map(
     match_dir: &Path,
     map: Option<arena_core::map::MapDefinition>,
 ) -> ExternalResult {
+    run_item_external_with_launches(item, cfg, match_dir, map, &[])
+}
+
+#[derive(Clone, Debug)]
+pub struct ClientLaunch {
+    pub registered_id: String,
+    pub display_name: String,
+    pub args: Vec<String>,
+}
+
+pub fn run_item_external_with_launches(
+    item: &TournamentItem,
+    cfg: &TournamentConfig,
+    match_dir: &Path,
+    map: Option<arena_core::map::MapDefinition>,
+    launches: &[ClientLaunch],
+) -> ExternalResult {
     let start = Instant::now();
     let budget = Duration::from_millis(cfg.per_match_budget_ms);
     let played = catch_unwind(AssertUnwindSafe(|| {
-        play(item, cfg, match_dir, start + budget, map)
+        play(item, cfg, match_dir, start + budget, map, launches)
     }));
     match played {
         Ok(result) => result,
@@ -394,6 +411,7 @@ fn play(
     match_dir: &Path,
     deadline: Instant,
     map: Option<arena_core::map::MapDefinition>,
+    launches: &[ClientLaunch],
 ) -> ExternalResult {
     let start = Instant::now();
     if let Err(error) = std::fs::create_dir_all(match_dir) {
@@ -579,8 +597,14 @@ fn play(
                 command
             }
         };
+        if !launches.is_empty() {
+            command.env_clear().env("PATH", "/usr/bin:/bin");
+        }
         for (key, value) in env {
             command.env(key, value);
+        }
+        if let Some(launch) = launches.get(entrant_id as usize) {
+            command.args(&launch.args);
         }
         match command.spawn() {
             Ok(child) => {
@@ -641,7 +665,22 @@ fn play(
                     enl_child_pid = Some(pid);
                 } else {
                     res_pids.insert(pid);
-                    res_pids.extend(tree_pids(pid));
+                    // Capture the second accepted peer while it is alive as
+                    // well. A short sandboxed match can end between polls.
+                    loop {
+                        res_pids.extend(tree_pids(pid));
+                        match accepted_rx.recv_timeout(Duration::from_millis(3)) {
+                            Ok((1, Some(_))) => {
+                                res_pids.extend(tree_pids(pid));
+                                break;
+                            }
+                            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                            Err(_) => {}
+                        }
+                        if Instant::now() >= deadline || !matches!(child.try_wait(), Ok(None)) {
+                            break;
+                        }
+                    }
                     res_child_pid = Some(pid);
                 }
             }
@@ -808,6 +847,10 @@ fn play(
                 if connect_order_verified {
                     participant.registered_id = entrant_id.to_string();
                     participant.display_name = entrant.name.clone();
+                    if let Some(launch) = launches.get(entrant_id as usize) {
+                        participant.registered_id = launch.registered_id.clone();
+                        participant.display_name = launch.display_name.clone();
+                    }
                     participant.registered_version =
                         entrant.provenance.bot_version.clone().unwrap_or_default();
                     participant.binary_hash =

@@ -24,9 +24,41 @@ const USAGE: &str = "Usage: arena-runner tournament --out <new-directory> --clie
   --attempt-limit N Total attempts per item, including interruptions (default: 3).\n\
   plan [same options] saves inputs and previews without launching clients.\n\
   status --out DIR | resume --out DIR | rebuild --out DIR\n\
-  retry --out DIR --item INDEX (infrastructure faults only).";
+  retry --out DIR --item INDEX (infrastructure faults only).\n\
+  plan|tournament --spec EVENT.json --out NEW_DIR\n\
+  build-register --spec BUILD.json --out NEW_DIR | build-inspect --input DIR\n\
+  map-generate --config RULES.json --layout LAYOUT --seed N --out MAP.json\n\
+  map-import|map-export|map-preview --input MAP.json --out NEW_FILE\n\
+  map-inspect --input MAP.json | map-set --spec SET.json --out NEW_FILE\n\
+  select --from DIR --items 0,1 --out NEW_DIR\n\
+  compare-plan --from DIR --candidate ENTRY_ID --build BUILD_DIR --out NEW_DIR\n\
+  compare --out DIR (rebuilds comparison.json and comparison.md).";
 
 fn execute(args: &[String]) -> Result<(), String> {
+    if let Some(output) =
+        arena_runner::tournament::selection::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
+    if let Some(output) =
+        arena_runner::tournament::comparison::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
+    if let Some(output) =
+        arena_runner::tournament::event::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
+    if let Some(output) =
+        arena_runner::tournament::assets_cli::execute(args).map_err(|e| e.to_string())?
+    {
+        println!("{output}");
+        return Ok(());
+    }
     let verb = args.first().map(String::as_str).unwrap_or("");
     if matches!(verb, "resume" | "retry" | "status" | "rebuild") {
         let mut out = None;

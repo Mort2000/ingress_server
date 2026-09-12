@@ -8,7 +8,7 @@ use super::{
     archive::{self, Json},
     config::*,
     entrant::compute_binary_hash,
-    exec_external::{ExternalResult, execution_id, run_item_external_on_map},
+    exec_external::{ExternalResult, execution_id},
     outcome::{Stage, TournamentOutcome},
     run::TournamentRun,
     schedule::{self, TournamentItem},
@@ -43,6 +43,24 @@ pub struct Plan {
     pub items: Vec<TournamentItem>,
     pub maps: Vec<MapDefinition>,
     pub attempt_limit: u32,
+    /// Versioned batch-two input metadata. Absent in first-batch archives.
+    pub extension: Option<Json>,
+}
+
+impl Plan {
+    pub fn match_config(&self, item: &TournamentItem) -> io::Result<TournamentConfig> {
+        let mut cfg = self.config.clone();
+        if let Some(ext) = &self.extension {
+            let maps = super::document::array(ext, "maps")?;
+            cfg.config = super::document::config(
+                maps.get(item.map_index as usize)
+                    .and_then(|v| v.get("config"))
+                    .ok_or_else(|| invalid("missing map rules"))?,
+            )?;
+            cfg.rounds_per_match = cfg.config.total_rounds;
+        }
+        Ok(cfg)
+    }
 }
 
 fn map_bytes(map: &MapDefinition) -> Vec<u8> {
@@ -66,9 +84,50 @@ pub fn prepare(cfg: &TournamentConfig, root: &Path, attempt_limit: u32) -> io::R
         *binary = binary.canonicalize()?;
         entrant.compute_binary_hash()?;
     }
+    publish(
+        Plan {
+            config: cfg,
+            items,
+            maps,
+            attempt_limit,
+            extension: None,
+        },
+        root,
+    )
+}
+
+/// Publish supplied frozen inputs. Batch-two callers resolve/validate the
+/// declaration before creating the archive; no generator is called here.
+pub fn publish(mut plan: Plan, root: &Path) -> io::Result<Plan> {
     let dir = root.join("plan");
     fs::create_dir(&dir)?;
     fs::create_dir(dir.join("maps"))?;
+    let mut extra = Vec::new();
+    if let Some(ext) = &plan.extension {
+        atomic_write(
+            &dir.join("batch2.json"),
+            super::document::encode(ext).as_bytes(),
+        )?;
+        extra.push("batch2.json".to_string());
+        fs::create_dir(dir.join("builds"))?;
+        for (i, entry) in super::document::array(ext, "entrants")?.iter().enumerate() {
+            super::builds::copy_into(
+                Path::new(super::document::text(entry, "build")?),
+                &dir.join(format!("builds/{i}")),
+            )?;
+            let super::EntrantKind::External { binary, .. } = &mut plan.config.entrants[i].kind;
+            *binary = PathBuf::from(format!("builds/{i}/binary"));
+            extra
+                .extend(["binary", "manifest.json", "identity"].map(|f| format!("builds/{i}/{f}")));
+        }
+    }
+    let Plan {
+        config: cfg,
+        items,
+        maps,
+        attempt_limit,
+        extension,
+    } = plan;
     let mut bytes = Vec::new();
     codec::push_config(&cfg.config, &mut bytes);
     atomic_write(&dir.join("config.bin"), &bytes)?;
@@ -100,6 +159,7 @@ pub fn prepare(cfg: &TournamentConfig, root: &Path, attempt_limit: u32) -> io::R
         "schedule.tsv".into(),
     ];
     names.extend((0..maps.len()).map(|i| format!("maps/{i}.bin")));
+    names.extend(extra);
     for name in names {
         manifest.push_str(&format!(
             "{} {name}\n",
@@ -112,6 +172,7 @@ pub fn prepare(cfg: &TournamentConfig, root: &Path, attempt_limit: u32) -> io::R
         items,
         maps,
         attempt_limit,
+        extension,
     })
 }
 
@@ -129,12 +190,16 @@ fn number(json: &Json, key: &str) -> io::Result<u64> {
 
 pub fn load(root: &Path) -> io::Result<Plan> {
     let dir = root.join("plan");
+    let mut covered = std::collections::BTreeSet::new();
     for line in fs::read_to_string(dir.join("manifest"))?.lines() {
         let (hash, name) = line
             .split_once(' ')
             .ok_or_else(|| invalid("invalid plan manifest"))?;
         if name.contains("..") || Path::new(name).is_absolute() {
             return Err(invalid("invalid manifest path"));
+        }
+        if !covered.insert(name.to_owned()) {
+            return Err(invalid("duplicate plan manifest entry"));
         }
         if blake3::hash(&fs::read(dir.join(name))?).to_hex().as_str() != hash {
             return Err(invalid(format!("plan changed: {name}")));
@@ -156,7 +221,7 @@ pub fn load(root: &Path) -> io::Result<Plan> {
     let config = codec::config_from_bytes(&fs::read(dir.join("config.bin"))?)
         .ok_or_else(|| invalid("invalid frozen rules"))?;
     config.validate().map_err(|e| invalid(format!("{e:?}")))?;
-    let cfg = TournamentConfig {
+    let mut cfg = TournamentConfig {
         name: echo.name,
         master_seed: echo.master_seed,
         entrants: echo.entrants,
@@ -172,6 +237,53 @@ pub fn load(root: &Path) -> io::Result<Plan> {
         sandbox,
         per_match_budget_ms: echo.per_match_budget_ms,
     };
+    let extension = if dir.join("batch2.json").is_file() {
+        Some(super::document::read(&dir.join("batch2.json"))?)
+    } else {
+        None
+    };
+    let mut required = vec![
+        "tournament.json".to_owned(),
+        "config.bin".into(),
+        "schedule.tsv".into(),
+        "attempt-limit".into(),
+    ];
+    required.extend((0..cfg.map_count).map(|i| format!("maps/{i}.bin")));
+    if extension.is_some() {
+        required.push("batch2.json".into());
+        for i in 0..cfg.entrants.len() {
+            required
+                .extend(["binary", "manifest.json", "identity"].map(|f| format!("builds/{i}/{f}")));
+        }
+    }
+    if required
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        != covered
+    {
+        return Err(invalid("incomplete or unexpected plan manifest coverage"));
+    }
+    if let Some(ext) = &extension {
+        if super::document::text(ext, "schema")? != "arena-frozen-event-v1" {
+            return Err(invalid("unsupported frozen event schema"));
+        }
+        if super::document::array(ext, "entrants")?.len() != cfg.entrants.len() {
+            return Err(invalid("entrant metadata length mismatch"));
+        }
+        for (i, entrant) in cfg.entrants.iter_mut().enumerate() {
+            let super::EntrantKind::External { binary, .. } = &mut entrant.kind;
+            *binary = dir.join(format!("builds/{i}/binary")).canonicalize()?;
+            let manifest = super::builds::inspect(&dir.join(format!("builds/{i}")))?;
+            let entry = &super::document::array(ext, "entrants")?[i];
+            if entry.get("manifest") != Some(&manifest)
+                || super::document::text(entry, "id")? != entrant.name
+                || entrant.provenance.binary_blake3.as_deref()
+                    != Some(super::document::text(&manifest, "binary_hash")?)
+            {
+                return Err(invalid("frozen build identity disagrees with entrant"));
+            }
+        }
+    }
     let mut maps = Vec::new();
     for i in 0..cfg.map_count {
         let bytes = fs::read(dir.join(format!("maps/{i}.bin")))?;
@@ -187,8 +299,26 @@ pub fn load(root: &Path) -> io::Result<Plan> {
             })
             .collect::<io::Result<Vec<_>>>()?;
         let map = MapDefinition::new(portals);
-        map.validate(&cfg.config)
+        let map_config = if let Some(ext) = &extension {
+            super::document::config(
+                super::document::array(ext, "maps")?
+                    .get(i as usize)
+                    .and_then(|m| m.get("config"))
+                    .ok_or_else(|| invalid("map rules missing"))?,
+            )?
+        } else {
+            cfg.config
+        };
+        map.validate(&map_config)
             .map_err(|e| invalid(format!("map: {e:?}")))?;
+        if let Some(ext) = &extension {
+            let asset = super::maps::MapAsset::from_json(&super::document::encode(
+                &super::document::array(ext, "maps")?[i as usize],
+            ))?;
+            if asset.map != map {
+                return Err(invalid("frozen map metadata disagrees with map bytes"));
+            }
+        }
         maps.push(map);
     }
     let rows = archive::parse_index_tsv(&fs::read_to_string(dir.join("schedule.tsv"))?)
@@ -203,7 +333,17 @@ pub fn load(root: &Path) -> io::Result<Plan> {
                 .ok_or_else(|| invalid("unknown entrant"))
         };
         if row.index != items.len() as u64
-            || row.config_hash != cfg.config_identity()
+            || row.config_hash
+                != if let Some(ext) = &extension {
+                    super::config::config_identity(&super::document::config(
+                        super::document::array(ext, "maps")?
+                            .get(row.map_index as usize)
+                            .and_then(|m| m.get("config"))
+                            .ok_or_else(|| invalid("map rules missing"))?,
+                    )?)
+                } else {
+                    cfg.config_identity()
+                }
             || maps
                 .get(row.map_index as usize)
                 .map(schedule::map_codec_hash)
@@ -231,6 +371,23 @@ pub fn load(root: &Path) -> io::Result<Plan> {
     let attempt_limit = fs::read_to_string(dir.join("attempt-limit"))?
         .parse()
         .map_err(invalid)?;
+    if let Some(ext) = &extension {
+        let samples = super::document::array(ext, "samples")?;
+        if samples.len() != items.len() || super::document::array(ext, "maps")?.len() != maps.len()
+        {
+            return Err(invalid("frozen metadata length mismatch"));
+        }
+        for (sample, item) in samples.iter().zip(&items) {
+            let candidate = super::document::text(sample, "candidate")?;
+            let baseline = super::document::text(sample, "baseline")?;
+            let a = &cfg.entrant(item.a).name;
+            let b = &cfg.entrant(item.b).name;
+            if a == b || !((candidate == a && baseline == b) || (candidate == b && baseline == a)) {
+                return Err(invalid("sample entrants disagree"));
+            }
+        }
+        super::event::launches(Some(ext))?;
+    }
     if !(1..=100).contains(&attempt_limit) || cfg.concurrency == 0 {
         return Err(invalid("invalid execution policy"));
     }
@@ -239,6 +396,7 @@ pub fn load(root: &Path) -> io::Result<Plan> {
         items,
         maps,
         attempt_limit,
+        extension,
     })
 }
 
@@ -341,7 +499,7 @@ fn read_result(dir: &Path, plan: &Plan, item: &TournamentItem) -> io::Result<Ext
         let log = arena_replay::replay::decode_log(&bytes).map_err(invalid)?;
         let verified = arena_replay::replay::replay(&log).map_err(invalid)?;
         if log.header.game_seed != item.game_seed
-            || log.header.config != plan.config.config
+            || log.header.config != plan.match_config(item)?.config
             || schedule::map_codec_hash(&log.header.map) != item.map_hash
         {
             return Err(invalid("replay does not match frozen inputs"));
@@ -617,11 +775,14 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
     fs::create_dir(&dir)?;
     atomic_write(&dir.join("reason.txt"), reason.as_bytes())?;
     atomic_write(&dir.join("state"), b"running")?;
-    let result = run_item_external_on_map(
+    let cfg = plan.match_config(item)?;
+    let launches = super::event::launches(plan.extension.as_ref())?;
+    let result = super::exec_external::run_item_external_with_launches(
         item,
-        &plan.config,
+        &cfg,
         &dir,
         Some(plan.maps[item.map_index as usize].clone()),
+        &launches,
     );
     let save = || -> io::Result<()> {
         for (side, report) in &result.sandbox_reports {
@@ -632,7 +793,7 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
             archive::meta_json_text(
                 item,
                 &result.outcome,
-                &plan.config,
+                &cfg,
                 result.replay_rel.as_deref(),
                 result.elapsed_ms,
                 result.budget_exceeded,
@@ -643,7 +804,7 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
         let record = archive::index_record(
             item,
             &result.outcome,
-            &plan.config,
+            &cfg,
             result.replay_rel.as_deref(),
             result.elapsed_ms,
         );

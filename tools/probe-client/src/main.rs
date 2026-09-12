@@ -241,6 +241,10 @@ fn probe(mode: &str, socket: &str, arg: u64) -> Result<i32, Box<dyn std::error::
     let private_reader = ShmReader::open(&private_name, RegionHeader::private(private_kind))?;
     if std::env::var_os("PROBE_OBSERVATION_LOG").is_some() {
         println!(
+            "launch_args={:?}",
+            std::env::args().skip(3).collect::<Vec<_>>()
+        );
+        println!(
             "observation_identity match_id={match_id} faction={faction:?} public={public_name} private={private_name} cwd={}",
             std::env::current_dir()?.display()
         );

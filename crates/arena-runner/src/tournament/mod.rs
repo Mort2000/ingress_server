@@ -1,16 +1,23 @@
 //! External-client tournaments with recorded seeds, provenance, replays, and ratings.
 
 pub mod archive;
+pub mod assets_cli;
+pub mod builds;
+pub mod comparison;
 pub mod config;
+mod document;
 pub mod durable;
 pub mod elo;
 pub mod entrant;
+pub mod event;
 pub mod exec_external;
 mod logs;
+pub mod maps;
 pub mod outcome;
 pub mod report;
 pub mod run;
 pub mod schedule;
+pub mod selection;
 
 pub use config::{ClientSandbox, EloConfig, TMatchup, TournamentConfig};
 pub use entrant::{Entrant, EntrantId, EntrantKind, EntrantProvenance};
