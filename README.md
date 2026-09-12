@@ -22,15 +22,7 @@ cargo build --release --locked --manifest-path ../adaptive_bot/Cargo.toml
 
 ## 运行比赛
 
-一场 Adaptive 自对战，自动启动服务器和两个客户端并记录 IARP 回放：
-
-```sh
-scripts/run-external-match.sh --match-id adaptive-demo
-```
-
-默认客户端为 `../adaptive_bot/target/release/adaptive-bot`，也可通过 `--client <binary>` 替换。产物在 `runs/external/adaptive-demo/`，每次使用新的 match id。脚本直接运行客户端；首个连接分配为 ENL，进程启动先后不保证阵营。两个客户端必须都在握手窗口内连接。
-
-用调度器运行不同选手，按赛程分配阵营并使用沙箱：
+用 `arena-runner tournament` 调度外部选手，自动启动服务器与客户端、按赛程分配阵营并记录回放。以下示例使用沙箱运行两名选手：
 
 ```sh
 target/release/arena-runner tournament --out runs/alpha-duel \
@@ -43,7 +35,36 @@ target/release/arena-runner tournament --out runs/alpha-duel \
 
 锦标赛保存每场 IARP、日志、完整规则、地图、阵营映射、种子与二进制哈希，并输出赛程、排名和整数 Elo。正式锦标赛中的每一场单独计分；这里的偶数赛程用于两边覆盖。
 
-`--fast`（单场脚本中为 `--config fast`）使用 40 ms 决策窗口，只适用于协议冒烟。测试 Adaptive 时使用默认 1 s 窗口；缩短比赛可用 `--rounds 50`。
+`--fast` 使用 40 ms 决策窗口，只适用于协议冒烟。测试 Adaptive 时使用默认 1 s 窗口；缩短比赛可用 `--rounds 50`。
+
+## 独立赛事监控
+
+Tactical Replay 的独立后台只读赛事归档，同源提供页面和查询接口，不需要 runner 开启 HTTP 接口。可在比赛进行中查看进度、最新结果和暂定排名，按选手名／版本、地图、状态和结果筛选，展开历史尝试并打开已完成且验证通过的 replay；返回赛事页时保留筛选。
+
+除上述 Rust 工具链外，需要 Node.js 22.12+ 和 npm。从 server 根目录首次准备前端依赖与 WASM 工具链：
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.100 --locked
+npm --prefix viewer/app ci
+```
+
+构建并在单独终端启动监控（后台是独立 Cargo workspace，需要单独构建）：
+
+```sh
+cargo build --locked --manifest-path viewer/host/Cargo.toml
+npm --prefix viewer/app run build
+mkdir -p runs
+viewer/host/target/debug/arena-viewer serve --runs runs --assets viewer/app/dist
+```
+
+打开终端打印的完整授权链接，默认地址为 `127.0.0.1:8080`。页面与 API 同源，无需配置跨域。端口被占用时可追加 `--listen 127.0.0.1:0` 自动选择空闲端口；后台重启后应使用新打印的链接，不要公开其中的访问令牌。
+
+`--runs` 可指向单个赛事（如 `runs/alpha-duel`），也可指向包含赛事的集合目录（如 `runs`），并可重复指定多个目录。目录须预先存在；集合目录仅发现直接子目录中的赛事，随后新增的赛事会自动出现。后台默认每轮扫描后等待 2 秒，可通过 `--poll-ms` 调整。
+
+监控可先于 runner 启动，也可在 runner 退出后继续浏览；不会启动、恢复、补赛或重建赛事。磁盘记录的 `running` 不代表进程仍存活，未提交、损坏或没有 IARP 的尝试不会开放回放。归档包含双方私有信息，不应向参赛 Bot 提供访问权。纯静态手动打开 `.iarp` 的模式仍可用，无需赛事后台。
+
+完整接口和运行边界见 [赛事监控规范](docs/spec/viewer-tournaments.md)，回放操作见 [Tactical Replay 使用说明](viewer/app/README.md)。
 
 ## 编写与审核参赛程序
 
@@ -78,7 +99,7 @@ target/release/audit --root . --participant ../adaptive_bot
 | [crates/arena-runner](crates/arena-runner/) | 外部选手比赛调度、归档与排名 |
 | [crates/arena-viewer](crates/arena-viewer/) | Tactical Replay 的已验证逐轮快照与遥测数据 |
 | [tools](tools/) | 审核、沙箱、溯源；probe-client 仅是协议故障测试夹具 |
-| [viewer](viewer/) | Tactical Replay 前端与 WASM 桥接 |
+| [viewer](viewer/) | Tactical Replay 前端、WASM 桥接与独立赛事监控后台 |
 | [docs](docs/README.md) | 规则、设计、进度和历史报告 |
 
 旧内置策略、策略消融驱动及 `balance-*`／`tournament-*-r1` 冻结命令已退出当前源码。历史报告和配置保留原样，复现应检出对应历史提交；当前布局及规则采用依据见 [Alpha 迁移记录](docs/design/alpha-reference.md)。
