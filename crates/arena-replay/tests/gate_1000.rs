@@ -125,7 +125,7 @@ fn run_match(m: u32) -> Evidence {
     let mut writer = ReplayWriter::new(game_seed, &cfg, &map, &enl_spawns, &res_spawns);
     let mut harness = MatchHarness::new(game_seed, cfg, &map, &enl_spawns, &res_spawns, enl, res)
         .expect("gate match builds");
-    for _ in 0..500 {
+    for _ in 0..800 {
         let report = harness.run_round();
         writer
             .record_round(&report, harness.state())
@@ -138,7 +138,7 @@ fn run_match(m: u32) -> Evidence {
     // tag — 0 mismatches means exactly that.
     let decoded = decode_log(&bytes).expect("decode");
     let outcome = replay(&decoded).expect("every round replays identically");
-    assert_eq!(outcome.rounds_completed, 500);
+    assert_eq!(outcome.rounds_completed, 800);
 
     // Re-encode is byte-exact for every match.
     assert_eq!(

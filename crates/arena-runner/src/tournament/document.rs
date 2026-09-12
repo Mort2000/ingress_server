@@ -96,7 +96,7 @@ macro_rules! config_fields {
         move_budget_cm, portal_operation_range_cm, transfer_range_cm, initial_supply, max_supply,
         portal_max_hp, attack_damage, recharge_amount, recharge_cost_supply, hack_supply_yield,
         hack_key_yield_min, hack_key_yield_max, hack_cooldown_rounds, hack_limit_per_epoch,
-        max_link_distance_cm, max_commands_per_agent_round, max_frame_payload_bytes) };
+        max_link_distance_cm, max_commands_per_agent_round, max_frame_payload_bytes, max_reinforcement_agents_per_faction) };
 }
 pub(crate) fn config_json(c: &arena_core::config::GameConfig) -> Json {
     macro_rules! emit { ($c:ident; $($f:ident),*) => { object(vec![$((stringify!($f),Json::Int($c.$f as i64))),*]) }; }

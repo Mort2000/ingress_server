@@ -440,10 +440,10 @@ fn spawns_json(spawns: &[(arena_core::types::AgentId, arena_core::types::Coord)]
     )
 }
 
-/// The 31 config identity fields as name → int, in D44 codec order
+/// The 32 config identity fields as name → int, in D44 codec order
 /// (exactly the `GameConfig` declaration order the canonical hash uses).
 fn config_json(cfg: &GameConfig) -> Json {
-    let words: [(&str, i64); 31] = [
+    let words: [(&str, i64); 32] = [
         ("total_rounds", cfg.total_rounds as i64),
         (
             "initial_spawn_window_ms",
@@ -498,6 +498,10 @@ fn config_json(cfg: &GameConfig) -> Json {
         (
             "max_frame_payload_bytes",
             cfg.max_frame_payload_bytes as i64,
+        ),
+        (
+            "max_reinforcement_agents_per_faction",
+            cfg.max_reinforcement_agents_per_faction as i64,
         ),
     ];
     Json::obj(words.into_iter().map(|(k, v)| (k, Json::int(v))).collect())

@@ -2363,6 +2363,8 @@ mod root {
                 ///  ceiling — so a client sizing its largest frame to exactly the
                 ///  published value is legal (D62).
                 pub max_frame_payload_bytes: u32,
+                ///  Cumulative per-faction reinforcement cap; absent in legacy servers.
+                pub max_reinforcement_agents_per_faction: u32,
             }
 
             #[allow(clippy::derivable_impls)]
@@ -2400,6 +2402,7 @@ mod root {
                         max_link_distance_cm: 0,
                         max_commands_per_agent_round: 0,
                         max_frame_payload_bytes: 0,
+                        max_reinforcement_agents_per_faction: 4294967295,
                     }
                 }
             }
@@ -2445,6 +2448,7 @@ mod root {
                     field_max_link_distance_cm: impl ::planus::WriteAsDefault<u32, u32>,
                     field_max_commands_per_agent_round: impl ::planus::WriteAsDefault<u32, u32>,
                     field_max_frame_payload_bytes: impl ::planus::WriteAsDefault<u32, u32>,
+                    field_max_reinforcement_agents_per_faction: impl ::planus::WriteAsDefault<u32, u32>,
                 ) -> ::planus::Offset<Self> {
                     let prepared_total_rounds = field_total_rounds.prepare(builder, &0);
                     let prepared_initial_spawn_window_ms =
@@ -2491,8 +2495,10 @@ mod root {
                         field_max_commands_per_agent_round.prepare(builder, &0);
                     let prepared_max_frame_payload_bytes =
                         field_max_frame_payload_bytes.prepare(builder, &0);
+                    let prepared_max_reinforcement_agents_per_faction =
+                        field_max_reinforcement_agents_per_faction.prepare(builder, &4294967295);
 
-                    let mut table_writer: ::planus::table_writer::TableWriter<66> =
+                    let mut table_writer: ::planus::table_writer::TableWriter<68> =
                         ::core::default::Default::default();
                     if prepared_total_rounds.is_some() {
                         table_writer.write_entry::<u32>(0);
@@ -2586,6 +2592,9 @@ mod root {
                     }
                     if prepared_max_frame_payload_bytes.is_some() {
                         table_writer.write_entry::<u32>(30);
+                    }
+                    if prepared_max_reinforcement_agents_per_faction.is_some() {
+                        table_writer.write_entry::<u32>(31);
                     }
 
                     unsafe {
@@ -2756,6 +2765,14 @@ mod root {
                             {
                                 object_writer.write::<_, _, 4>(&prepared_max_frame_payload_bytes);
                             }
+                            if let ::core::option::Option::Some(
+                                prepared_max_reinforcement_agents_per_faction,
+                            ) = prepared_max_reinforcement_agents_per_faction
+                            {
+                                object_writer.write::<_, _, 4>(
+                                    &prepared_max_reinforcement_agents_per_faction,
+                                );
+                            }
                         });
                     }
                     builder.current_offset()
@@ -2819,6 +2836,7 @@ mod root {
                         self.max_link_distance_cm,
                         self.max_commands_per_agent_round,
                         self.max_frame_payload_bytes,
+                        self.max_reinforcement_agents_per_faction,
                     )
                 }
             }
@@ -5630,6 +5648,201 @@ mod root {
                     T30,
                 )>
             {
+                /// Setter for the [`max_reinforcement_agents_per_faction` field](MatchInfo#structfield.max_reinforcement_agents_per_faction).
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn max_reinforcement_agents_per_faction<T31>(
+                    self,
+                    value: T31,
+                ) -> MatchInfoBuilder<(
+                    T0,
+                    T1,
+                    T2,
+                    T3,
+                    T4,
+                    T5,
+                    T6,
+                    T7,
+                    T8,
+                    T9,
+                    T10,
+                    T11,
+                    T12,
+                    T13,
+                    T14,
+                    T15,
+                    T16,
+                    T17,
+                    T18,
+                    T19,
+                    T20,
+                    T21,
+                    T22,
+                    T23,
+                    T24,
+                    T25,
+                    T26,
+                    T27,
+                    T28,
+                    T29,
+                    T30,
+                    T31,
+                )>
+                where
+                    T31: ::planus::WriteAsDefault<u32, u32>,
+                {
+                    let (
+                        v0,
+                        v1,
+                        v2,
+                        v3,
+                        v4,
+                        v5,
+                        v6,
+                        v7,
+                        v8,
+                        v9,
+                        v10,
+                        v11,
+                        v12,
+                        v13,
+                        v14,
+                        v15,
+                        v16,
+                        v17,
+                        v18,
+                        v19,
+                        v20,
+                        v21,
+                        v22,
+                        v23,
+                        v24,
+                        v25,
+                        v26,
+                        v27,
+                        v28,
+                        v29,
+                        v30,
+                    ) = self.0;
+                    MatchInfoBuilder((
+                        v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16,
+                        v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30,
+                        value,
+                    ))
+                }
+
+                /// Sets the [`max_reinforcement_agents_per_faction` field](MatchInfo#structfield.max_reinforcement_agents_per_faction) to the default value.
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn max_reinforcement_agents_per_faction_as_default(
+                    self,
+                ) -> MatchInfoBuilder<(
+                    T0,
+                    T1,
+                    T2,
+                    T3,
+                    T4,
+                    T5,
+                    T6,
+                    T7,
+                    T8,
+                    T9,
+                    T10,
+                    T11,
+                    T12,
+                    T13,
+                    T14,
+                    T15,
+                    T16,
+                    T17,
+                    T18,
+                    T19,
+                    T20,
+                    T21,
+                    T22,
+                    T23,
+                    T24,
+                    T25,
+                    T26,
+                    T27,
+                    T28,
+                    T29,
+                    T30,
+                    ::planus::DefaultValue,
+                )> {
+                    self.max_reinforcement_agents_per_faction(::planus::DefaultValue)
+                }
+            }
+
+            impl<
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                T15,
+                T16,
+                T17,
+                T18,
+                T19,
+                T20,
+                T21,
+                T22,
+                T23,
+                T24,
+                T25,
+                T26,
+                T27,
+                T28,
+                T29,
+                T30,
+                T31,
+            >
+                MatchInfoBuilder<(
+                    T0,
+                    T1,
+                    T2,
+                    T3,
+                    T4,
+                    T5,
+                    T6,
+                    T7,
+                    T8,
+                    T9,
+                    T10,
+                    T11,
+                    T12,
+                    T13,
+                    T14,
+                    T15,
+                    T16,
+                    T17,
+                    T18,
+                    T19,
+                    T20,
+                    T21,
+                    T22,
+                    T23,
+                    T24,
+                    T25,
+                    T26,
+                    T27,
+                    T28,
+                    T29,
+                    T30,
+                    T31,
+                )>
+            {
                 /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [MatchInfo].
                 #[inline]
                 pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<MatchInfo>
@@ -5672,6 +5885,7 @@ mod root {
                 T28: ::planus::WriteAsDefault<u32, u32>,
                 T29: ::planus::WriteAsDefault<u32, u32>,
                 T30: ::planus::WriteAsDefault<u32, u32>,
+                T31: ::planus::WriteAsDefault<u32, u32>,
             > ::planus::WriteAs<::planus::Offset<MatchInfo>>
                 for MatchInfoBuilder<(
                     T0,
@@ -5705,6 +5919,7 @@ mod root {
                     T28,
                     T29,
                     T30,
+                    T31,
                 )>
             {
                 type Prepared = ::planus::Offset<MatchInfo>;
@@ -5747,6 +5962,7 @@ mod root {
                 T28: ::planus::WriteAsDefault<u32, u32>,
                 T29: ::planus::WriteAsDefault<u32, u32>,
                 T30: ::planus::WriteAsDefault<u32, u32>,
+                T31: ::planus::WriteAsDefault<u32, u32>,
             > ::planus::WriteAsOptional<::planus::Offset<MatchInfo>>
                 for MatchInfoBuilder<(
                     T0,
@@ -5780,6 +5996,7 @@ mod root {
                     T28,
                     T29,
                     T30,
+                    T31,
                 )>
             {
                 type Prepared = ::planus::Offset<MatchInfo>;
@@ -5825,6 +6042,7 @@ mod root {
                 T28: ::planus::WriteAsDefault<u32, u32>,
                 T29: ::planus::WriteAsDefault<u32, u32>,
                 T30: ::planus::WriteAsDefault<u32, u32>,
+                T31: ::planus::WriteAsDefault<u32, u32>,
             > ::planus::WriteAsOffset<MatchInfo>
                 for MatchInfoBuilder<(
                     T0,
@@ -5858,6 +6076,7 @@ mod root {
                     T28,
                     T29,
                     T30,
+                    T31,
                 )>
             {
                 #[inline]
@@ -5894,11 +6113,12 @@ mod root {
                         v28,
                         v29,
                         v30,
+                        v31,
                     ) = &self.0;
                     MatchInfo::create(
                         builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14,
                         v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29,
-                        v30,
+                        v30, v31,
                     )
                 }
             }
@@ -6205,6 +6425,16 @@ mod root {
                             .unwrap_or(0),
                     )
                 }
+
+                /// Getter for the [`max_reinforcement_agents_per_faction` field](MatchInfo#structfield.max_reinforcement_agents_per_faction).
+                #[inline]
+                pub fn max_reinforcement_agents_per_faction(&self) -> ::planus::Result<u32> {
+                    ::core::result::Result::Ok(
+                        self.0
+                            .access(31, "MatchInfo", "max_reinforcement_agents_per_faction")?
+                            .unwrap_or(4294967295),
+                    )
+                }
             }
 
             impl<'a> ::core::fmt::Debug for MatchInfoRef<'a> {
@@ -6259,6 +6489,10 @@ mod root {
                         &self.max_commands_per_agent_round(),
                     );
                     f.field("max_frame_payload_bytes", &self.max_frame_payload_bytes());
+                    f.field(
+                        "max_reinforcement_agents_per_faction",
+                        &self.max_reinforcement_agents_per_faction(),
+                    );
                     f.finish()
                 }
             }
@@ -6346,6 +6580,9 @@ mod root {
                         max_frame_payload_bytes: ::core::convert::TryInto::try_into(
                             value.max_frame_payload_bytes()?,
                         )?,
+                        max_reinforcement_agents_per_faction: ::core::convert::TryInto::try_into(
+                            value.max_reinforcement_agents_per_faction()?,
+                        )?,
                     })
                 }
             }
@@ -6428,7 +6665,7 @@ mod root {
             ///  the spawn window is running.
             ///
             /// Generated from these locations:
-            /// * Table `InitialSpawnStart` in the file `crates/arena-protocol/schemas/protocol.fbs:107`
+            /// * Table `InitialSpawnStart` in the file `crates/arena-protocol/schemas/protocol.fbs:109`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct InitialSpawnStart {
                 /// The field `spawn_deadline_remaining_ms` in the table `InitialSpawnStart`
@@ -6777,7 +7014,7 @@ mod root {
             ///  agent_id -> coordinate set, validated as a whole (R-SPAWN-01).
             ///
             /// Generated from these locations:
-            /// * Table `SubmitInitialSpawns` in the file `crates/arena-protocol/schemas/protocol.fbs:114`
+            /// * Table `SubmitInitialSpawns` in the file `crates/arena-protocol/schemas/protocol.fbs:116`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmitInitialSpawns {
                 /// The field `positions` in the table `SubmitInitialSpawns`
@@ -7082,7 +7319,7 @@ mod root {
             /// The table `SpawnEntry` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `SpawnEntry` in the file `crates/arena-protocol/schemas/protocol.fbs:118`
+            /// * Table `SpawnEntry` in the file `crates/arena-protocol/schemas/protocol.fbs:120`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SpawnEntry {
                 /// The field `agent_id` in the table `SpawnEntry`
@@ -7429,7 +7666,7 @@ mod root {
             ///  2 = missed deadline (SPAWN_FORFEIT). Private reason; no replacement.
             ///
             /// Generated from these locations:
-            /// * Table `InitialSpawnResult` in the file `crates/arena-protocol/schemas/protocol.fbs:126`
+            /// * Table `InitialSpawnResult` in the file `crates/arena-protocol/schemas/protocol.fbs:128`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct InitialSpawnResult {
                 /// The field `status` in the table `InitialSpawnResult`
@@ -7761,7 +7998,7 @@ mod root {
             ///  are licensed again. No authoritative round payload (P3-RPC).
             ///
             /// Generated from these locations:
-            /// * Table `RoundStartSignal` in the file `crates/arena-protocol/schemas/protocol.fbs:133`
+            /// * Table `RoundStartSignal` in the file `crates/arena-protocol/schemas/protocol.fbs:135`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct RoundStartSignal {}
 
@@ -7981,7 +8218,7 @@ mod root {
             ///  no stream ids or nonces.
             ///
             /// Generated from these locations:
-            /// * Union `CommandBody` in the file `crates/arena-protocol/schemas/protocol.fbs:138`
+            /// * Union `CommandBody` in the file `crates/arena-protocol/schemas/protocol.fbs:140`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub enum CommandBody {
                 /// The variant `Move` in the union `CommandBody`
@@ -8474,7 +8711,7 @@ mod root {
             /// The table `CmdMove` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdMove` in the file `crates/arena-protocol/schemas/protocol.fbs:148`
+            /// * Table `CmdMove` in the file `crates/arena-protocol/schemas/protocol.fbs:150`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdMove {
                 /// The field `x` in the table `CmdMove`
@@ -8764,7 +9001,7 @@ mod root {
             /// The table `CmdPortal` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdPortal` in the file `crates/arena-protocol/schemas/protocol.fbs:149`
+            /// * Table `CmdPortal` in the file `crates/arena-protocol/schemas/protocol.fbs:151`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdPortal {
                 /// The field `portal` in the table `CmdPortal`
@@ -9018,7 +9255,7 @@ mod root {
             /// The table `CmdEmpty` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdEmpty` in the file `crates/arena-protocol/schemas/protocol.fbs:150`
+            /// * Table `CmdEmpty` in the file `crates/arena-protocol/schemas/protocol.fbs:152`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdEmpty {}
 
@@ -9219,7 +9456,7 @@ mod root {
             /// The table `CmdLink` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdLink` in the file `crates/arena-protocol/schemas/protocol.fbs:151`
+            /// * Table `CmdLink` in the file `crates/arena-protocol/schemas/protocol.fbs:153`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdLink {
                 /// The field `a` in the table `CmdLink`
@@ -9509,7 +9746,7 @@ mod root {
             /// The table `KeyCount` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `KeyCount` in the file `crates/arena-protocol/schemas/protocol.fbs:152`
+            /// * Table `KeyCount` in the file `crates/arena-protocol/schemas/protocol.fbs:154`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct KeyCount {
                 /// The field `portal` in the table `KeyCount`
@@ -9803,7 +10040,7 @@ mod root {
             /// The table `CmdTransfer` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdTransfer` in the file `crates/arena-protocol/schemas/protocol.fbs:153`
+            /// * Table `CmdTransfer` in the file `crates/arena-protocol/schemas/protocol.fbs:155`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdTransfer {
                 /// The field `target_agent` in the table `CmdTransfer`
@@ -10188,7 +10425,7 @@ mod root {
             /// The table `Command` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `Command` in the file `crates/arena-protocol/schemas/protocol.fbs:159`
+            /// * Table `Command` in the file `crates/arena-protocol/schemas/protocol.fbs:161`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct Command {
                 /// The field `body` in the table `Command`
@@ -10457,7 +10694,7 @@ mod root {
             /// The table `SubmitCommandStream` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `SubmitCommandStream` in the file `crates/arena-protocol/schemas/protocol.fbs:161`
+            /// * Table `SubmitCommandStream` in the file `crates/arena-protocol/schemas/protocol.fbs:163`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmitCommandStream {
                 /// The field `round` in the table `SubmitCommandStream`
@@ -10863,7 +11100,7 @@ mod root {
             ///  (completed at/after the deadline; nothing frozen).
             ///
             /// Generated from these locations:
-            /// * Table `SubmissionResult` in the file `crates/arena-protocol/schemas/protocol.fbs:172`
+            /// * Table `SubmissionResult` in the file `crates/arena-protocol/schemas/protocol.fbs:174`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmissionResult {
                 /// The field `round` in the table `SubmissionResult`
@@ -11296,7 +11533,7 @@ mod root {
             ///  agents as explicit passes for `round`.
             ///
             /// Generated from these locations:
-            /// * Table `CommitRound` in the file `crates/arena-protocol/schemas/protocol.fbs:181`
+            /// * Table `CommitRound` in the file `crates/arena-protocol/schemas/protocol.fbs:183`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CommitRound {
                 /// The field `round` in the table `CommitRound`
@@ -11567,7 +11804,7 @@ mod root {
             ///  and SHM reads are forbidden until the next RoundStartSignal.
             ///
             /// Generated from these locations:
-            /// * Table `RoundClosed` in the file `crates/arena-protocol/schemas/protocol.fbs:187`
+            /// * Table `RoundClosed` in the file `crates/arena-protocol/schemas/protocol.fbs:189`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct RoundClosed {
                 /// The field `round` in the table `RoundClosed`
@@ -11839,7 +12076,7 @@ mod root {
             ///  never dressed up as score results (CONTEXT Match Outcome).
             ///
             /// Generated from these locations:
-            /// * Table `GameEnd` in the file `crates/arena-protocol/schemas/protocol.fbs:194`
+            /// * Table `GameEnd` in the file `crates/arena-protocol/schemas/protocol.fbs:196`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct GameEnd {
                 /// The field `outcome` in the table `GameEnd`

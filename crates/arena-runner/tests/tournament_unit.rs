@@ -161,6 +161,8 @@ fn benchmark_seed_set_is_disjoint_from_the_m6_tuning_pool() {
 fn alpha_config_has_new_identity_and_legacy_encoding_is_unchanged() {
     let cfg = GameConfig::default();
     let mut legacy = cfg;
+    legacy.total_rounds = 500;
+    legacy.max_reinforcement_agents_per_faction = u32::MAX;
     legacy.recharge_amount = 15;
     legacy.max_link_distance_cm = 200_000;
     assert_eq!(

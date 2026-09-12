@@ -1,4 +1,4 @@
-//! Recorder + replay-engine integration tests over a real 500-round match
+//! Recorder + replay-engine integration tests over a real 800-round match
 //! (M5 checklist items: recording transparency, byte-exact round trip,
 //! checkpoints, full replay from the log alone, map freezing, corruption
 //! localization, intake re-derivation, version rejection, tampered recorded
@@ -23,7 +23,7 @@ const GAME_SEED: u64 = 0x5EED_0000_0000_0005;
 fn identity_roundtrips_without_changing_game_state_and_old_files_remain_readable() {
     let (bytes, ..) = field_match_parts(GAME_SEED);
     let old = bytes.unwrap();
-    assert_eq!(u32::from_le_bytes(old[4..8].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(old[4..8].try_into().unwrap()), 3);
     let mut log = decode_log(&old).unwrap();
     let before = replay(&log).unwrap();
     let mut identity = arena_replay::format::ReplayIdentity::default();
@@ -32,7 +32,7 @@ fn identity_roundtrips_without_changing_game_state_and_old_files_remain_readable
     identity.participants[0].bot_version = "v1.2".into();
     log.header.identity = Some(identity.clone());
     let new = log.encode();
-    assert_eq!(u32::from_le_bytes(new[4..8].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(new[4..8].try_into().unwrap()), 4);
     let decoded = decode_log(&new).unwrap();
     assert_eq!(decoded.header.identity, Some(identity));
     assert_eq!(decoded.encode(), new);
@@ -50,6 +50,53 @@ fn identity_roundtrips_without_changing_game_state_and_old_files_remain_readable
         decode_log(&corrupt).is_err(),
         "identity corruption must be detected"
     );
+}
+
+#[test]
+fn legacy_replays_keep_unlimited_reinforcements_and_roundtrip_both_formats() {
+    let mut cfg = replay_cfg();
+    cfg.total_rounds = 12;
+    cfg.reinforcement_interval_rounds = 1;
+    cfg.max_reinforcement_agents_per_faction = u32::MAX;
+    cfg.max_link_distance_cm = 150_000;
+    let map = replay_map();
+    let enl = replay_spawns(&cfg, Faction::Enl);
+    let res = replay_spawns(&cfg, Faction::Res);
+    let mut writer = ReplayWriter::new(GAME_SEED, &cfg, &map, &enl, &res);
+    let mut harness = MatchHarness::new(
+        GAME_SEED,
+        cfg,
+        &map,
+        &enl,
+        &res,
+        Box::new(FieldBot::new(Faction::Enl, [0, 1, 2], 0)),
+        Box::new(FieldBot::new(Faction::Res, [3, 4, 5], 3)),
+    )
+    .unwrap();
+    for _ in 0..cfg.total_rounds {
+        let report = harness.run_round();
+        writer.record_round(&report, harness.state()).unwrap();
+    }
+    assert_eq!(harness.state().agents().len(), 28);
+    let bytes = writer.finish(harness.state()).unwrap();
+    let mut log = decode_log(&bytes).unwrap();
+    for version in [1, 2] {
+        if version == 2 {
+            log.header.identity = Some(Default::default());
+        }
+        let encoded = log.encode();
+        assert_eq!(
+            u32::from_le_bytes(encoded[4..8].try_into().unwrap()),
+            version
+        );
+        let decoded = decode_log(&encoded).unwrap();
+        assert_eq!(decoded.header.config, cfg);
+        assert_eq!(decoded.encode(), encoded);
+        assert_eq!(
+            replay(&decoded).unwrap().final_state_hash,
+            canon::state_hash(harness.state())
+        );
+    }
 }
 
 /// Runs the pinned FieldBot fixture match with and without a recorder.
@@ -80,7 +127,7 @@ fn field_match_parts(
     )
     .expect("harness builds");
     let mut reports = Vec::new();
-    for _ in 0..500 {
+    for _ in 0..800 {
         let report = harness.run_round();
         writer
             .record_round(&report, harness.state())
@@ -101,7 +148,7 @@ fn field_match_parts(
         Box::new(FieldBot::new(Faction::Res, [3, 4, 5], 3)),
     )
     .expect("twin builds");
-    let twin_reports = twin.run_rounds(500);
+    let twin_reports = twin.run_rounds(800);
     let twin_state = twin.into_state();
 
     (
@@ -138,7 +185,7 @@ fn recording_changes_nothing() {
     let bytes = bytes.expect("recorded");
     assert_eq!(reports, twin_reports, "Vec<RoundReport> equal");
     assert_eq!(state, twin_state, "GameState equal (PartialEq)");
-    assert_eq!(state.round(), 501);
+    assert_eq!(state.round(), 801);
     // The fixture is not vacuous: both factions hold a field.
     assert!(state.link_graph().fields().len() >= 2);
     assert!(state.score(Faction::Enl) > 0);
@@ -146,8 +193,8 @@ fn recording_changes_nothing() {
     assert!(!bytes.is_empty());
 }
 
-// Checklist 11 + 14: a full 500-round log round-trips byte-exactly both
-// directions, and checkpoints land exactly at rounds 50, 100, ..., 500
+// Checklist 11 + 14: a full 800-round log round-trips byte-exactly both
+// directions, and checkpoints land exactly at rounds 50, 100, ..., 800
 // with hashes agreeing with their round records.
 #[test]
 fn full_log_round_trip_and_checkpoint_placement() {
@@ -158,8 +205,8 @@ fn full_log_round_trip_and_checkpoint_placement() {
     assert_eq!(decoded.encode(), bytes, "re-encode == original bytes");
     assert_eq!(
         decoded.round_records().map(|r| r.round).collect::<Vec<_>>(),
-        (1..=500u32).collect::<Vec<_>>(),
-        "500 sequential records"
+        (1..=800u32).collect::<Vec<_>>(),
+        "800 sequential records"
     );
 
     // Checkpoints exactly at the multiples of 50, hash-verified at decode.
@@ -171,10 +218,10 @@ fn full_log_round_trip_and_checkpoint_placement() {
             _ => None,
         })
         .collect();
-    let expected: Vec<u32> = (CHECKPOINT_INTERVAL..=500u32)
+    let expected: Vec<u32> = (CHECKPOINT_INTERVAL..=800u32)
         .step_by(CHECKPOINT_INTERVAL as usize)
         .collect();
-    assert_eq!(checkpoints, expected, "checkpoints at 50,100,...,500");
+    assert_eq!(checkpoints, expected, "checkpoints at 50,100,...,800");
     for block in &decoded.blocks {
         if let Block::Checkpoint(c) = block {
             let record = decoded
@@ -200,7 +247,7 @@ fn full_log_round_trip_and_checkpoint_placement() {
             _ => None,
         })
         .last();
-    assert_eq!(last, Some(500));
+    assert_eq!(last, Some(800));
     assert_eq!(canon::state_hash(&state), {
         let EndOfMatch::Normal {
             final_state_hash, ..
@@ -212,14 +259,14 @@ fn full_log_round_trip_and_checkpoint_placement() {
     });
 }
 
-// Checklist 17: full 500-round replay from the log alone — every per-round
+// Checklist 17: full 800-round replay from the log alone — every per-round
 // hash, delta, and event re-derives; the final hash matches the trailer;
 // the result is one of the three legal values and equals the recorded tag.
 #[test]
 fn full_replay_from_log_alone() {
     let (bytes, _reports, state) = recorded_match(GAME_SEED);
     let outcome = replay_bytes(&bytes).expect("replay verifies every round");
-    assert_eq!(outcome.rounds_completed, 500);
+    assert_eq!(outcome.rounds_completed, 800);
     assert_eq!(outcome.final_state_hash, canon::state_hash(&state));
     assert_eq!(
         outcome.state, state,
@@ -427,7 +474,7 @@ fn unlocatable_and_duplicates_re_derived() {
         }),
     )
     .expect("harness builds");
-    for _ in 0..500 {
+    for _ in 0..800 {
         let report = harness.run_round();
         writer
             .record_round(&report, harness.state())
@@ -462,7 +509,7 @@ fn unlocatable_and_duplicates_re_derived() {
 
     // The replay re-derives every intake fact identically or fails.
     let outcome = replay(&decoded).expect("replay re-derives the intake facts");
-    assert_eq!(outcome.rounds_completed, 500);
+    assert_eq!(outcome.rounds_completed, 800);
 }
 
 // Checklist 21: version mismatches are rejected before any round executes
@@ -581,7 +628,7 @@ fn hash_point_is_the_post_advance_state() {
     )
     .expect("twin builds");
     let mut records = decoded.round_records();
-    for _ in 0..500 {
+    for _ in 0..800 {
         let _ = twin.run_round();
         let record = records.next().expect("record");
         assert_eq!(

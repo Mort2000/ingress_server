@@ -99,6 +99,8 @@ table MatchInfo {
   /// ceiling — so a client sizing its largest frame to exactly the
   /// published value is legal (D62).
   max_frame_payload_bytes: uint;
+  /// Cumulative per-faction reinforcement cap; absent in legacy servers.
+  max_reinforcement_agents_per_faction: uint = 4294967295;
 }
 
 /// Server -> Client: the complete map has been atomically published to the

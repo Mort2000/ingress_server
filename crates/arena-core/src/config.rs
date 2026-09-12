@@ -78,12 +78,15 @@ pub struct GameConfig {
     // Protocol guards
     pub max_commands_per_agent_round: u32,
     pub max_frame_payload_bytes: u32,
+    /// Cumulative reinforcement limit per faction; zero disables reinforcements.
+    /// `u32::MAX` preserves the unlimited legacy rule and binary encoding.
+    pub max_reinforcement_agents_per_faction: u32,
 }
 
 impl Default for GameConfig {
     fn default() -> Self {
         GameConfig {
-            total_rounds: 500,
+            total_rounds: 800,
             initial_spawn_window_ms: 5000,
             decision_window_ms: 1000,
             priority_bucket_ms: 5,
@@ -118,8 +121,9 @@ impl Default for GameConfig {
             hack_cooldown_rounds: 3,
             hack_limit_per_epoch: 5,
 
-            max_link_distance_cm: 150_000,
+            max_link_distance_cm: 800_000,
 
+            max_reinforcement_agents_per_faction: 4,
             max_commands_per_agent_round: 10,
             max_frame_payload_bytes: 65_536,
         }
@@ -236,7 +240,7 @@ mod tests {
     #[test]
     fn default_matches_r_config_01() {
         let cfg = GameConfig::default();
-        assert_eq!(cfg.total_rounds, 500);
+        assert_eq!(cfg.total_rounds, 800);
         assert_eq!(cfg.initial_spawn_window_ms, 5000);
         assert_eq!(cfg.decision_window_ms, 1000);
         assert_eq!(cfg.priority_bucket_ms, 5);
@@ -250,6 +254,7 @@ mod tests {
         assert_eq!(cfg.initial_agents_per_faction, 3);
         assert_eq!(cfg.reinforcement_interval_rounds, 100);
         assert_eq!(cfg.reinforcement_agents_per_faction, 1);
+        assert_eq!(cfg.max_reinforcement_agents_per_faction, 4);
         assert_eq!(cfg.move_budget_cm, 20_000);
         assert_eq!(cfg.portal_operation_range_cm, 5_000);
         assert_eq!(cfg.transfer_range_cm, 5_000);
@@ -264,7 +269,7 @@ mod tests {
         assert_eq!(cfg.hack_key_yield_max, 3);
         assert_eq!(cfg.hack_cooldown_rounds, 3);
         assert_eq!(cfg.hack_limit_per_epoch, 5);
-        assert_eq!(cfg.max_link_distance_cm, 150_000);
+        assert_eq!(cfg.max_link_distance_cm, 800_000);
         assert_eq!(cfg.max_commands_per_agent_round, 10);
         assert_eq!(cfg.max_frame_payload_bytes, 65_536);
     }

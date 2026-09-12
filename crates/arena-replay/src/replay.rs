@@ -69,10 +69,15 @@ pub fn replay(log: &ReplayFile) -> Result<ReplayOutcome, ReplayError> {
             expected: arena_core::rng::RNG_VERSION,
         });
     }
-    if header.state_encoding_version != canon::STATE_ENCODING_VERSION {
+    let expected_encoding = if header.config.max_reinforcement_agents_per_faction == u32::MAX {
+        1
+    } else {
+        canon::STATE_ENCODING_VERSION
+    };
+    if header.state_encoding_version != expected_encoding {
         return Err(ReplayError::StateEncodingVersion {
             found: header.state_encoding_version,
-            expected: canon::STATE_ENCODING_VERSION,
+            expected: expected_encoding,
         });
     }
     if header.server_version != crate::format::SERVER_VERSION {

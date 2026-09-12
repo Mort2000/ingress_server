@@ -58,7 +58,11 @@ impl ReplayWriter {
             server_version: SERVER_VERSION,
             protocol_version: PROTOCOL_VERSION,
             rng_version: RNG_VERSION,
-            state_encoding_version: canon::STATE_ENCODING_VERSION,
+            state_encoding_version: if cfg.max_reinforcement_agents_per_faction == u32::MAX {
+                1
+            } else {
+                canon::STATE_ENCODING_VERSION
+            },
             game_seed,
             total_rounds: cfg.total_rounds,
             config: *cfg,

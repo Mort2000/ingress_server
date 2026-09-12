@@ -858,7 +858,7 @@ mod tests {
                 hack_ordinal: 3,
             })
         );
-        // M4 update: the round-100 boundary (interval 100 < total 500) now
+        // M4 update: the round-100 boundary (interval 100 < total 800) now
         // spawns one reinforcement agent per faction and broadcasts
         // REINFORCEMENT — the ONLY event of this scenario
         // (HACK/TRANSFER/RECHARGE still never broadcast).
@@ -931,7 +931,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // M4 acceptance (checklist 42-47): the 500-round Field Game match.
+    // M4 acceptance (checklist 42-47): the 800-round Field Game match.
     // ------------------------------------------------------------------
 
     use std::sync::{Arc, Mutex};
@@ -1159,7 +1159,7 @@ mod tests {
         }
     }
 
-    /// Match fixture: default config (500 rounds, 120 portals, 600_000 cm
+    /// Match fixture: default config (800 rounds, 120 portals, 600_000 cm
     /// map, 3 agents per faction, reinforcement every 100 rounds), the
     /// pinned generated map, and both factions' three initial agents spawned
     /// exactly ON their triangle portals (spawns are free coordinates).
@@ -1210,17 +1210,17 @@ mod tests {
             Box::new(res),
         )
         .expect("harness builds");
-        let reports = harness.run_rounds(500);
+        let reports = harness.run_rounds(800);
         let state = harness.into_state();
         (reports, state, enl_counts, res_counts)
     }
 
     // Checklist 42: the full default match runs to completion.
     #[test]
-    fn gate_m4_500_round_match_completes() {
+    fn gate_m4_800_round_match_completes() {
         let (reports, state, _, _) = run_field_match(M4_GAME_SEED);
-        assert_eq!(reports.len(), 500);
-        assert_eq!(state.round(), 501, "500 rounds ran; the counter advanced");
+        assert_eq!(reports.len(), 800);
+        assert_eq!(state.round(), 801, "800 rounds ran; the counter advanced");
         // The bots really played the field game.
         assert!(
             state.link_graph().links().len() >= 6,
@@ -1328,7 +1328,16 @@ mod tests {
         // Observations at rounds 101/201/301/401 show 4/5/6/7 own agents.
         for (counts, faction) in [(enl_counts, "ENL"), (res_counts, "RES")] {
             let counts = counts.lock().expect("uncontended");
-            for (round, expected) in [(101u32, 4usize), (201, 5), (301, 6), (401, 7)] {
+            for (round, expected) in [
+                (101u32, 4usize),
+                (201, 5),
+                (301, 6),
+                (401, 7),
+                (501, 7),
+                (601, 7),
+                (701, 7),
+                (800, 7),
+            ] {
                 let seen = counts
                     .iter()
                     .find(|(r, _)| *r == round)
@@ -1341,7 +1350,7 @@ mod tests {
 
     // Checklist 45: the whole match is deterministic — same game_seed, same
     // map, fresh bots, identical reports and identical final state (the M3
-    // gate extended to the full 500-round field match).
+    // gate extended to the full 800-round field match).
     #[test]
     fn gate_m4_full_match_determinism() {
         let (reports_a, state_a, _, _) = run_field_match(M4_GAME_SEED);
@@ -1349,7 +1358,7 @@ mod tests {
         assert_eq!(reports_a, reports_b, "Vec<RoundReport> equal");
         assert_eq!(state_a, state_b, "GameState equal (PartialEq)");
         // The gate is not vacuous.
-        assert_eq!(state_a.round(), 501);
+        assert_eq!(state_a.round(), 801);
         assert!(state_a.score(Faction::Enl) > 0);
         assert!(state_a.score(Faction::Res) > 0);
         assert!(state_a.link_graph().fields().len() >= 2);
@@ -1363,7 +1372,7 @@ mod tests {
         let start = Instant::now();
         let (_reports, state, _, _) = run_field_match(M4_GAME_SEED);
         let elapsed = start.elapsed();
-        assert_eq!(state.round(), 501);
+        assert_eq!(state.round(), 801);
         assert!(
             elapsed < Duration::from_secs(60),
             "the full match took {elapsed:?}"
@@ -1371,7 +1380,7 @@ mod tests {
     }
 
     // Checklist 47 (P1-FIELD): the incrementally maintained field cache
-    // equals the from-scratch recompute over the real 500-round final state.
+    // equals the from-scratch recompute over the real 800-round final state.
     #[test]
     fn gate_m4_field_cache_equals_full_recompute_at_match_end() {
         let (_reports, state, _, _) = run_field_match(M4_GAME_SEED);
@@ -1385,7 +1394,7 @@ mod tests {
     // ------------------------------------------------------------------
     // A-CORE stress (M-final): the MVP acceptance row demands "处理至少
     // 200 Portal" — a 300-portal map from the FROZEN generator running a
-    // full default-length (500-round) match in-process with the same
+    // full default-length (800-round) match in-process with the same
     // scripted FieldBot used by the M4 gates. Measured 20 ms debug on the
     // 12-core dev box, map generation and triangle search included (the
     // 120-portal default match runs ~0.08 s; the assert stays a generous
@@ -1399,7 +1408,7 @@ mod tests {
     const STRESS_MAP_SEED: u64 = 0x0055_0000_0300;
 
     fn stress_config() -> GameConfig {
-        let mut cfg = GameConfig::default(); // 500 rounds: the default length
+        let mut cfg = GameConfig::default(); // 800 rounds: the default length
         cfg.map_width_cm = 1_000_000;
         cfg.map_height_cm = 1_000_000;
         cfg.portal_count = 300;
@@ -1412,7 +1421,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_final_300_portal_500_round_match_completes() {
+    fn gate_final_300_portal_800_round_match_completes() {
         let start = Instant::now();
         let cfg = stress_config();
         let map = generate_map(STRESS_MAP_SEED, &cfg).expect("the 300-portal stress map");
@@ -1449,14 +1458,14 @@ mod tests {
             )),
         )
         .expect("stress harness builds");
-        let reports = harness.run_rounds(500);
+        let reports = harness.run_rounds(800);
         let state = harness.into_state();
 
         // Completion: every round settled exactly once, the counter
         // advanced past the last round, and the map really carried 300
         // portals through the whole match.
-        assert_eq!(reports.len(), 500);
-        assert_eq!(state.round(), 501);
+        assert_eq!(reports.len(), 800);
+        assert_eq!(state.round(), 801);
         assert_eq!(state.portals().len(), 300);
 
         // Correct final state/result: the field game actually played, the
@@ -1500,7 +1509,7 @@ mod tests {
 
         // Runtime bound (A-CORE): generous, hardware-independent.
         let elapsed = start.elapsed();
-        eprintln!("300-portal 500-round stress match: {elapsed:?} (debug)");
+        eprintln!("300-portal 800-round stress match: {elapsed:?} (debug)");
         assert!(
             elapsed < Duration::from_secs(60),
             "the 300-portal match took {elapsed:?}"

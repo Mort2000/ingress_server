@@ -1,12 +1,14 @@
-//! IARP ("Ingress Arena Replay") binary file format, version 1 (D46).
+//! IARP ("Ingress Arena Replay") binary file format (D46).
+//! Versions 1/2 use the legacy 31-word config; 3/4 add the reinforcement cap.
+//! Even versions include participant identity; odd versions omit it.
 //!
 //! Layout (every integer little-endian, no padding — D2/D51):
 //!
 //! ```text
-//! Header: magic b"IARP" | format_version u32=1 | server_version u32 |
+//! Header: magic b"IARP" | format_version u32 | server_version u32 |
 //!         protocol_version u32 | rng_version u32 | state_encoding_version u32 |
 //!         game_seed u64 | total_rounds u32 (echo of cfg.total_rounds) |
-//!         config (shared 124-byte codec) |
+//!         config (shared 128-byte codec) |
 //!         map: u32 n + per portal (owner u8, hp u32, x u32, y u32) |
 //!         spawns ENL then RES: u32 count + (agent u32, x u32, y u32) ascending
 //! Blocks: tag u8 — 1 = RoundRecord, 2 = Checkpoint, 3 = EndOfMatch
@@ -50,7 +52,7 @@ use crate::canon;
 pub const MAGIC: &[u8; 4] = b"IARP";
 
 /// IARP structural format version.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Server (rules-engine) version that produced the file.
 pub const SERVER_VERSION: u32 = 1;
@@ -538,7 +540,7 @@ pub fn decode(bytes: &[u8]) -> Result<ReplayFile, ReplayError> {
         return Err(ReplayError::BadMagic);
     }
     let format_version = r.u32()?;
-    if format_version != 1 && format_version != FORMAT_VERSION {
+    if !(1..=FORMAT_VERSION).contains(&format_version) {
         return Err(ReplayError::FormatVersion {
             found: format_version,
             expected: FORMAT_VERSION,
@@ -566,16 +568,25 @@ pub fn decode(bytes: &[u8]) -> Result<ReplayFile, ReplayError> {
         });
     }
     let state_encoding_version = r.u32()?;
-    if state_encoding_version != canon::STATE_ENCODING_VERSION {
+    let expected_encoding = if format_version <= 2 {
+        1
+    } else {
+        canon::STATE_ENCODING_VERSION
+    };
+    if state_encoding_version != expected_encoding {
         return Err(ReplayError::StateEncodingVersion {
             found: state_encoding_version,
-            expected: canon::STATE_ENCODING_VERSION,
+            expected: expected_encoding,
         });
     }
     let game_seed = r.u64()?;
     let total_rounds = r.u32()?;
-    let config = codec::config_from_bytes(r.take(codec::CONFIG_BYTES)?)
-        .ok_or(ReplayError::Truncated { at: r.pos })?;
+    let config = codec::config_from_bytes(r.take(if format_version <= 2 {
+        codec::CONFIG_BYTES - 4
+    } else {
+        codec::CONFIG_BYTES
+    })?)
+    .ok_or(ReplayError::Truncated { at: r.pos })?;
     if total_rounds != config.total_rounds {
         return Err(ReplayError::TotalRoundsEcho {
             header: total_rounds,
@@ -598,7 +609,7 @@ pub fn decode(bytes: &[u8]) -> Result<ReplayFile, ReplayError> {
     let map = MapDefinition::new(portals);
     let enl_spawns = decode_spawns(&mut r)?;
     let res_spawns = decode_spawns(&mut r)?;
-    let identity = if format_version == 2 {
+    let identity = if format_version == 2 || format_version == 4 {
         Some(decode_identity(&mut r)?)
     } else {
         None
@@ -730,10 +741,12 @@ impl Writer {
 
 fn encode_header(w: &mut Writer, header: &ReplayHeader) {
     w.bytes(MAGIC);
-    w.u32(if header.identity.is_some() {
-        FORMAT_VERSION
-    } else {
-        1
+    let legacy = header.config.max_reinforcement_agents_per_faction == u32::MAX;
+    w.u32(match (legacy, header.identity.is_some()) {
+        (true, false) => 1,
+        (true, true) => 2,
+        (false, false) => 3,
+        (false, true) => FORMAT_VERSION,
     });
     w.u32(header.server_version);
     w.u32(header.protocol_version);
@@ -1745,12 +1758,12 @@ mod tests {
         assert_eq!(decode(&bad_magic), Err(ReplayError::BadMagic));
 
         let mut bad_format = bytes.clone();
-        bad_format[4..8].copy_from_slice(&3u32.to_le_bytes());
+        bad_format[4..8].copy_from_slice(&99u32.to_le_bytes());
         assert_eq!(
             decode(&bad_format),
             Err(ReplayError::FormatVersion {
-                found: 3,
-                expected: 2
+                found: 99,
+                expected: FORMAT_VERSION
             })
         );
 
@@ -2053,9 +2066,9 @@ mod tests {
         let file = fixture_file();
         let bytes = file.encode();
         // The first block tag sits right after the header: magic 4 +
-        // 5 u32 (20) + u64 (8) + u32 (4) + config 124 + map (4 + 3*13) +
-        // spawns (4 + 12) * 2 = 4+20+8+4+124+43+32 = 235.
-        let header_len = 4 + 20 + 8 + 4 + 124 + 4 + 3 * 13 + (4 + 12) * 2;
+        // 5 u32 (20) + u64 (8) + u32 (4) + config 128 + map (4 + 3*13) +
+        // spawns (4 + 12) * 2 = 4+20+8+4+128+43+32 = 239.
+        let header_len = 4 + 20 + 8 + 4 + 128 + 4 + 3 * 13 + (4 + 12) * 2;
         assert_eq!(bytes[header_len], TAG_ROUND);
         let mut tampered = bytes.clone();
         tampered[header_len] = 9;

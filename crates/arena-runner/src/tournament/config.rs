@@ -138,7 +138,7 @@ impl TournamentConfig {
         )
     }
 
-    /// blake3 identity of the canonical 31-word config encoding (D44) —
+    /// blake3 identity of the canonical config encoding (D44) —
     /// the SAME value `BatchConfig::config_hash` produces for this
     /// `GameConfig`.
     pub fn config_identity(&self) -> u64 {
@@ -212,7 +212,7 @@ fn tag_j_master(tag: &str, j: u32, master: u64) -> Vec<u8> {
     payload
 }
 
-/// blake3-LE-u64 of the D44 canonical 31-word config encoding — extracted
+/// blake3-LE-u64 of the D44 canonical config encoding — extracted
 /// from `BatchConfig::config_hash` (pure refactor: the M6 value is pinned
 /// by the tests).
 pub fn config_identity(cfg: &GameConfig) -> u64 {

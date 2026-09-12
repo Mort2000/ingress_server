@@ -28,6 +28,8 @@ Replay 不逐轮保存完整 State，而保存：
 
 Replay 从 Header 载入冻结的 Map Definition，不调用地图生成器。Checkpoint 兼顾文件体积、快速 Seek 与确定性校验。每轮 State Hash 是 `BLAKE3-256("ingress-arena-state-v0.1" || canonical_replay_state)` 的 32-byte 结果，而不是 FlatBuffers Snapshot 的原始字节 Hash；Canonical Encoding 版本进入 Header。Public Event、诊断和输出日志仍作为 Replay 记录保存，但不进入 State Hash。重放时逐轮验证 `expected_hash == replay_hash`，尽早发现运行期 RNG 非确定性、几何语义变化、Resolver Bug、状态数据损坏或版本不兼容。State Hash 不参与胜负判断，也不替代 Replay 文件签名。
 
+新增增援上限后，IARP 格式 3（无选手身份）／4（含选手身份）使用 32 个 `u32` 的配置编码，最后一项为 `max_reinforcement_agents_per_faction`，Canonical Encoding 版本为 2。读取旧格式 1／2 时仍采用原有 31 项配置、Canonical Encoding 版本 1 和无限累计增援语义，不把新的默认上限套用到历史比赛；旧归档可逐字节重新编码。客户端的 `MatchInfo` 同样追加此配置项，旧服务端缺失该字段时按无限上限解释。Viewer 的原生工具、WASM 与独立 host 需使用更新后的构建才能读取新格式。
+
 ## P5-GATE 完成门槛
 
 可按 Schedule Seed 均衡阵营并批量调度单场比赛，异常有确定结果，Map Definition / 构建版本 / 配置可追溯，Replay 可归档且 Hash 校验稳定。

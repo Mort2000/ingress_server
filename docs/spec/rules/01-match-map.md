@@ -66,7 +66,7 @@ Server 先校验消息 framing、大小、协议版本和已认证 Faction；通
 
 ## R-SPAWN-02 增援
 
-每经过 `REINFORCEMENT_INTERVAL` 轮，在该边界轮的动作结算、Field 计分和事件生成全部结束后，每阵营增加 `REINFORCEMENT_AGENTS_PER_FACTION` 个 Agent；双方新增 Agent 出现在同一个由专用 RNG 生成的位置，以引入局势变化而不单独偏向某阵营。
+每经过 `REINFORCEMENT_INTERVAL` 轮，在该边界轮的动作结算、Field 计分和事件生成全部结束后，每阵营增加 `REINFORCEMENT_AGENTS_PER_FACTION` 个 Agent；双方新增 Agent 出现在同一个由专用 RNG 生成的位置，以引入局势变化而不单独偏向某阵营。每阵营每场累计增援不超过 `MAX_REINFORCEMENT_AGENTS_PER_FACTION`（默认 4）；剩余额度不足一批时只补足额度，达到上限后不再生成增援或增援事件。上限为 0 时不增援；终局轮不生成增援。
 
 增援写入下一轮 Snapshot，并从下一轮起首次可见、可行动，不参与生成它的边界轮动作或得分。Round 100、200、300、400 结算后分别生成 Round 101、201、301、401 的增援。
 
@@ -76,4 +76,4 @@ Server 先校验消息 framing、大小、协议版本和已认证 Faction；通
 | 101—200 | 4 |
 | 201—300 | 5 |
 | 301—400 | 6 |
-| 401—500 | 7 |
+| 401—800 | 7 |

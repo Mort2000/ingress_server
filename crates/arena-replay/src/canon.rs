@@ -21,11 +21,11 @@ pub const STATE_HASH_DOMAIN: &[u8] = b"ingress-arena-state-v0.1";
 
 /// Version of THIS canonical state encoding; replay headers carry it and
 /// decoders reject mismatches before executing any round.
-pub const STATE_ENCODING_VERSION: u32 = 1;
+pub const STATE_ENCODING_VERSION: u32 = 2;
 
 /// Appends the canonical encoding of `state` (D44 sections 1-8):
 ///
-/// 1. config identity — 31 u32 words (shared codec);
+/// 1. config identity — 32 u32 words (legacy: 31) (shared codec);
 /// 2. `round` — u32;
 /// 3. portals — u32 count, then per portal in dense id order: owner u8,
 ///    hp u32, x u32, y u32;
@@ -184,6 +184,8 @@ mod tests {
         // Frozen vectors encode the pre-Alpha rules. Defaults may change;
         // the old encoding and hashes must remain readable without a format bump.
         let mut cfg = GameConfig {
+            total_rounds: 500,
+            max_reinforcement_agents_per_faction: u32::MAX,
             recharge_amount: 15,
             max_link_distance_cm: 200_000,
             ..GameConfig::default()

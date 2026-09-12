@@ -517,7 +517,16 @@ impl Resolver {
         report.score2_delta = state.settle_scores();
         let interval = state.config().reinforcement_interval_rounds;
         let total_rounds = state.config().total_rounds;
-        if current_round % interval == 0 && current_round < total_rounds {
+        let per_boundary = state.config().reinforcement_agents_per_faction;
+        let already_added = (current_round / interval)
+            .saturating_sub(1)
+            .saturating_mul(per_boundary);
+        let remaining = state
+            .config()
+            .max_reinforcement_agents_per_faction
+            .saturating_sub(already_added);
+        let count = per_boundary.min(remaining);
+        if current_round % interval == 0 && current_round < total_rounds && count > 0 {
             let index = current_round / interval;
             let width_n = (state.config().map_width_cm as u32)
                 .checked_add(1)
@@ -528,7 +537,6 @@ impl Resolver {
             // The interval index — NOT the hack epoch — is the stable index
             // of the reinforcement RNG domain (R-RNG-01, D42).
             let position = self.oracle.reinforcement_position(index, width_n, height_n);
-            let count = state.config().reinforcement_agents_per_faction;
             let first_agent_id = state.add_reinforcement_agents(position, count);
             state.push_event(EventKind::Reinforcement {
                 index,
@@ -3994,6 +4002,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_link_range_accepts_8000m_and_rejects_one_centimetre_more() {
+        for distance in [800_000, 800_001] {
+            let mut cfg = base_config();
+            cfg.map_width_cm = 900_000;
+            let mut state = link_state(
+                &cfg,
+                vec![enl_portal(0, 0, 10_000), enl_portal(1, distance, 10_000)],
+                Coord::new(0, 10_000),
+                Coord::new(29_000, 29_000),
+            );
+            state.grant_keys(AgentId(0), PortalId(1), 1);
+            let report = run(&mut state, &[enl(vec![link_cmd(0, 1)])]);
+            assert_eq!(
+                matches!(
+                    report.execution_order[0].outcomes[0],
+                    CommandOutcome::Ok(CommandEffect::Linked { .. })
+                ),
+                distance == 800_000,
+            );
+            assert_eq!(
+                state.link_graph().links().len(),
+                usize::from(distance == 800_000)
+            );
+        }
+    }
+
     // Checklist 23: a missing target key mutates nothing.
     #[test]
     fn link_missing_target_key_drops_without_mutation() {
@@ -4920,6 +4955,61 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    #[test]
+    fn reinforcement_cap_counts_agents_and_truncates_the_last_batch() {
+        for (cap, batch, expected) in [
+            (0, 1, vec![]),
+            (4, 3, vec![(2, 3), (4, 1)]),
+            (4, 10, vec![(2, 4)]),
+            (4, 1, vec![(2, 1), (4, 1), (6, 1), (8, 1)]),
+        ] {
+            let mut cfg = base_config();
+            cfg.total_rounds = 14;
+            cfg.reinforcement_interval_rounds = 2;
+            cfg.reinforcement_agents_per_faction = batch;
+            cfg.max_reinforcement_agents_per_faction = cap;
+            cfg.validate().unwrap();
+            let mut state = link_state(
+                &cfg,
+                vec![
+                    portal_fixture(0, 10_000, 10_000, Owner::Neutral, 0),
+                    portal_fixture(1, 25_000, 25_000, Owner::Neutral, 0),
+                ],
+                Coord::new(10_000, 5_000),
+                Coord::new(6_000, 10_000),
+            );
+            for _ in 0..cfg.total_rounds {
+                run(&mut state, &[]);
+                state.advance_round();
+            }
+            let actual: Vec<_> = state
+                .events()
+                .iter()
+                .filter_map(|event| {
+                    if let EventKind::Reinforcement {
+                        count_per_faction, ..
+                    } = event.kind
+                    {
+                        Some((event.round, count_per_faction))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(actual, expected, "cap={cap}, batch={batch}");
+            for faction in [Faction::Enl, Faction::Res] {
+                assert_eq!(
+                    state
+                        .agents()
+                        .values()
+                        .filter(|a| a.faction == faction)
+                        .count(),
+                    (1 + cap) as usize
+                );
+            }
+        }
+    }
+
     // M7 (D68): the extracted `structural_check` pins the exact intake
     // verdicts of `run_round` — the pure-refactor guarantee.
     // ------------------------------------------------------------------

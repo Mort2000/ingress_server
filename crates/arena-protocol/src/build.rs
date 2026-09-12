@@ -172,6 +172,7 @@ fn match_info_owned(info: &MatchInfo) -> proto::MatchInfo {
         initial_agents_per_faction: info.initial_agents_per_faction,
         reinforcement_interval_rounds: info.reinforcement_interval_rounds,
         reinforcement_agents_per_faction: info.reinforcement_agents_per_faction,
+        max_reinforcement_agents_per_faction: info.max_reinforcement_agents_per_faction,
         move_budget_cm: info.move_budget_cm,
         portal_operation_range_cm: info.portal_operation_range_cm,
         transfer_range_cm: info.transfer_range_cm,

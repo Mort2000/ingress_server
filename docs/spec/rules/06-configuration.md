@@ -6,7 +6,7 @@
 
 | 分组 | 参数 | 默认值 |
 |---|---|---:|
-| 时间 | `TOTAL_ROUNDS` | 500 Round |
+| 时间 | `TOTAL_ROUNDS` | 800 Round |
 | 时间 | `INITIAL_SPAWN_WINDOW` | 5000 ms |
 | 时间 | `DECISION_WINDOW` | 1000 ms |
 | 时间 | `PRIORITY_BUCKET` | 5 ms |
@@ -21,6 +21,7 @@
 | Agent | `INITIAL_AGENTS_PER_FACTION` | 3 |
 | Agent | `REINFORCEMENT_INTERVAL` | 100 Round |
 | Agent | `REINFORCEMENT_AGENTS_PER_FACTION` | 1 |
+| Agent | `MAX_REINFORCEMENT_AGENTS_PER_FACTION` | 4（每阵营每场累计增援上限，默认总人数最多 7） |
 | Agent | `MOVE_BUDGET` | 200 m / Round |
 | Agent | `PORTAL_OPERATION_RANGE` | 50 m |
 | Agent | `TRANSFER_RANGE` | 50 m |
@@ -34,7 +35,7 @@
 | Hack | `HACK_KEY_YIELD` | `DiscreteUniform{1,2,3}` Keys |
 | Hack | `HACK_COOLDOWN` | 3 Round |
 | Hack | `HACK_LIMIT_PER_EPOCH` | 5 / `(agent, portal)` |
-| Link | `MAX_LINK_DISTANCE` | 1500 m |
+| Link | `MAX_LINK_DISTANCE` | 8000 m |
 | 动作 | `MAX_COMMANDS_PER_AGENT_ROUND` | 10 |
 | 协议防护 | `MAX_FRAME_PAYLOAD_BYTES` | 65,536 bytes（64 KiB，硬上限） |
 

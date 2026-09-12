@@ -9,14 +9,14 @@
 //! concatenated without padding; `i32` coordinates encode as their
 //! two's-complement `u32` bit pattern; `Faction` tags are 0=Enl/1=Res and
 //! `Owner` tags 0=Neutral/1=Enl/2=Res. The portal encoding omits the dense
-//! id (the slice position IS the id); the config encoding is the 31 u32
+//! id (the slice position IS the id); the config encoding is the 32 u32
 //! words of `GameConfig` in struct-declaration order.
 
 use crate::config::GameConfig;
 use crate::types::{Faction, Owner, Portal, PortalId};
 
 /// u32 word count of the canonical `GameConfig` encoding (D44 section 1).
-pub const CONFIG_U32_COUNT: usize = 31;
+pub const CONFIG_U32_COUNT: usize = 32;
 
 /// Byte length of the canonical `GameConfig` encoding.
 pub const CONFIG_BYTES: usize = CONFIG_U32_COUNT * 4;
@@ -60,8 +60,8 @@ pub fn owner_from_tag(tag: u8) -> Option<Owner> {
     }
 }
 
-/// Appends the canonical `GameConfig` encoding: 31 u32 words in
-/// struct-declaration order (124 bytes). `map_width_cm`/`map_height_cm`
+/// Appends the canonical `GameConfig` encoding: 32 u32 words in
+/// struct-declaration order (128 bytes; legacy unlimited-cap configs use 124). `map_width_cm`/`map_height_cm`
 /// travel as their two's-complement u32 bit patterns.
 pub fn push_config(cfg: &GameConfig, out: &mut Vec<u8>) {
     let words: [u32; CONFIG_U32_COUNT] = [
@@ -96,23 +96,30 @@ pub fn push_config(cfg: &GameConfig, out: &mut Vec<u8>) {
         cfg.max_link_distance_cm,
         cfg.max_commands_per_agent_round,
         cfg.max_frame_payload_bytes,
+        cfg.max_reinforcement_agents_per_faction,
     ];
-    for word in words {
+    let count = if cfg.max_reinforcement_agents_per_faction == u32::MAX {
+        CONFIG_U32_COUNT - 1
+    } else {
+        CONFIG_U32_COUNT
+    };
+    for word in &words[..count] {
         out.extend_from_slice(&word.to_le_bytes());
     }
 }
 
-/// Decodes exactly [`CONFIG_BYTES`] bytes into a `GameConfig`; `None` on a
-/// wrong length. Field values are NOT validated here.
+/// Decodes [`CONFIG_BYTES`] bytes (or the legacy 124 bytes) into a `GameConfig`; `None` on a
+/// wrong length. Legacy 124-byte configs decode with an unlimited reinforcement cap.
+/// Field values are NOT validated here.
 pub fn config_from_bytes(bytes: &[u8]) -> Option<GameConfig> {
-    if bytes.len() != CONFIG_BYTES {
+    if bytes.len() != CONFIG_BYTES && bytes.len() != CONFIG_BYTES - 4 {
         return None;
     }
-    let mut words = [0u32; CONFIG_U32_COUNT];
-    for (i, word) in words.iter_mut().enumerate() {
+    let mut words = [u32::MAX; CONFIG_U32_COUNT];
+    for (i, word) in words.iter_mut().take(bytes.len() / 4).enumerate() {
         let (chunk, rest) = bytes[i * 4..].split_at(4);
         debug_assert_eq!(chunk.len(), 4);
-        debug_assert_eq!(rest.len(), CONFIG_BYTES - (i + 1) * 4);
+        debug_assert_eq!(rest.len(), bytes.len() - (i + 1) * 4);
         *word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
     let [
@@ -147,6 +154,7 @@ pub fn config_from_bytes(bytes: &[u8]) -> Option<GameConfig> {
         max_link_distance_cm,
         max_commands_per_agent_round,
         max_frame_payload_bytes,
+        max_reinforcement_agents_per_faction,
     ] = words;
     Some(GameConfig {
         total_rounds,
@@ -180,6 +188,7 @@ pub fn config_from_bytes(bytes: &[u8]) -> Option<GameConfig> {
         max_link_distance_cm,
         max_commands_per_agent_round,
         max_frame_payload_bytes,
+        max_reinforcement_agents_per_faction,
     })
 }
 
@@ -221,7 +230,7 @@ mod tests {
         let cfg = GameConfig::default();
         let mut bytes = Vec::new();
         push_config(&cfg, &mut bytes);
-        assert_eq!(bytes.len(), 124, "31 u32 words, no padding (D2)");
+        assert_eq!(bytes.len(), 128, "32 u32 words, no padding (D2)");
         assert_eq!(config_from_bytes(&bytes), Some(cfg));
 
         let mut modified = GameConfig::default();
@@ -250,7 +259,7 @@ mod tests {
         let mut bytes = Vec::new();
         push_config(&GameConfig::default(), &mut bytes);
         let word = |i: usize| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
-        assert_eq!(word(0), 500, "total_rounds is word 0");
+        assert_eq!(word(0), 800, "total_rounds is word 0");
         assert_eq!(word(4), 100, "epoch_length is word 4");
         assert_eq!(word(5), 600_000, "map_width_cm is word 5");
         assert_eq!(word(30), 65_536, "max_frame_payload_bytes is word 30");
