@@ -102,6 +102,10 @@ fn declarative_plan_covers_every_map_and_is_independent_of_display_order() {
     let out = t.0.join("plan1");
     let preview = good(&["plan", "--spec", path(&spec), "--out", path(&out)]);
     assert!(preview.contains("matches=12"), "{preview}");
+    assert!(
+        preview.contains("address_space_bytes=536870912 address_space_enforced=false"),
+        "{preview}"
+    );
     let p = arena_runner::tournament::durable::load(&out).unwrap();
     assert_eq!(p.items.len(), 12);
     for pair in p.items.chunks_exact(2) {
@@ -236,6 +240,13 @@ fn subset_and_comparison_reuse_frozen_inputs_and_execute_archive_copies() {
     good(&["compare", "--out", path(&moved)]);
     let report = fs::read(moved.join("comparison.json")).unwrap();
     let json = parse_json(std::str::from_utf8(&report).unwrap()).unwrap();
+    assert_eq!(
+        json.get("resources")
+            .unwrap()
+            .get("address_space_bytes")
+            .and_then(Json::as_int),
+        Some(536870912)
+    );
     assert_eq!(json.get("paired_samples").and_then(Json::as_int), Some(4));
     assert_eq!(json.get("rows").and_then(Json::as_array).unwrap().len(), 8);
     good(&["compare", "--out", path(&moved)]);

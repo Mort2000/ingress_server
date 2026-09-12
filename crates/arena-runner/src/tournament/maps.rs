@@ -6,7 +6,7 @@ use super::{
 };
 use arena_core::{
     config::GameConfig,
-    geometry::dist2,
+    geometry::{cross, dist2, point_on_segment},
     map::MapDefinition,
     types::{Coord, Owner, Portal, PortalId},
 };
@@ -278,14 +278,11 @@ impl MapAsset {
                 if dist2(a, b) > (self.config.max_link_distance_cm as i64).pow(2) {
                     continue;
                 }
-                if ps.iter().enumerate().any(|(k, p)| {
-                    k != i
-                        && k != j
-                        && cross(a, b, p.position) == 0
-                        && (p.position.x - a.x) as i64 * (p.position.x - b.x) as i64
-                            + (p.position.y - a.y) as i64 * ((p.position.y - b.y) as i64)
-                            < 0
-                }) {
+                if ps
+                    .iter()
+                    .enumerate()
+                    .any(|(k, p)| k != i && k != j && point_on_segment(p.position, a, b))
+                {
                     continue;
                 }
                 neighbors[i].push(j);
@@ -337,7 +334,4 @@ impl MapAsset {
             warnings,
         }
     }
-}
-fn cross(a: Coord, b: Coord, c: Coord) -> i64 {
-    (b.x - a.x) as i64 * (c.y - a.y) as i64 - (b.y - a.y) as i64 * (c.x - a.x) as i64
 }

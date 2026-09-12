@@ -390,6 +390,7 @@ pub fn resolve(spec: &Path) -> io::Result<Plan> {
         ("schema", string("arena-frozen-event-v1")),
         ("scoring", string("normal-only-v1")),
         ("analysis", string("paired-descriptive-v1")),
+        ("resources", resources.clone()),
         ("mode", string(mode)),
         ("schedule", policy.clone()),
         ("map_set", set),
@@ -406,6 +407,7 @@ pub fn resolve(spec: &Path) -> io::Result<Plan> {
         ("samples", Json::Array(samples)),
     ]);
     Ok(Plan {
+        map_configs: assets.iter().map(|a| a.config).collect(),
         config: cfg,
         items,
         maps: assets.into_iter().map(|a| a.map).collect(),
@@ -424,6 +426,14 @@ pub fn preview(plan: &Plan) -> io::Result<String> {
         plan.config.sandbox.tag()
     );
     if let Some(ext) = &plan.extension {
+        let resources = ext
+            .get("resources")
+            .ok_or_else(|| invalid("resources missing"))?;
+        out.push_str(&format!(
+            "address_space_bytes={} address_space_enforced={}\n",
+            number(resources, "address_space_bytes")?,
+            !matches!(plan.config.sandbox, ClientSandbox::Off)
+        ));
         out.push_str(&format!(
             "mode={} scoring=normal-only-v1 analysis=paired-descriptive-v1\n",
             text(ext, "mode")?

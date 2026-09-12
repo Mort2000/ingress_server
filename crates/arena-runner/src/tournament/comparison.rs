@@ -350,14 +350,13 @@ pub fn write(root: &Path) -> io::Result<Json> {
         ("maps", Json::Array(array(ext, "maps")?.to_vec())),
         (
             "resources",
-            object(vec![
-                ("workers", Json::Int(plan.config.concurrency as i64)),
-                (
-                    "per_match_budget_ms",
-                    string(plan.config.per_match_budget_ms),
-                ),
-                ("sandbox", string(plan.config.sandbox.tag())),
-            ]),
+            ext.get("resources")
+                .ok_or_else(|| invalid("resources missing"))?
+                .clone(),
+        ),
+        (
+            "address_space_enforced",
+            Json::Bool(!matches!(plan.config.sandbox, ClientSandbox::Off)),
         ),
         ("paired_samples", Json::Int(completed)),
         ("incomplete_or_technical_pairs", Json::Int(incomplete)),
@@ -369,13 +368,22 @@ pub fn write(root: &Path) -> io::Result<Json> {
         ("opponent_map_matrix", Json::Array(matrix)),
     ]);
     let mut markdown = format!(
-        "# 版本比较报告\n\n运行模式：{}。计划 {} 场；有效同输入对照 {} 组；退步 {} 组；不完整或技术终止对照 {} 组。\n\n正常结果计 2/1/0；技术判负单独报告，不计入 Elo 或此处正常胜负差。基础设施故障和待运行不计分。不估计置信区间；同地图样本有关联，不能视为独立样本。\n\n首次状态/命令差异用于定位，不证明后续胜负的唯一原因；实际接收时序可能不同。\n\n详细逐场整数数据、对手×地图矩阵见 [comparison.json](comparison.json)，采用记录见 [adoptions.tsv](adoptions.tsv)。\n\n## 差异样本\n\n",
+        "# 版本比较报告\n\n运行模式：{}。计划 {} 场；有效同输入对照 {} 组；胜负退步 {} 组；不完整或技术终止对照 {} 组。\n\n正常结果计 2/1/0；技术判负单独报告，不计入 Elo 或此处正常胜负差。基础设施故障和待运行不计分。不估计置信区间；同地图样本有关联，不能视为独立样本。\n\n首次状态/命令差异用于定位，不证明后续胜负的唯一原因；实际接收时序可能不同。\n\n详细逐场整数数据、对手×地图矩阵见 [comparison.json](comparison.json)，采用记录见 [adoptions.tsv](adoptions.tsv)。\n\n## 差异样本\n\n",
         text(ext, "mode")?,
         plan.items.len(),
         completed,
         regressions,
         incomplete
     );
+    markdown.push_str(&format!(
+        "资源声明：`{}`；地址空间预算执行：{}。沙箱实际降级以逐场 sandbox 报告为准。\n\n",
+        encode(
+            report
+                .get("resources")
+                .ok_or_else(|| invalid("resources missing"))?
+        ),
+        !matches!(plan.config.sandbox, ClientSandbox::Off)
+    ));
     for change in array(&report, "changes")? {
         let a = number(change, "before_item")?;
         let b = number(change, "after_item")?;

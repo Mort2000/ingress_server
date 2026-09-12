@@ -42,6 +42,8 @@ pub struct Plan {
     pub config: TournamentConfig,
     pub items: Vec<TournamentItem>,
     pub maps: Vec<MapDefinition>,
+    /// Parsed at the archive boundary; every execution/validation uses these.
+    pub map_configs: Vec<arena_core::config::GameConfig>,
     pub attempt_limit: u32,
     /// Versioned batch-two input metadata. Absent in first-batch archives.
     pub extension: Option<Json>,
@@ -50,15 +52,11 @@ pub struct Plan {
 impl Plan {
     pub fn match_config(&self, item: &TournamentItem) -> io::Result<TournamentConfig> {
         let mut cfg = self.config.clone();
-        if let Some(ext) = &self.extension {
-            let maps = super::document::array(ext, "maps")?;
-            cfg.config = super::document::config(
-                maps.get(item.map_index as usize)
-                    .and_then(|v| v.get("config"))
-                    .ok_or_else(|| invalid("missing map rules"))?,
-            )?;
-            cfg.rounds_per_match = cfg.config.total_rounds;
-        }
+        cfg.config = *self
+            .map_configs
+            .get(item.map_index as usize)
+            .ok_or_else(|| invalid("missing map rules"))?;
+        cfg.rounds_per_match = cfg.config.total_rounds;
         Ok(cfg)
     }
 }
@@ -86,6 +84,7 @@ pub fn prepare(cfg: &TournamentConfig, root: &Path, attempt_limit: u32) -> io::R
     }
     publish(
         Plan {
+            map_configs: vec![cfg.config; maps.len()],
             config: cfg,
             items,
             maps,
@@ -125,6 +124,7 @@ pub fn publish(mut plan: Plan, root: &Path) -> io::Result<Plan> {
         config: cfg,
         items,
         maps,
+        map_configs,
         attempt_limit,
         extension,
     } = plan;
@@ -171,6 +171,7 @@ pub fn publish(mut plan: Plan, root: &Path) -> io::Result<Plan> {
         config: cfg,
         items,
         maps,
+        map_configs,
         attempt_limit,
         extension,
     })
@@ -285,6 +286,7 @@ pub fn load(root: &Path) -> io::Result<Plan> {
         }
     }
     let mut maps = Vec::new();
+    let mut map_configs = Vec::new();
     for i in 0..cfg.map_count {
         let bytes = fs::read(dir.join(format!("maps/{i}.bin")))?;
         if bytes.len() % codec::PORTAL_BYTES != 0 {
@@ -320,6 +322,7 @@ pub fn load(root: &Path) -> io::Result<Plan> {
             }
         }
         maps.push(map);
+        map_configs.push(map_config);
     }
     let rows = archive::parse_index_tsv(&fs::read_to_string(dir.join("schedule.tsv"))?)
         .map_err(invalid)?;
@@ -333,17 +336,10 @@ pub fn load(root: &Path) -> io::Result<Plan> {
                 .ok_or_else(|| invalid("unknown entrant"))
         };
         if row.index != items.len() as u64
-            || row.config_hash
-                != if let Some(ext) = &extension {
-                    super::config::config_identity(&super::document::config(
-                        super::document::array(ext, "maps")?
-                            .get(row.map_index as usize)
-                            .and_then(|m| m.get("config"))
-                            .ok_or_else(|| invalid("map rules missing"))?,
-                    )?)
-                } else {
-                    cfg.config_identity()
-                }
+            || Some(row.config_hash)
+                != map_configs
+                    .get(row.map_index as usize)
+                    .map(super::config::config_identity)
             || maps
                 .get(row.map_index as usize)
                 .map(schedule::map_codec_hash)
@@ -395,6 +391,7 @@ pub fn load(root: &Path) -> io::Result<Plan> {
         config: cfg,
         items,
         maps,
+        map_configs,
         attempt_limit,
         extension,
     })
