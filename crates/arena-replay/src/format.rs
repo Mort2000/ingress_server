@@ -50,7 +50,7 @@ use crate::canon;
 pub const MAGIC: &[u8; 4] = b"IARP";
 
 /// IARP structural format version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Server (rules-engine) version that produced the file.
 pub const SERVER_VERSION: u32 = 1;
@@ -384,6 +384,8 @@ impl NotifiedFirst {
 /// IARP header: every deterministic setup input of the match (P1-REPLAY).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ReplayHeader {
+    /// Non-gameplay, checksum-protected identity (absent in IARP v1).
+    pub identity: Option<ReplayIdentity>,
     pub server_version: u32,
     pub protocol_version: u32,
     pub rng_version: u32,
@@ -398,6 +400,28 @@ pub struct ReplayHeader {
     /// Ascending `(agent, position)` initial spawn sets (R-SPAWN-01).
     pub enl_spawns: Vec<(AgentId, Coord)>,
     pub res_spawns: Vec<(AgentId, Coord)>,
+}
+
+/// Array order is actual accepted faction: ENL, RES. Registered information
+/// is separate from client claims; verification is supervisor attribution,
+/// not cryptographic authentication of an arbitrary archive.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct ReplayIdentity {
+    pub execution_id: String,
+    pub participants: [ParticipantIdentity; 2],
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct ParticipantIdentity {
+    pub registered_id: String,
+    pub display_name: String,
+    pub registered_version: String,
+    pub binary_hash: String,
+    pub client_name: String,
+    pub client_version: String,
+    pub bot_version: String,
+    pub sdk_version: String,
+    pub binding_verified: bool,
 }
 
 /// One settled round: the echoed submission slice (with unlocatable and
@@ -514,7 +538,7 @@ pub fn decode(bytes: &[u8]) -> Result<ReplayFile, ReplayError> {
         return Err(ReplayError::BadMagic);
     }
     let format_version = r.u32()?;
-    if format_version != FORMAT_VERSION {
+    if format_version != 1 && format_version != FORMAT_VERSION {
         return Err(ReplayError::FormatVersion {
             found: format_version,
             expected: FORMAT_VERSION,
@@ -574,7 +598,13 @@ pub fn decode(bytes: &[u8]) -> Result<ReplayFile, ReplayError> {
     let map = MapDefinition::new(portals);
     let enl_spawns = decode_spawns(&mut r)?;
     let res_spawns = decode_spawns(&mut r)?;
+    let identity = if format_version == 2 {
+        Some(decode_identity(&mut r)?)
+    } else {
+        None
+    };
     let header = ReplayHeader {
+        identity,
         server_version,
         protocol_version,
         rng_version,
@@ -700,7 +730,11 @@ impl Writer {
 
 fn encode_header(w: &mut Writer, header: &ReplayHeader) {
     w.bytes(MAGIC);
-    w.u32(FORMAT_VERSION);
+    w.u32(if header.identity.is_some() {
+        FORMAT_VERSION
+    } else {
+        1
+    });
     w.u32(header.server_version);
     w.u32(header.protocol_version);
     w.u32(header.rng_version);
@@ -715,6 +749,91 @@ fn encode_header(w: &mut Writer, header: &ReplayHeader) {
     }
     encode_spawns(w, &header.enl_spawns);
     encode_spawns(w, &header.res_spawns);
+    if let Some(identity) = &header.identity {
+        encode_identity(w, identity);
+    }
+}
+
+fn encode_identity(w: &mut Writer, identity: &ReplayIdentity) {
+    let mut data = Writer { buf: Vec::new() };
+    let mut string = |text: &str| {
+        data.u32(text.len() as u32);
+        data.bytes(text.as_bytes());
+    };
+    string(&identity.execution_id);
+    for p in &identity.participants {
+        for text in [
+            &p.registered_id,
+            &p.display_name,
+            &p.registered_version,
+            &p.binary_hash,
+            &p.client_name,
+            &p.client_version,
+            &p.bot_version,
+            &p.sdk_version,
+        ] {
+            string(text);
+        }
+        string(if p.binding_verified {
+            "verified"
+        } else {
+            "unverified"
+        });
+    }
+    w.u32(data.buf.len() as u32);
+    w.bytes(&data.buf);
+    w.bytes(blake3::hash(&data.buf).as_bytes());
+}
+
+fn decode_identity(r: &mut Reader<'_>) -> Result<ReplayIdentity, ReplayError> {
+    let len = r.u32()? as usize;
+    if len > 256 * 1024 {
+        return Err(ReplayError::SetupInvalid {
+            what: "identity too large",
+        });
+    }
+    let bytes = r.take(len)?;
+    if r.take(32)? != blake3::hash(bytes).as_bytes() {
+        return Err(ReplayError::SetupInvalid {
+            what: "identity checksum",
+        });
+    }
+    let mut fields = Reader::new(bytes);
+    let mut string = || -> Result<String, ReplayError> {
+        let len = fields.u32()? as usize;
+        String::from_utf8(fields.take(len)?.to_vec()).map_err(|_| ReplayError::SetupInvalid {
+            what: "identity UTF-8",
+        })
+    };
+    let mut identity = ReplayIdentity {
+        execution_id: string()?,
+        ..Default::default()
+    };
+    for p in &mut identity.participants {
+        p.registered_id = string()?;
+        p.display_name = string()?;
+        p.registered_version = string()?;
+        p.binary_hash = string()?;
+        p.client_name = string()?;
+        p.client_version = string()?;
+        p.bot_version = string()?;
+        p.sdk_version = string()?;
+        p.binding_verified = match string()?.as_str() {
+            "verified" => true,
+            "unverified" => false,
+            _ => {
+                return Err(ReplayError::SetupInvalid {
+                    what: "identity binding",
+                });
+            }
+        };
+    }
+    if !fields.is_empty() {
+        return Err(ReplayError::SetupInvalid {
+            what: "identity trailing bytes",
+        });
+    }
+    Ok(identity)
 }
 
 fn encode_spawns(w: &mut Writer, spawns: &[(AgentId, Coord)]) {
@@ -1475,6 +1594,7 @@ mod tests {
             },
         ]);
         ReplayHeader {
+            identity: None,
             server_version: SERVER_VERSION,
             protocol_version: PROTOCOL_VERSION,
             rng_version: RNG_VERSION,
@@ -1625,12 +1745,12 @@ mod tests {
         assert_eq!(decode(&bad_magic), Err(ReplayError::BadMagic));
 
         let mut bad_format = bytes.clone();
-        bad_format[4..8].copy_from_slice(&2u32.to_le_bytes());
+        bad_format[4..8].copy_from_slice(&3u32.to_le_bytes());
         assert_eq!(
             decode(&bad_format),
             Err(ReplayError::FormatVersion {
-                found: 2,
-                expected: 1
+                found: 3,
+                expected: 2
             })
         );
 

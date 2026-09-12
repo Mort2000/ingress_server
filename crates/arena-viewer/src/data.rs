@@ -106,6 +106,37 @@ pub fn build_payload(iarp: &[u8]) -> Result<Json, String> {
         ),
     ));
     header_pairs.push(("meta".into(), Json::Null));
+    header_pairs.push((
+        "identity".into(),
+        match &header.identity {
+            None => Json::Null,
+            Some(identity) => Json::obj(vec![
+                ("execution_id", Json::str(&identity.execution_id)),
+                (
+                    "participants",
+                    Json::arr(
+                        identity
+                            .participants
+                            .iter()
+                            .map(|p| {
+                                Json::obj(vec![
+                                    ("registered_id", Json::str(&p.registered_id)),
+                                    ("display_name", Json::str(&p.display_name)),
+                                    ("registered_version", Json::str(&p.registered_version)),
+                                    ("binary_hash", Json::str(&p.binary_hash)),
+                                    ("client_name", Json::str(&p.client_name)),
+                                    ("client_version", Json::str(&p.client_version)),
+                                    ("bot_version", Json::str(&p.bot_version)),
+                                    ("sdk_version", Json::str(&p.sdk_version)),
+                                    ("binding_verified", Json::Bool(p.binding_verified)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
+        },
+    ));
 
     let payload = Json::obj(vec![
         ("format", Json::str(VIEWER_FORMAT)),

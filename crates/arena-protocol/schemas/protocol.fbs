@@ -46,6 +46,9 @@ table ClientHello {
   protocol_version: uint;
   public_snapshot_version: uint;
   private_snapshot_version: uint;
+  /// Optional informational fields; older clients omit them.
+  bot_version: string;
+  sdk_version: string;
 }
 
 /// Server -> Client. status: 0 = ok (faction assigned, match starting),

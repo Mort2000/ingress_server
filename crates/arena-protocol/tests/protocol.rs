@@ -66,6 +66,8 @@ fn every_message_round_trips() {
     let hello = Envelope::ClientHello {
         client_name: "probe-client".into(),
         client_version: "m7.0".into(),
+        bot_version: String::new(),
+        sdk_version: String::new(),
         protocol_version: PROTOCOL_VERSION,
         public_snapshot_version: PUBLIC_SNAPSHOT_VERSION,
         private_snapshot_version: PRIVATE_SNAPSHOT_VERSION,
@@ -232,6 +234,8 @@ fn unknown_union_tag_and_wrong_root_rejected() {
     let hello = Envelope::ClientHello {
         client_name: "x".into(),
         client_version: "y".into(),
+        bot_version: String::new(),
+        sdk_version: String::new(),
         protocol_version: 1,
         public_snapshot_version: 1,
         private_snapshot_version: 1,
@@ -542,6 +546,8 @@ fn exact_legal_maximum_client_hello_frame() {
         let payload = build::envelope_bytes(&Envelope::ClientHello {
             client_name: "P".repeat(name_len),
             client_version: "1".into(),
+            bot_version: String::new(),
+            sdk_version: String::new(),
             protocol_version: PROTOCOL_VERSION,
             public_snapshot_version: PUBLIC_SNAPSHOT_VERSION,
             private_snapshot_version: PRIVATE_SNAPSHOT_VERSION,
@@ -555,6 +561,8 @@ fn exact_legal_maximum_client_hello_frame() {
         let payload = build::envelope_bytes(&Envelope::ClientHello {
             client_name: "P".repeat(mid),
             client_version: "1".into(),
+            bot_version: String::new(),
+            sdk_version: String::new(),
             protocol_version: PROTOCOL_VERSION,
             public_snapshot_version: PUBLIC_SNAPSHOT_VERSION,
             private_snapshot_version: PRIVATE_SNAPSHOT_VERSION,

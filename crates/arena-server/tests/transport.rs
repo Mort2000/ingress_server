@@ -147,6 +147,8 @@ fn play(
                 arena_protocol::build::envelope_bytes(&Envelope::ClientHello {
                     client_name: "P".repeat(len),
                     client_version: "1".into(),
+                    bot_version: String::new(),
+                    sdk_version: String::new(),
                     protocol_version: arena_protocol::PROTOCOL_VERSION,
                     public_snapshot_version: arena_protocol::PUBLIC_SNAPSHOT_VERSION,
                     private_snapshot_version: arena_protocol::PRIVATE_SNAPSHOT_VERSION,
@@ -941,6 +943,8 @@ fn mid_match_wrong_version_hello_is_an_envelope_reject() {
                 client.send_envelope(&Envelope::ClientHello {
                     client_name: "sneaky".into(),
                     client_version: "late".into(),
+                    bot_version: String::new(),
+                    sdk_version: String::new(),
                     protocol_version: arena_protocol::PROTOCOL_VERSION + 1,
                     public_snapshot_version: arena_protocol::PUBLIC_SNAPSHOT_VERSION,
                     private_snapshot_version: arena_protocol::PRIVATE_SNAPSHOT_VERSION,

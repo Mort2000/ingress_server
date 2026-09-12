@@ -1296,6 +1296,10 @@ mod root {
                 pub public_snapshot_version: u32,
                 /// The field `private_snapshot_version` in the table `ClientHello`
                 pub private_snapshot_version: u32,
+                ///  Optional informational fields; older clients omit them.
+                pub bot_version: ::core::option::Option<::planus::alloc::string::String>,
+                /// The field `sdk_version` in the table `ClientHello`
+                pub sdk_version: ::core::option::Option<::planus::alloc::string::String>,
             }
 
             #[allow(clippy::derivable_impls)]
@@ -1307,6 +1311,8 @@ mod root {
                         protocol_version: 0,
                         public_snapshot_version: 0,
                         private_snapshot_version: 0,
+                        bot_version: ::core::default::Default::default(),
+                        sdk_version: ::core::default::Default::default(),
                     }
                 }
             }
@@ -1330,6 +1336,12 @@ mod root {
                     field_protocol_version: impl ::planus::WriteAsDefault<u32, u32>,
                     field_public_snapshot_version: impl ::planus::WriteAsDefault<u32, u32>,
                     field_private_snapshot_version: impl ::planus::WriteAsDefault<u32, u32>,
+                    field_bot_version: impl ::planus::WriteAsOptional<
+                        ::planus::Offset<::core::primitive::str>,
+                    >,
+                    field_sdk_version: impl ::planus::WriteAsOptional<
+                        ::planus::Offset<::core::primitive::str>,
+                    >,
                 ) -> ::planus::Offset<Self> {
                     let prepared_client_name = field_client_name.prepare(builder);
                     let prepared_client_version = field_client_version.prepare(builder);
@@ -1338,8 +1350,10 @@ mod root {
                         field_public_snapshot_version.prepare(builder, &0);
                     let prepared_private_snapshot_version =
                         field_private_snapshot_version.prepare(builder, &0);
+                    let prepared_bot_version = field_bot_version.prepare(builder);
+                    let prepared_sdk_version = field_sdk_version.prepare(builder);
 
-                    let mut table_writer: ::planus::table_writer::TableWriter<14> =
+                    let mut table_writer: ::planus::table_writer::TableWriter<18> =
                         ::core::default::Default::default();
                     if prepared_client_name.is_some() {
                         table_writer.write_entry::<::planus::Offset<str>>(0);
@@ -1355,6 +1369,12 @@ mod root {
                     }
                     if prepared_private_snapshot_version.is_some() {
                         table_writer.write_entry::<u32>(4);
+                    }
+                    if prepared_bot_version.is_some() {
+                        table_writer.write_entry::<::planus::Offset<str>>(5);
+                    }
+                    if prepared_sdk_version.is_some() {
+                        table_writer.write_entry::<::planus::Offset<str>>(6);
                     }
 
                     unsafe {
@@ -1383,6 +1403,16 @@ mod root {
                                 prepared_private_snapshot_version
                             {
                                 object_writer.write::<_, _, 4>(&prepared_private_snapshot_version);
+                            }
+                            if let ::core::option::Option::Some(prepared_bot_version) =
+                                prepared_bot_version
+                            {
+                                object_writer.write::<_, _, 4>(&prepared_bot_version);
+                            }
+                            if let ::core::option::Option::Some(prepared_sdk_version) =
+                                prepared_sdk_version
+                            {
+                                object_writer.write::<_, _, 4>(&prepared_sdk_version);
                             }
                         });
                     }
@@ -1427,6 +1457,8 @@ mod root {
                         self.protocol_version,
                         self.public_snapshot_version,
                         self.private_snapshot_version,
+                        &self.bot_version,
+                        &self.sdk_version,
                     )
                 }
             }
@@ -1550,6 +1582,54 @@ mod root {
             }
 
             impl<T0, T1, T2, T3, T4> ClientHelloBuilder<(T0, T1, T2, T3, T4)> {
+                /// Setter for the [`bot_version` field](ClientHello#structfield.bot_version).
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn bot_version<T5>(
+                    self,
+                    value: T5,
+                ) -> ClientHelloBuilder<(T0, T1, T2, T3, T4, T5)>
+                where
+                    T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                {
+                    let (v0, v1, v2, v3, v4) = self.0;
+                    ClientHelloBuilder((v0, v1, v2, v3, v4, value))
+                }
+
+                /// Sets the [`bot_version` field](ClientHello#structfield.bot_version) to null.
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn bot_version_as_null(self) -> ClientHelloBuilder<(T0, T1, T2, T3, T4, ())> {
+                    self.bot_version(())
+                }
+            }
+
+            impl<T0, T1, T2, T3, T4, T5> ClientHelloBuilder<(T0, T1, T2, T3, T4, T5)> {
+                /// Setter for the [`sdk_version` field](ClientHello#structfield.sdk_version).
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn sdk_version<T6>(
+                    self,
+                    value: T6,
+                ) -> ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+                where
+                    T6: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                {
+                    let (v0, v1, v2, v3, v4, v5) = self.0;
+                    ClientHelloBuilder((v0, v1, v2, v3, v4, v5, value))
+                }
+
+                /// Sets the [`sdk_version` field](ClientHello#structfield.sdk_version) to null.
+                #[inline]
+                #[allow(clippy::type_complexity)]
+                pub fn sdk_version_as_null(
+                    self,
+                ) -> ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                    self.sdk_version(())
+                }
+            }
+
+            impl<T0, T1, T2, T3, T4, T5, T6> ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
                 /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ClientHello].
                 #[inline]
                 pub fn finish(
@@ -1569,8 +1649,10 @@ mod root {
                 T2: ::planus::WriteAsDefault<u32, u32>,
                 T3: ::planus::WriteAsDefault<u32, u32>,
                 T4: ::planus::WriteAsDefault<u32, u32>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
             > ::planus::WriteAs<::planus::Offset<ClientHello>>
-                for ClientHelloBuilder<(T0, T1, T2, T3, T4)>
+                for ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, T6)>
             {
                 type Prepared = ::planus::Offset<ClientHello>;
 
@@ -1589,8 +1671,10 @@ mod root {
                 T2: ::planus::WriteAsDefault<u32, u32>,
                 T3: ::planus::WriteAsDefault<u32, u32>,
                 T4: ::planus::WriteAsDefault<u32, u32>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
             > ::planus::WriteAsOptional<::planus::Offset<ClientHello>>
-                for ClientHelloBuilder<(T0, T1, T2, T3, T4)>
+                for ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, T6)>
             {
                 type Prepared = ::planus::Offset<ClientHello>;
 
@@ -1609,15 +1693,18 @@ mod root {
                 T2: ::planus::WriteAsDefault<u32, u32>,
                 T3: ::planus::WriteAsDefault<u32, u32>,
                 T4: ::planus::WriteAsDefault<u32, u32>,
-            > ::planus::WriteAsOffset<ClientHello> for ClientHelloBuilder<(T0, T1, T2, T3, T4)>
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAsOffset<ClientHello>
+                for ClientHelloBuilder<(T0, T1, T2, T3, T4, T5, T6)>
             {
                 #[inline]
                 fn prepare(
                     &self,
                     builder: &mut ::planus::Builder,
                 ) -> ::planus::Offset<ClientHello> {
-                    let (v0, v1, v2, v3, v4) = &self.0;
-                    ClientHello::create(builder, v0, v1, v2, v3, v4)
+                    let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                    ClientHello::create(builder, v0, v1, v2, v3, v4, v5, v6)
                 }
             }
 
@@ -1673,6 +1760,24 @@ mod root {
                             .unwrap_or(0),
                     )
                 }
+
+                /// Getter for the [`bot_version` field](ClientHello#structfield.bot_version).
+                #[inline]
+                pub fn bot_version(
+                    &self,
+                ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>>
+                {
+                    self.0.access(5, "ClientHello", "bot_version")
+                }
+
+                /// Getter for the [`sdk_version` field](ClientHello#structfield.sdk_version).
+                #[inline]
+                pub fn sdk_version(
+                    &self,
+                ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>>
+                {
+                    self.0.access(6, "ClientHello", "sdk_version")
+                }
             }
 
             impl<'a> ::core::fmt::Debug for ClientHelloRef<'a> {
@@ -1691,6 +1796,16 @@ mod root {
                     f.field("protocol_version", &self.protocol_version());
                     f.field("public_snapshot_version", &self.public_snapshot_version());
                     f.field("private_snapshot_version", &self.private_snapshot_version());
+                    if let ::core::option::Option::Some(field_bot_version) =
+                        self.bot_version().transpose()
+                    {
+                        f.field("bot_version", &field_bot_version);
+                    }
+                    if let ::core::option::Option::Some(field_sdk_version) =
+                        self.sdk_version().transpose()
+                    {
+                        f.field("sdk_version", &field_sdk_version);
+                    }
                     f.finish()
                 }
             }
@@ -1712,6 +1827,8 @@ mod root {
                         private_snapshot_version: ::core::convert::TryInto::try_into(
                             value.private_snapshot_version()?,
                         )?,
+                        bot_version: value.bot_version()?.map(::core::convert::Into::into),
+                        sdk_version: value.sdk_version()?.map(::core::convert::Into::into),
                     })
                 }
             }
@@ -1794,7 +1911,7 @@ mod root {
             ///  surplus connection (closed immediately).
             ///
             /// Generated from these locations:
-            /// * Table `ServerHello` in the file `crates/arena-protocol/schemas/protocol.fbs:54`
+            /// * Table `ServerHello` in the file `crates/arena-protocol/schemas/protocol.fbs:57`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct ServerHello {
                 /// The field `status` in the table `ServerHello`
@@ -2177,7 +2294,7 @@ mod root {
             ///  Clients read constants from here, never from local defaults.
             ///
             /// Generated from these locations:
-            /// * Table `MatchInfo` in the file `crates/arena-protocol/schemas/protocol.fbs:62`
+            /// * Table `MatchInfo` in the file `crates/arena-protocol/schemas/protocol.fbs:65`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct MatchInfo {
                 /// The field `total_rounds` in the table `MatchInfo`
@@ -6311,7 +6428,7 @@ mod root {
             ///  the spawn window is running.
             ///
             /// Generated from these locations:
-            /// * Table `InitialSpawnStart` in the file `crates/arena-protocol/schemas/protocol.fbs:104`
+            /// * Table `InitialSpawnStart` in the file `crates/arena-protocol/schemas/protocol.fbs:107`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct InitialSpawnStart {
                 /// The field `spawn_deadline_remaining_ms` in the table `InitialSpawnStart`
@@ -6660,7 +6777,7 @@ mod root {
             ///  agent_id -> coordinate set, validated as a whole (R-SPAWN-01).
             ///
             /// Generated from these locations:
-            /// * Table `SubmitInitialSpawns` in the file `crates/arena-protocol/schemas/protocol.fbs:111`
+            /// * Table `SubmitInitialSpawns` in the file `crates/arena-protocol/schemas/protocol.fbs:114`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmitInitialSpawns {
                 /// The field `positions` in the table `SubmitInitialSpawns`
@@ -6965,7 +7082,7 @@ mod root {
             /// The table `SpawnEntry` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `SpawnEntry` in the file `crates/arena-protocol/schemas/protocol.fbs:115`
+            /// * Table `SpawnEntry` in the file `crates/arena-protocol/schemas/protocol.fbs:118`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SpawnEntry {
                 /// The field `agent_id` in the table `SpawnEntry`
@@ -7312,7 +7429,7 @@ mod root {
             ///  2 = missed deadline (SPAWN_FORFEIT). Private reason; no replacement.
             ///
             /// Generated from these locations:
-            /// * Table `InitialSpawnResult` in the file `crates/arena-protocol/schemas/protocol.fbs:123`
+            /// * Table `InitialSpawnResult` in the file `crates/arena-protocol/schemas/protocol.fbs:126`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct InitialSpawnResult {
                 /// The field `status` in the table `InitialSpawnResult`
@@ -7644,7 +7761,7 @@ mod root {
             ///  are licensed again. No authoritative round payload (P3-RPC).
             ///
             /// Generated from these locations:
-            /// * Table `RoundStartSignal` in the file `crates/arena-protocol/schemas/protocol.fbs:130`
+            /// * Table `RoundStartSignal` in the file `crates/arena-protocol/schemas/protocol.fbs:133`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct RoundStartSignal {}
 
@@ -7864,7 +7981,7 @@ mod root {
             ///  no stream ids or nonces.
             ///
             /// Generated from these locations:
-            /// * Union `CommandBody` in the file `crates/arena-protocol/schemas/protocol.fbs:135`
+            /// * Union `CommandBody` in the file `crates/arena-protocol/schemas/protocol.fbs:138`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub enum CommandBody {
                 /// The variant `Move` in the union `CommandBody`
@@ -8357,7 +8474,7 @@ mod root {
             /// The table `CmdMove` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdMove` in the file `crates/arena-protocol/schemas/protocol.fbs:145`
+            /// * Table `CmdMove` in the file `crates/arena-protocol/schemas/protocol.fbs:148`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdMove {
                 /// The field `x` in the table `CmdMove`
@@ -8647,7 +8764,7 @@ mod root {
             /// The table `CmdPortal` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdPortal` in the file `crates/arena-protocol/schemas/protocol.fbs:146`
+            /// * Table `CmdPortal` in the file `crates/arena-protocol/schemas/protocol.fbs:149`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdPortal {
                 /// The field `portal` in the table `CmdPortal`
@@ -8901,7 +9018,7 @@ mod root {
             /// The table `CmdEmpty` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdEmpty` in the file `crates/arena-protocol/schemas/protocol.fbs:147`
+            /// * Table `CmdEmpty` in the file `crates/arena-protocol/schemas/protocol.fbs:150`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdEmpty {}
 
@@ -9102,7 +9219,7 @@ mod root {
             /// The table `CmdLink` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdLink` in the file `crates/arena-protocol/schemas/protocol.fbs:148`
+            /// * Table `CmdLink` in the file `crates/arena-protocol/schemas/protocol.fbs:151`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdLink {
                 /// The field `a` in the table `CmdLink`
@@ -9392,7 +9509,7 @@ mod root {
             /// The table `KeyCount` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `KeyCount` in the file `crates/arena-protocol/schemas/protocol.fbs:149`
+            /// * Table `KeyCount` in the file `crates/arena-protocol/schemas/protocol.fbs:152`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct KeyCount {
                 /// The field `portal` in the table `KeyCount`
@@ -9686,7 +9803,7 @@ mod root {
             /// The table `CmdTransfer` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `CmdTransfer` in the file `crates/arena-protocol/schemas/protocol.fbs:150`
+            /// * Table `CmdTransfer` in the file `crates/arena-protocol/schemas/protocol.fbs:153`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CmdTransfer {
                 /// The field `target_agent` in the table `CmdTransfer`
@@ -10071,7 +10188,7 @@ mod root {
             /// The table `Command` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `Command` in the file `crates/arena-protocol/schemas/protocol.fbs:156`
+            /// * Table `Command` in the file `crates/arena-protocol/schemas/protocol.fbs:159`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct Command {
                 /// The field `body` in the table `Command`
@@ -10340,7 +10457,7 @@ mod root {
             /// The table `SubmitCommandStream` in the namespace `ingress.protocol`
             ///
             /// Generated from these locations:
-            /// * Table `SubmitCommandStream` in the file `crates/arena-protocol/schemas/protocol.fbs:158`
+            /// * Table `SubmitCommandStream` in the file `crates/arena-protocol/schemas/protocol.fbs:161`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmitCommandStream {
                 /// The field `round` in the table `SubmitCommandStream`
@@ -10746,7 +10863,7 @@ mod root {
             ///  (completed at/after the deadline; nothing frozen).
             ///
             /// Generated from these locations:
-            /// * Table `SubmissionResult` in the file `crates/arena-protocol/schemas/protocol.fbs:169`
+            /// * Table `SubmissionResult` in the file `crates/arena-protocol/schemas/protocol.fbs:172`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct SubmissionResult {
                 /// The field `round` in the table `SubmissionResult`
@@ -11179,7 +11296,7 @@ mod root {
             ///  agents as explicit passes for `round`.
             ///
             /// Generated from these locations:
-            /// * Table `CommitRound` in the file `crates/arena-protocol/schemas/protocol.fbs:178`
+            /// * Table `CommitRound` in the file `crates/arena-protocol/schemas/protocol.fbs:181`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct CommitRound {
                 /// The field `round` in the table `CommitRound`
@@ -11450,7 +11567,7 @@ mod root {
             ///  and SHM reads are forbidden until the next RoundStartSignal.
             ///
             /// Generated from these locations:
-            /// * Table `RoundClosed` in the file `crates/arena-protocol/schemas/protocol.fbs:184`
+            /// * Table `RoundClosed` in the file `crates/arena-protocol/schemas/protocol.fbs:187`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct RoundClosed {
                 /// The field `round` in the table `RoundClosed`
@@ -11722,7 +11839,7 @@ mod root {
             ///  never dressed up as score results (CONTEXT Match Outcome).
             ///
             /// Generated from these locations:
-            /// * Table `GameEnd` in the file `crates/arena-protocol/schemas/protocol.fbs:191`
+            /// * Table `GameEnd` in the file `crates/arena-protocol/schemas/protocol.fbs:194`
             #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
             pub struct GameEnd {
                 /// The field `outcome` in the table `GameEnd`

@@ -2,9 +2,11 @@
 
 pub mod archive;
 pub mod config;
+pub mod durable;
 pub mod elo;
 pub mod entrant;
 pub mod exec_external;
+mod logs;
 pub mod outcome;
 pub mod report;
 pub mod run;

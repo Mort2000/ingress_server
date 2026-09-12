@@ -48,6 +48,10 @@ export interface Replay {
     total_rounds: number;
     rounds_completed: number;
     versions: { protocol: number };
+    identity?: {
+      execution_id: string;
+      participants: ParticipantIdentity[];
+    } | null;
     config: Record<string, number>;
     map: { portals: [number, number, number][] };
     spawns: Record<Faction, [number, number, number][]>;
@@ -69,6 +73,17 @@ export interface Replay {
 export interface Agent {
   faction: Faction;
   row: AgentRow;
+}
+export interface ParticipantIdentity {
+  registered_id: string;
+  display_name: string;
+  registered_version: string;
+  binary_hash: string;
+  client_name: string;
+  client_version: string;
+  bot_version: string;
+  sdk_version: string;
+  binding_verified: boolean;
 }
 export const factions: Faction[] = ["enl", "res"];
 export const colors = {

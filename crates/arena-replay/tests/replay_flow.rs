@@ -19,6 +19,39 @@ use support::{FieldBot, replay_cfg, replay_map, replay_spawns};
 
 const GAME_SEED: u64 = 0x5EED_0000_0000_0005;
 
+#[test]
+fn identity_roundtrips_without_changing_game_state_and_old_files_remain_readable() {
+    let (bytes, ..) = field_match_parts(GAME_SEED);
+    let old = bytes.unwrap();
+    assert_eq!(u32::from_le_bytes(old[4..8].try_into().unwrap()), 1);
+    let mut log = decode_log(&old).unwrap();
+    let before = replay(&log).unwrap();
+    let mut identity = arena_replay::format::ReplayIdentity::default();
+    identity.execution_id = "execution-123".into();
+    identity.participants[0].client_name = "星际 <bot>".into();
+    identity.participants[0].bot_version = "v1.2".into();
+    log.header.identity = Some(identity.clone());
+    let new = log.encode();
+    assert_eq!(u32::from_le_bytes(new[4..8].try_into().unwrap()), 2);
+    let decoded = decode_log(&new).unwrap();
+    assert_eq!(decoded.header.identity, Some(identity));
+    assert_eq!(decoded.encode(), new);
+    assert_eq!(
+        replay(&decoded).unwrap().final_state_hash,
+        before.final_state_hash
+    );
+    let mut corrupt = new;
+    let offset = corrupt
+        .windows(13)
+        .position(|s| s == b"execution-123")
+        .unwrap();
+    corrupt[offset] ^= 1;
+    assert!(
+        decode_log(&corrupt).is_err(),
+        "identity corruption must be detected"
+    );
+}
+
 /// Runs the pinned FieldBot fixture match with and without a recorder.
 fn field_match_parts(
     game_seed: u64,

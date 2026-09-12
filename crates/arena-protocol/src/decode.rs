@@ -242,6 +242,8 @@ pub enum Envelope {
     ClientHello {
         client_name: String,
         client_version: String,
+        bot_version: String,
+        sdk_version: String,
         protocol_version: u32,
         public_snapshot_version: u32,
         private_snapshot_version: u32,
@@ -341,6 +343,8 @@ fn convert_envelope(value: proto::ProtocolEnvelope) -> Result<Envelope, Protocol
         proto::Message::ClientHello(inner) => Envelope::ClientHello {
             client_name: inner.client_name.unwrap_or_default(),
             client_version: inner.client_version.unwrap_or_default(),
+            bot_version: inner.bot_version.unwrap_or_default(),
+            sdk_version: inner.sdk_version.unwrap_or_default(),
             protocol_version: inner.protocol_version,
             public_snapshot_version: inner.public_snapshot_version,
             private_snapshot_version: inner.private_snapshot_version,
@@ -705,6 +709,8 @@ mod tests {
         let good = crate::build::envelope_bytes(&Envelope::ClientHello {
             client_name: "probe".into(),
             client_version: "1".into(),
+            bot_version: String::new(),
+            sdk_version: String::new(),
             protocol_version: 1,
             public_snapshot_version: 1,
             private_snapshot_version: 1,

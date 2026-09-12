@@ -81,6 +81,8 @@ struct AcceptShare {
 
 /// Internal driver bundle.
 struct Driver {
+    identity: arena_replay::format::ReplayIdentity,
+    accepted: Option<Sender<(u8, Option<u32>)>>,
     cfg: arena_core::config::GameConfig,
     game_seed: u64,
     map: MapDefinition,
@@ -237,6 +239,16 @@ fn verify_private(bytes: &[u8]) -> bool {
 /// Runs one whole match. Blocks until the match ends (normal, forfeit, or
 /// setup error), then writes the artifacts and returns the report.
 pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
+    serve_match_observed(setup, None, None)
+}
+
+/// Supervisor-only connection notifications, emitted by the authoritative
+/// driver after accepting a peer. Names supplied by clients are not evidence.
+pub fn serve_match_observed(
+    setup: MatchSetup,
+    accepted: Option<Sender<(u8, Option<u32>)>>,
+    frozen_map: Option<MapDefinition>,
+) -> io::Result<MatchReport> {
     setup
         .config
         .validate()
@@ -257,14 +269,16 @@ pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
             MAX_FRAME_PAYLOAD_BYTES
         )));
     }
-    let map = generate_map(setup.map_seed, &setup.config)
-        .map_err(|error| io::Error::other(format!("map generation failed: {error:?}")))?;
+    let map = match frozen_map {
+        Some(map) => map,
+        None => generate_map(setup.map_seed, &setup.config)
+            .map_err(|error| io::Error::other(format!("map generation failed: {error:?}")))?,
+    };
+    map.validate(&setup.config)
+        .map_err(|error| io::Error::other(format!("map invalid: {error:?}")))?;
     std::fs::create_dir_all(&setup.out_dir)?;
-    // Remove a stale socket file from a previous run, then bind.
+    // Never unlink an occupied name: it may belong to a live match.
     let socket_path = setup.socket_path.clone();
-    if socket_path.exists() {
-        std::fs::remove_file(&socket_path)?;
-    }
     let listener = UnixListener::bind(&socket_path)?;
 
     let (tx, rx) = std::sync::mpsc::channel::<ConnEvent>();
@@ -281,6 +295,10 @@ pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
     )?;
 
     let mut driver = Driver {
+        identity: arena_replay::format::ReplayIdentity {
+            execution_id: setup.match_id.clone(),
+            ..Default::default()
+        },
         cfg: setup.config,
         game_seed: setup.game_seed,
         map,
@@ -300,6 +318,7 @@ pub fn serve_match(setup: MatchSetup) -> io::Result<MatchReport> {
         snapshot_generation: 0,
         replay_path: None,
         write_stalled: None,
+        accepted,
     };
     driver.journal.start_clock();
     driver.journal.event("match_id", &setup.match_id);
@@ -454,13 +473,10 @@ impl Driver {
                 match GameState::new(self.cfg, &self.map, &enl, &res) {
                     Ok(state) => {
                         self.state = Some(state);
-                        self.replay = Some(ReplayWriter::new(
-                            self.game_seed,
-                            &self.cfg,
-                            &self.map,
-                            &enl,
-                            &res,
-                        ));
+                        self.replay = Some(
+                            ReplayWriter::new(self.game_seed, &self.cfg, &self.map, &enl, &res)
+                                .with_identity(self.identity.clone()),
+                        );
                     }
                     Err(error) => {
                         return MatchOutcome::SetupError {
@@ -493,6 +509,9 @@ impl Driver {
                     let peer_pid = crate::shm::peer_pid(&stream);
                     self.conn_peer_pid[conn as usize] = peer_pid;
                     self.conns[conn as usize] = Some(stream);
+                    if let Some(accepted) = &self.accepted {
+                        let _ = accepted.send((conn, peer_pid));
+                    }
                     self.journal.event(
                         "connected",
                         &format!(
@@ -508,6 +527,9 @@ impl Driver {
                     envelope:
                         Ok(Envelope::ClientHello {
                             client_name,
+                            client_version,
+                            bot_version,
+                            sdk_version,
                             protocol_version,
                             public_snapshot_version,
                             private_snapshot_version,
@@ -525,6 +547,14 @@ impl Driver {
                         &format!("conn={conn} name={client_name:?} versions={triple:?}"),
                     );
                     if hellos[conn as usize].is_none() {
+                        self.identity.participants[conn as usize] =
+                            arena_replay::format::ParticipantIdentity {
+                                client_name: client_name.clone(),
+                                client_version,
+                                bot_version,
+                                sdk_version,
+                                ..Default::default()
+                            };
                         hellos[conn as usize] = Some((client_name, triple));
                     }
                     // Both HELLOs collected: exact-match check, then start.

@@ -100,6 +100,38 @@ fn spawn_probe(socket: &Path, mode: &str) -> Child {
         .expect("probe spawns")
 }
 
+#[test]
+fn second_server_cannot_replace_an_active_socket() {
+    let first = spawn_server("socket-collision", 1);
+    let second = Command::new(target_bin("arena-server"))
+        .arg("--socket")
+        .arg(&first.socket)
+        .args([
+            "--config",
+            "fast",
+            "--rounds",
+            "1",
+            "--match-id",
+            "collision-second",
+        ])
+        .arg("--out")
+        .arg(first.socket.parent().unwrap().join("second"))
+        .output()
+        .unwrap();
+    assert!(
+        !second.status.success(),
+        "a second server must refuse the occupied socket"
+    );
+    assert!(
+        first.socket.exists(),
+        "the active socket must remain reachable"
+    );
+    let mut a = spawn_probe(&first.socket, "pass");
+    let mut b = spawn_probe(&first.socket, "pass");
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+}
+
 /// Before INITIAL_SPAWN_START — in fact before BOTH client HELLOs
 /// arrive — no region file for the match exists: the glob over
 /// /dev/shm for the fresh, unguessable match id finds nothing, even

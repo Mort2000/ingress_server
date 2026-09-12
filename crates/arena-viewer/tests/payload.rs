@@ -590,6 +590,27 @@ fn hud_telemetry_and_browser_fixtures() {
     std::fs::write(dir.join("normal.iarp"), bytes).unwrap();
     std::fs::write(dir.join("normal.json"), json::write_json(&payload).unwrap()).unwrap();
     std::fs::write(dir.join("abnormal.iarp"), abnormal_iarp()).unwrap();
+    let mut named = decode_log(bytes).unwrap();
+    let mut identity = arena_replay::format::ReplayIdentity::default();
+    identity.execution_id = "viewer-identity-fixture".into();
+    for (index, p) in identity.participants.iter_mut().enumerate() {
+        p.display_name = "星际 <astra-bot> & 长名称".repeat(5);
+        p.registered_id = index.to_string();
+        p.registered_version = format!("v{}", index + 1);
+        p.client_name = "different-self-report".into();
+        p.client_version = "sdk-0.1.0".into();
+        p.sdk_version = "0.1.0".into();
+        p.binary_hash = "abcdef0123456789".repeat(4);
+        p.binding_verified = true;
+    }
+    named.header.identity = Some(identity);
+    let bytes = named.encode();
+    std::fs::write(dir.join("identity.iarp"), &bytes).unwrap();
+    std::fs::write(
+        dir.join("identity.json"),
+        json::write_json(&data::build_payload(&bytes).unwrap()).unwrap(),
+    )
+    .unwrap();
     write_edge_browser_fixtures(&dir);
 }
 

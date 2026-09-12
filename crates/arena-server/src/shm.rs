@@ -306,7 +306,7 @@ unsafe impl Sync for ShmPublisher {}
 
 impl ShmPublisher {
     /// Creates the region (0600) and writes the immutable header fields.
-    /// A stale leftover of the same name is unlinked first.
+    /// An existing region is never removed, including suspected leftovers.
     pub fn create(
         name: &str,
         region_kind: u32,
@@ -321,19 +321,7 @@ impl ShmPublisher {
         let fd = if fd >= 0 {
             fd
         } else {
-            let first = std::io::Error::last_os_error();
-            if first.kind() == std::io::ErrorKind::AlreadyExists {
-                // Stale leftover from a crashed run: unlink and retry once.
-                // SAFETY: as above.
-                unsafe { shm_unlink(cname.as_ptr()) };
-                let retry = unsafe { shm_open(cname.as_ptr(), O_RDWR | O_CREAT | O_EXCL, 0o600) };
-                if retry < 0 {
-                    return Err(ShmError::Io(std::io::Error::last_os_error()));
-                }
-                retry
-            } else {
-                return Err(ShmError::Io(first));
-            }
+            return Err(ShmError::Io(std::io::Error::last_os_error()));
         };
         // Set the size BEFORE mapping; failure must still close the fd and
         // unlink the name so nothing leaks for the next run.

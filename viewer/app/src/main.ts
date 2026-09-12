@@ -12,6 +12,52 @@ $("app").innerHTML = `
 let model: ReplayModel | undefined,
   map: TacticalMap | undefined,
   worker: Worker | undefined;
+for (const faction of ["enl", "res"]) {
+  const area = document.querySelector(`.fscore.${faction}`)!;
+  area.querySelector(".fname")!.textContent = faction.toUpperCase();
+  const name = document.createElement("span");
+  name.id = `identity-${faction}`;
+  name.className = "participant-name";
+  name.textContent = "选手未知";
+  const version = document.createElement("span");
+  version.id = `version-${faction}`;
+  version.className = "participant-version";
+  version.textContent = "版本未知";
+  area.insertBefore(name, area.querySelector(".fval"));
+  area.insertBefore(version, area.querySelector(".fval"));
+}
+const identityDetails = document.createElement("details");
+identityDetails.id = "identity-details";
+identityDetails.innerHTML = "<summary>选手详情</summary><pre></pre>";
+$("topbar").after(identityDetails);
+function renderIdentity(replay: Replay) {
+  const details = [
+    "身份来源仅作追溯；回放校验不是构建签名。",
+    `执行实例：${replay.header.identity?.execution_id || "未知"}`,
+  ];
+  for (const [index, faction] of ["enl", "res"].entries()) {
+    const p = replay.header.identity?.participants[index];
+    const name = p?.display_name || p?.client_name || "选手未知";
+    const version = p?.registered_version || p?.bot_version || "版本未知";
+    $(`identity-${faction}`).textContent = name;
+    $(`identity-${faction}`).title = name;
+    $(`version-${faction}`).textContent = version;
+    $(`version-${faction}`).title = version;
+    details.push(
+      `\n${faction.toUpperCase()} · ${name} · ${version}`,
+      `注册 ID：${p?.registered_id || "未知"}`,
+      `注册名称：${p?.display_name || "未知"}`,
+      `注册 Bot 版本：${p?.registered_version || "版本未知"}`,
+      `自报名称：${p?.client_name || "未知"}`,
+      `自报 Bot 版本：${p?.bot_version || "版本未知"}`,
+      `客户端版本：${p?.client_version || "未知"}`,
+      `SDK 版本：${p?.sdk_version || "未知"}`,
+      `构建哈希：${p?.binary_hash || "未知"}`,
+      `阵营绑定：${p?.binding_verified ? "运行器已核验" : "未核验"}`,
+    );
+  }
+  identityDetails.querySelector("pre")!.textContent = details.join("\n");
+}
 let loading = false,
   generation = 0,
   playing = false,
@@ -144,6 +190,7 @@ async function load(file: File) {
       $("m-map").textContent =
         `${model.data.header.map.portals.length} PORTALS`;
       $("m-proto").textContent = String(model.data.header.versions.protocol);
+      renderIdentity(model.data);
       const outcome = model.data.header.outcome;
       $("resultpill").textContent =
         outcome.kind === "normal"

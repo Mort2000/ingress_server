@@ -49,12 +49,16 @@ fn message_owned(envelope: &Envelope) -> proto::Message {
         Envelope::ClientHello {
             client_name,
             client_version,
+            bot_version,
+            sdk_version,
             protocol_version,
             public_snapshot_version,
             private_snapshot_version,
         } => proto::Message::ClientHello(Box::new(proto::ClientHello {
             client_name: Some(client_name.clone()),
             client_version: Some(client_version.clone()),
+            bot_version: Some(bot_version.clone()),
+            sdk_version: Some(sdk_version.clone()),
             protocol_version: *protocol_version,
             public_snapshot_version: *public_snapshot_version,
             private_snapshot_version: *private_snapshot_version,

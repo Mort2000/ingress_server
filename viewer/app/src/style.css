@@ -1555,3 +1555,50 @@ button[aria-pressed="true"] {
     max-width: 100%;
   }
 }
+/* Identity labels remain plain text, independently bounded per faction. */
+.fscore {
+  min-width: 0;
+  max-width: 260px;
+}
+.participant-name,
+.participant-version {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.participant-version {
+  opacity: 0.8;
+  font-size: 11px;
+}
+#identity-details {
+  background: #101722;
+  color: #c5d5e4;
+  padding: 3px 16px;
+  font-size: 12px;
+}
+#identity-details summary {
+  cursor: pointer;
+}
+#identity-details pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 35vh;
+  overflow: auto;
+}
+@media (max-width: 850px) {
+  #topbar {
+    flex-wrap: wrap;
+    height: auto;
+  }
+  #versus {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .fscore {
+    width: 35%;
+  }
+}

@@ -16,6 +16,34 @@ async function seek(page: Page, round: number) {
   await expect(page.locator("#seek")).toHaveValue(String(round));
 }
 
+test("standalone replay identity keeps versions and sources distinct and resets for old files", async ({
+  page,
+}) => {
+  await open(page, "identity.iarp");
+  await expect(page.locator("#identity-enl")).toContainText("星际 <astra-bot>");
+  await expect(page.locator("#version-enl")).toHaveText("v1");
+  await expect(page.locator("#version-res")).toHaveText("v2");
+  await page.locator("#identity-details summary").click();
+  await expect(page.locator("#identity-details")).toContainText(
+    "different-self-report",
+  );
+  await expect(page.locator("#identity-details")).toContainText("sdk-0.1.0");
+  await page.locator('[data-view="res"]').click();
+  await seek(page, 80);
+  await expect(page.locator("#version-enl")).toHaveText("v1");
+  await page.setViewportSize({ width: 650, height: 900 });
+  await expect(page.locator("#identity-enl")).toBeVisible();
+  await expect(page.locator("#identity-res")).toBeVisible();
+  await page
+    .locator("#file-input")
+    .setInputFiles(resolve(fixtures, "normal.iarp"));
+  await expect(page.locator("#identity-enl")).toHaveText("选手未知");
+  await expect(page.locator("#version-enl")).toHaveText("版本未知");
+  await expect(page.locator("#identity-details")).not.toContainText(
+    "different-self-report",
+  );
+});
+
 test("browser WASM payload equals the native verifier, and rejects corrupt archives", async ({
   page,
 }) => {

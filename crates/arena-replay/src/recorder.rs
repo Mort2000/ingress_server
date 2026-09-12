@@ -54,6 +54,7 @@ impl ReplayWriter {
         res: &InitialSpawns,
     ) -> Self {
         let header = ReplayHeader {
+            identity: None,
             server_version: SERVER_VERSION,
             protocol_version: PROTOCOL_VERSION,
             rng_version: RNG_VERSION,
@@ -71,6 +72,11 @@ impl ReplayWriter {
             rounds_recorded: 0,
             events_written: 0,
         }
+    }
+
+    pub fn with_identity(mut self, identity: crate::format::ReplayIdentity) -> Self {
+        self.header.identity = Some(identity);
+        self
     }
 
     /// Records one closed round. `state` must be the post-`advance_round`

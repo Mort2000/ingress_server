@@ -37,6 +37,13 @@ fn env_arg() -> u64 {
 }
 
 fn main() {
+    if let Ok(bytes) = std::env::var("PROBE_LOG_BYTES") {
+        use std::io::Write;
+        let bytes: usize = bytes.parse().expect("PROBE_LOG_BYTES integer");
+        let block = vec![b'x'; bytes.min(4 * 1024 * 1024)];
+        std::io::stdout().write_all(&block).unwrap();
+        std::io::stderr().write_all(&block).unwrap();
+    }
     let mode = env_mode();
     let mut args = std::env::args().skip(1);
     let socket = args
@@ -71,6 +78,8 @@ fn hello_envelope(name: &str, bump: u32) -> Envelope {
     Envelope::ClientHello {
         client_name: name.into(),
         client_version: "probe".into(),
+        bot_version: String::new(),
+        sdk_version: String::new(),
         protocol_version: triple[0],
         public_snapshot_version: triple[1],
         private_snapshot_version: triple[2],
@@ -230,6 +239,9 @@ fn probe(mode: &str, socket: &str, arg: u64) -> Result<i32, Box<dyn std::error::
         arena_core::types::Faction::Res => arena_client_sdk::shm::REGION_KIND_RES,
     };
     let private_reader = ShmReader::open(&private_name, RegionHeader::private(private_kind))?;
+    println!(
+        "observation_identity match_id={match_id} faction={faction:?} public={public_name} private={private_name}"
+    );
 
     // --- Round loop ---------------------------------------------------
     let mut round: u32 = 0;

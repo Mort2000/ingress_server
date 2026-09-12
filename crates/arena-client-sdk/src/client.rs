@@ -22,6 +22,8 @@ pub struct ConnectOptions {
     pub socket_path: PathBuf,
     pub client_name: String,
     pub client_version: String,
+    /// Explicit strategy/release version, independent of the SDK version.
+    pub bot_version: String,
     /// Per-read timeout while waiting for server frames (the loop keeps
     /// waiting until an error or GAME_END; this only bounds each read).
     pub read_timeout: Duration,
@@ -33,8 +35,14 @@ impl ConnectOptions {
             socket_path: socket_path.into(),
             client_name: client_name.into(),
             client_version: concat!("sdk-", env!("CARGO_PKG_VERSION")).into(),
+            bot_version: String::new(),
             read_timeout: Duration::from_secs(30),
         }
+    }
+
+    pub fn with_bot_version(mut self, version: impl Into<String>) -> Self {
+        self.bot_version = version.into();
+        self
     }
 }
 
@@ -70,6 +78,8 @@ pub fn run<B: ClientBot>(
     conn.send(&Envelope::ClientHello {
         client_name: opts.client_name,
         client_version: opts.client_version,
+        bot_version: opts.bot_version,
+        sdk_version: env!("CARGO_PKG_VERSION").into(),
         protocol_version: arena_protocol::PROTOCOL_VERSION,
         public_snapshot_version: arena_protocol::PUBLIC_SNAPSHOT_VERSION,
         private_snapshot_version: arena_protocol::PRIVATE_SNAPSHOT_VERSION,

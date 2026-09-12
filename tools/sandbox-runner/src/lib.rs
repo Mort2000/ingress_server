@@ -396,6 +396,10 @@ pub fn run_command(config: &SandboxConfig, program: &Path, args: &[String]) -> S
 
     // ---- wall-clock watchdog (D74): SIGKILL the GROUP past the timeout
     let deadline = Instant::now() + config.wall_timeout;
+    // Start both drainers BEFORE waiting: even a small pipe can fill long
+    // before a client finishes. Storage limits must not stop consumption.
+    let stdout_rx = start_drain(child.stdout.take());
+    let stderr_rx = start_drain(child.stderr.take());
     let child_pid = child.id();
     let expired = Arc::new(AtomicBool::new(false));
     let watchdog_flag = Arc::clone(&expired);
@@ -426,8 +430,8 @@ pub fn run_command(config: &SandboxConfig, program: &Path, args: &[String]) -> S
     // holder is dead; a holder that somehow survived the group SIGKILL
     // can stall us no longer than the wall budget + grace.
     let drain_deadline = deadline + DRAIN_GRACE;
-    let stdout_tail = drain_capped(child.stdout.take(), drain_deadline);
-    let stderr_tail = drain_capped(child.stderr.take(), drain_deadline);
+    let stdout_tail = finish_drain(stdout_rx, drain_deadline);
+    let stderr_tail = finish_drain(stderr_rx, drain_deadline);
     // Report the REAL supervision wall time (direct child + drain),
     // not just the child's lifetime: pre-fix a lingering grandchild
     // made the runner return 15 s after a run it reported as 11 ms.
@@ -479,23 +483,24 @@ pub fn run_command(config: &SandboxConfig, program: &Path, args: &[String]) -> S
 /// open — a plain `sh -c 'sleep 20 & exec /bin/true'` made the runner
 /// block for the grandchild's full lifetime (sleep infinity ⇒ hang)
 /// long after the wall watchdog killed the direct child.
-fn drain_capped<R>(reader: Option<R>, deadline: Instant) -> String
+fn start_drain<R>(reader: Option<R>) -> std::sync::mpsc::Receiver<String>
 where
     R: std::io::Read + Send + 'static,
 {
-    let Some(reader) = reader else {
-        return String::new();
-    };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // The thread owns the reader; if we abandon it below it stays
         // blocked on the pipe until process exit (one bounded leak per
         // setsid-escaped straggler, nothing more it can do safely).
-        let _ = tx.send(read_capped(Some(reader)));
+        let _ = tx.send(read_capped(reader));
     });
+    rx
+}
+
+fn finish_drain(rx: std::sync::mpsc::Receiver<String>, deadline: Instant) -> String {
     match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         Ok(text) => text,
-        Err(_) => String::new(),
+        Err(_) => "[capture incomplete: drain deadline exceeded]".into(),
     }
 }
 
@@ -504,21 +509,29 @@ fn read_capped<R: std::io::Read>(mut reader: Option<R>) -> String {
         return String::new();
     };
     let mut bytes = Vec::new();
+    let mut total = 0u64;
     let mut chunk = [0u8; 4096];
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
-                bytes.extend_from_slice(&chunk[..n]);
-                if bytes.len() >= OUTPUT_CAP {
-                    break;
-                }
+                total += n as u64;
+                let keep = n.min(OUTPUT_CAP - bytes.len());
+                bytes.extend_from_slice(&chunk[..keep]);
             }
-            Err(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return format!("[capture error: {error}]"),
         }
     }
     bytes.truncate(OUTPUT_CAP);
-    String::from_utf8_lossy(&bytes).into_owned()
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if total > bytes.len() as u64 {
+        text.push_str(&format!(
+            "\n[truncated: {total} bytes seen; {} bytes saved]",
+            bytes.len()
+        ));
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------

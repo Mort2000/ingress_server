@@ -28,6 +28,8 @@ impl RawClient {
         client.send_envelope(&Envelope::ClientHello {
             client_name: name.to_string(),
             client_version: "test".into(),
+            bot_version: String::new(),
+            sdk_version: String::new(),
             protocol_version: arena_protocol::PROTOCOL_VERSION,
             public_snapshot_version: arena_protocol::PUBLIC_SNAPSHOT_VERSION,
             private_snapshot_version: arena_protocol::PRIVATE_SNAPSHOT_VERSION,
@@ -53,6 +55,8 @@ impl RawClient {
         client.send_envelope(&Envelope::ClientHello {
             client_name: name.to_string(),
             client_version: "test".into(),
+            bot_version: String::new(),
+            sdk_version: String::new(),
             protocol_version: triple[0],
             public_snapshot_version: triple[1],
             private_snapshot_version: triple[2],

@@ -30,7 +30,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use arena_replay::format::EndOfMatch;
-use arena_server::{MatchSetup, serve_match};
+use arena_server::MatchSetup;
+use arena_server::driver::serve_match_observed;
 
 use crate::tournament::config::{ClientSandbox, TournamentConfig};
 use crate::tournament::entrant::EntrantId;
@@ -41,6 +42,31 @@ use crate::tournament::schedule::TournamentItem;
 pub const SERVER_SUBDIR: &str = "server";
 /// The scratch dir holding the UDS socket (the sandbox rw dir).
 pub const SCRATCH_SUBDIR: &str = "scratch";
+
+/// Kernel entropy, independent of schedule, directory and process lifetime.
+pub fn execution_id() -> std::io::Result<String> {
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Keep server artifact writes inside the attempt lifetime on every error path.
+struct ServerGuard(Option<std::thread::JoinHandle<std::io::Result<arena_server::MatchReport>>>);
+impl ServerGuard {
+    fn is_finished(&self) -> bool {
+        self.0.as_ref().unwrap().is_finished()
+    }
+    fn join(mut self) -> std::thread::Result<std::io::Result<arena_server::MatchReport>> {
+        self.0.take().unwrap().join()
+    }
+}
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 /// One executed external item.
 pub struct ExternalResult {
@@ -117,23 +143,15 @@ impl ChildGuard {
             let _ = child.wait();
         }
     }
+}
 
-    /// Reads the sandbox-runner JSON reports off the piped stdouts
-    /// (small documents; read after exit so the pipe cannot fill).
-    fn capture_sandbox_reports(&mut self) -> Vec<(String, String)> {
-        let mut reports = Vec::new();
-        for (child, side, sandboxed) in self.children.iter_mut() {
-            if !*sandboxed {
-                continue;
-            }
-            if let Some(mut stdout) = child.stdout.take() {
-                let mut json = String::new();
-                if stdout.read_to_string(&mut json).is_ok() && !json.is_empty() {
-                    reports.push((side.clone(), json));
-                }
-            }
-        }
-        reports
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        // Only kill unreaped processes; don't signal a pid recycled after wait.
+        self.children
+            .retain_mut(|(child, _, _)| !matches!(child.try_wait(), Ok(Some(_))));
+        self.kill_all();
+        self.wait_all();
     }
 }
 
@@ -158,10 +176,19 @@ pub fn run_item_external(
     cfg: &TournamentConfig,
     match_dir: &Path,
 ) -> ExternalResult {
+    run_item_external_on_map(item, cfg, match_dir, None)
+}
+
+pub fn run_item_external_on_map(
+    item: &TournamentItem,
+    cfg: &TournamentConfig,
+    match_dir: &Path,
+    map: Option<arena_core::map::MapDefinition>,
+) -> ExternalResult {
     let start = Instant::now();
     let budget = Duration::from_millis(cfg.per_match_budget_ms);
     let played = catch_unwind(AssertUnwindSafe(|| {
-        play(item, cfg, match_dir, start + budget)
+        play(item, cfg, match_dir, start + budget, map)
     }));
     match played {
         Ok(result) => result,
@@ -228,6 +255,7 @@ fn tree_pids(pid: u32) -> Vec<u32> {
 
 /// SOCKFS inodes of the unix sockets `pid` holds open, from the
 /// `socket:[N]` fd links under `/proc/<pid>/fd`.
+#[cfg(test)]
 fn fd_socket_inodes(pid: u32) -> Vec<u64> {
     let mut inodes = Vec::new();
     let fd_dir = std::path::PathBuf::from(format!("/proc/{pid}/fd"));
@@ -254,6 +282,7 @@ fn fd_socket_inodes(pid: u32) -> Vec<u64> {
 /// listener stays 01. A client fd in state 03 therefore proves its
 /// `connect()` COMPLETED, which (backlog is FIFO) queued it ahead of any
 /// connection made later — exactly what the connect-order gate needs.
+#[cfg(test)]
 fn connected_unix_socket_inodes() -> Option<BTreeSet<u64>> {
     let text = std::fs::read_to_string("/proc/net/unix").ok()?;
     let mut inodes = BTreeSet::new();
@@ -276,6 +305,7 @@ fn connected_unix_socket_inodes() -> Option<BTreeSet<u64>> {
 /// the gate is an ordering HINT — the authoritative proof is
 /// [`verify_accept_order`], so a weaker gate can only cost a match, never
 /// misattribute one.
+#[cfg(test)]
 fn tree_holds_connected_socket(pid: u32) -> bool {
     let connected = connected_unix_socket_inodes();
     for tree_pid in tree_pids(pid) {
@@ -290,31 +320,6 @@ fn tree_holds_connected_socket(pid: u32) -> bool {
         }
     }
     false
-}
-
-/// Waits until the ENL-scheduled client's connection has COMPLETED (or
-/// the match deadline / the child's exit). Enforcing the SCHEDULE's
-/// faction assignment needs the ENL client to be the FIRST connection:
-/// the server assigns ENL to the first accepted connection (D61), so
-/// holding the RES client until this point makes the first accept the
-/// ENL client's — and [`verify_accept_order`] then proves it from the
-/// server's own accept record. Bounded by the REMAINING match budget
-/// (never a fixed constant).
-fn wait_for_enl_connect(
-    child: &mut Child,
-    deadline: Instant,
-    observed_pids: &mut BTreeSet<u32>,
-) -> bool {
-    loop {
-        observed_pids.extend(tree_pids(child.id()));
-        if tree_holds_connected_socket(child.id()) {
-            return true;
-        }
-        if Instant::now() >= deadline || matches!(child.try_wait(), Ok(Some(_))) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(3));
-    }
 }
 
 /// The server-side proof of the served faction assignment. The driver
@@ -367,6 +372,7 @@ fn play(
     cfg: &TournamentConfig,
     match_dir: &Path,
     deadline: Instant,
+    map: Option<arena_core::map::MapDefinition>,
 ) -> ExternalResult {
     let start = Instant::now();
     if let Err(error) = std::fs::create_dir_all(match_dir) {
@@ -379,7 +385,23 @@ fn play(
         Ok(absolute) => absolute,
         Err(error) => return fault(format!("match dir canonicalize: {error}"), 0),
     };
-    let scratch = match_dir.join(SCRATCH_SUBDIR);
+    let match_id = match execution_id() {
+        Ok(id) => id,
+        Err(error) => return fault(format!("execution identity: {error}"), 0),
+    };
+    // Keep UDS paths below Linux's 108-byte limit regardless of archive path.
+    let scratch = PathBuf::from("/tmp").join(format!("ia-{match_id}"));
+    if let Err(error) = std::fs::create_dir(&scratch) {
+        return fault(format!("runtime directory: {error}"), 0);
+    }
+    struct RuntimeDir(PathBuf);
+    impl Drop for RuntimeDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("arena.sock"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let _runtime = RuntimeDir(scratch.clone());
     let server_dir = match_dir.join(SERVER_SUBDIR);
     if let Err(error) =
         std::fs::create_dir_all(&scratch).and_then(|_| std::fs::create_dir_all(&server_dir))
@@ -389,7 +411,12 @@ fn play(
     let socket = scratch.join("arena.sock");
     // Unique per item: keeps /dev/shm/ingress-<id>-* regions collision-free
     // under parallelism (D63).
-    let match_id = format!("{}-m{}", cfg.name, item.index);
+    if let Err(error) =
+        super::durable::atomic_write(&match_dir.join("execution-id"), match_id.as_bytes())
+    {
+        return fault(format!("execution metadata: {error}"), 0);
+    }
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
 
     // 1. The server thread (in-process serve_match: real protocol, real
     //    SHM, real journal/result/IARP under server_dir).
@@ -403,9 +430,9 @@ fn play(
     };
     let server = match std::thread::Builder::new()
         .name(format!("serve-{match_id}"))
-        .spawn(move || serve_match(setup))
+        .spawn(move || serve_match_observed(setup, Some(accepted_tx), map))
     {
-        Ok(handle) => handle,
+        Ok(handle) => ServerGuard(Some(handle)),
         Err(error) => return fault(format!("server thread: {error}"), 0),
     };
 
@@ -442,6 +469,8 @@ fn play(
     //    assignment is PROVEN against the server's accept record (the
     //    server assigns ENL to the first accepted connection, D61, so
     //    the schedule's `a_is_enl` must match the proven accept order).
+    // Drop order: kill/reap clients before joining their output drainers.
+    let mut captures = Vec::new();
     let mut guard = ChildGuard {
         children: Vec::new(),
         sandbox_runner: match &cfg.sandbox {
@@ -466,13 +495,21 @@ fn play(
     for (side, entrant_id) in enl_first {
         let entrant = cfg.entrant(entrant_id);
         let crate::tournament::entrant::EntrantKind::External { binary, env } = &entrant.kind;
+        if let Some(expected) = &entrant.provenance.binary_blake3 {
+            if super::entrant::compute_binary_hash(binary).as_ref().ok() != Some(expected) {
+                return fault(
+                    format!("client {side} binary identity changed"),
+                    start.elapsed().as_millis() as u64,
+                );
+            }
+        }
         let seed = item.client_seed.to_string();
         let mut sandboxed = false;
         let mut command = match &cfg.sandbox {
             ClientSandbox::Off => {
                 let mut command = Command::new(binary);
                 command.arg(&socket).arg(&seed);
-                command.stdout(Stdio::null()).stderr(Stdio::null());
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
                 command
             }
             ClientSandbox::SandboxRunner {
@@ -506,7 +543,7 @@ fn play(
                     .arg(binary)
                     .arg(&socket)
                     .arg(&seed);
-                command.stdout(Stdio::piped()).stderr(Stdio::null());
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
                 sandboxed = true;
                 command
             }
@@ -516,6 +553,16 @@ fn play(
         }
         match command.spawn() {
             Ok(mut child) => {
+                let prefix = if sandboxed { "sandbox" } else { "client" };
+                let stdout = super::logs::Capture::start(
+                    child.stdout.take().unwrap(),
+                    match_dir.join(format!("{prefix}_{side}.stdout")),
+                );
+                let stderr = super::logs::Capture::start(
+                    child.stderr.take().unwrap(),
+                    match_dir.join(format!("{prefix}_{side}.stderr")),
+                );
+                captures.push((side.clone(), sandboxed, stdout, stderr));
                 let pid = child.id();
                 if enl_child_pid.is_none() {
                     // The ENL side goes first: hold the RES client until
@@ -524,7 +571,27 @@ fn play(
                     // A direct client may finish before the first poll after
                     // both spawns. Its Child pid is already authoritative evidence.
                     enl_pids.insert(pid);
-                    wait_for_enl_connect(&mut child, deadline, &mut enl_pids);
+                    let confirmed = loop {
+                        enl_pids.extend(tree_pids(pid));
+                        match accepted_rx.recv_timeout(Duration::from_millis(3)) {
+                            Ok((0, Some(peer))) if enl_pids.contains(&peer) => break true,
+                            Ok(_) => break false,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break false,
+                            Err(_) => {}
+                        }
+                        if Instant::now() >= deadline || !matches!(child.try_wait(), Ok(None)) {
+                            break false;
+                        }
+                    };
+                    if !confirmed {
+                        guard.children.push((child, side, sandboxed));
+                        drop(guard);
+                        let _ = server.join();
+                        return fault(
+                            "server did not confirm scheduled ENL peer".into(),
+                            start.elapsed().as_millis() as u64,
+                        );
+                    }
                     enl_child_pid = Some(pid);
                 } else {
                     res_pids.insert(pid);
@@ -567,7 +634,34 @@ fn play(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let sandbox_reports = guard.capture_sandbox_reports();
+    let mut sandbox_reports = Vec::new();
+    let mut log_error = None;
+    for (side, sandboxed, stdout, stderr) in captures {
+        let output = stdout.finish();
+        let errors = stderr.finish();
+        match (output, errors) {
+            (Ok(bytes), Ok(_)) if sandboxed => match String::from_utf8(bytes) {
+                Ok(json) => sandbox_reports.push((side, json)),
+                Err(error) => log_error = Some(error.to_string()),
+            },
+            (Err(error), _) | (_, Err(error)) => log_error = Some(error.to_string()),
+            _ => {}
+        }
+    }
+    for (child, side, _) in &mut guard.children {
+        let status = child.wait().map(|s| s.to_string());
+        match status {
+            Ok(status) => {
+                if let Err(error) = super::durable::atomic_write(
+                    &match_dir.join(format!("exit_{side}.txt")),
+                    status.as_bytes(),
+                ) {
+                    log_error = Some(error.to_string());
+                }
+            }
+            Err(error) => log_error = Some(error.to_string()),
+        }
+    }
     guard.wait_all();
     drop(guard);
     let _ = std::fs::remove_file(&socket);
@@ -588,6 +682,12 @@ fn play(
             );
         }
     };
+    if let Some(error) = log_error {
+        return fault(
+            format!("client logs: {error}"),
+            start.elapsed().as_millis() as u64,
+        );
+    }
     let mut outcome = from_server(&report.outcome, item.a, item.b, item.a_is_enl);
     let replay_rel = report
         .replay_path
@@ -642,6 +742,43 @@ fn play(
     //    that cannot be proven is demoted to Unscored — it must never
     //    move ratings, W/D/L, or forfeit-win counters.
     let connect_order_verified = verify_accept_order(report.accept_peer_pids, &enl_pids, &res_pids);
+    if let Some(path) = &report.replay_path {
+        let attach = || -> Result<(), String> {
+            let mut log =
+                arena_replay::replay::decode_log(&std::fs::read(path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let identity = log
+                .header
+                .identity
+                .as_mut()
+                .ok_or("missing server identity")?;
+            for (slot, entrant_id) in [item.enl_entrant(), item.res_entrant()]
+                .into_iter()
+                .enumerate()
+            {
+                let entrant = cfg.entrant(entrant_id);
+                let participant = &mut identity.participants[slot];
+                // Only attach registered identity after attribution is proven;
+                // unproven matches retain server-collected client claims.
+                if connect_order_verified {
+                    participant.registered_id = entrant_id.to_string();
+                    participant.display_name = entrant.name.clone();
+                    participant.registered_version =
+                        entrant.provenance.bot_version.clone().unwrap_or_default();
+                    participant.binary_hash =
+                        entrant.provenance.binary_blake3.clone().unwrap_or_default();
+                    participant.binding_verified = true;
+                }
+            }
+            super::durable::atomic_write(path, &log.encode()).map_err(|e| e.to_string())
+        };
+        if let Err(error) = attach() {
+            return fault(
+                format!("replay identity: {error}"),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+    }
     let outcome = enforce_connect_proof(outcome, connect_order_verified);
     ExternalResult {
         outcome,

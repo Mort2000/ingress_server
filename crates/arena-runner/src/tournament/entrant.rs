@@ -125,6 +125,20 @@ pub fn validate_entrants(entrants: &[Entrant]) -> Result<(), String> {
         }
     }
     for entrant in entrants {
+        if entrant.name.is_empty()
+            || entrant.name.len() > 4096
+            || entrant.name.contains(['\t', '\r', '\n'])
+        {
+            return Err("entrant name must be 1..4096 bytes without TSV separators".into());
+        }
+        if entrant
+            .provenance
+            .bot_version
+            .as_ref()
+            .is_some_and(|v| v.len() > 4096)
+        {
+            return Err("registered Bot version exceeds 4096 bytes".into());
+        }
         let EntrantKind::External { binary, .. } = &entrant.kind;
         if !binary.is_file() {
             return Err(format!(
