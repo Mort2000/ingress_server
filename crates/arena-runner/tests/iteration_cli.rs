@@ -108,6 +108,16 @@ fn declarative_plan_covers_every_map_and_is_independent_of_display_order() {
     );
     let p = arena_runner::tournament::durable::load(&out).unwrap();
     assert_eq!(p.items.len(), 12);
+    assert_eq!(
+        p.config.entrants[0]
+            .provenance
+            .toolchain_hash
+            .as_ref()
+            .unwrap()
+            .len(),
+        64,
+        "toolchain text must project to a hash, not a version description"
+    );
     for pair in p.items.chunks_exact(2) {
         assert_eq!(pair[0].map_hash, pair[1].map_hash);
         assert_ne!(pair[0].a_is_enl, pair[1].a_is_enl);

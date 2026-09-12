@@ -88,14 +88,7 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
         }
         let EntrantKind::External { binary, .. } = &mut entrant.kind;
         *binary = build.join("binary");
-        entrant.provenance = EntrantProvenance {
-            binary_blake3: Some(text(&manifest, "binary_hash")?.into()),
-            bot_version: Some(text(request, "version")?.into()),
-            tree_hash: Some(text(request, "source_tree")?.into()),
-            lock_hash: Some(text(request, "lock_hash")?.into()),
-            toolchain_hash: Some(text(request, "toolchain")?.into()),
-            manifest_id: Some(fs::read_to_string(build.join("identity"))?),
-        };
+        entrant.provenance = builds::provenance(&manifest)?;
         let new_id = plan.config.entrants.len() as u32;
         let new_name = entrant.name.clone();
         plan.config.entrants.push(entrant);

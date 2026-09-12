@@ -154,14 +154,7 @@ pub fn resolve(spec: &Path) -> io::Result<Plan> {
                 binary: build.join("binary"),
                 env: variables,
             },
-            provenance: EntrantProvenance {
-                binary_blake3: Some(text(&manifest, "binary_hash")?.into()),
-                tree_hash: Some(text(request, "source_tree")?.into()),
-                lock_hash: Some(text(request, "lock_hash")?.into()),
-                toolchain_hash: Some(text(request, "toolchain")?.into()),
-                manifest_id: Some(fs::read_to_string(build.join("identity"))?),
-                bot_version: Some(text(request, "version")?.into()),
-            },
+            provenance: builds::provenance(&manifest)?,
         });
         metadata.push(object(vec![
             ("id", string(id)),

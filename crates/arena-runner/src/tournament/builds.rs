@@ -94,6 +94,37 @@ pub fn inspect(dir: &Path) -> io::Result<Json> {
     }
     Ok(manifest)
 }
+
+/// Project the registered evidence into the legacy provenance interface. The
+/// toolchain field contains recorded rustc text, so hash it under D71's domain;
+/// never put a version description into a field named toolchain_hash.
+pub(crate) fn provenance(manifest: &Json) -> io::Result<super::EntrantProvenance> {
+    let request = manifest
+        .get("request")
+        .ok_or_else(|| invalid("missing build request"))?;
+    let recorded = |key: &str| -> io::Result<Option<String>> {
+        let s = text(request, key)?;
+        Ok((s != "unknown").then(|| s.to_owned()))
+    };
+    let toolchain_hash = recorded("toolchain")?.map(|s| {
+        let mut h =
+            blake3::Hasher::new_keyed(&blake3::derive_key("ingress-arena-toolchain-v0.1", &[]));
+        h.update(s.as_bytes());
+        h.finalize().to_hex().to_string()
+    });
+    Ok(super::EntrantProvenance {
+        binary_blake3: Some(text(manifest, "binary_hash")?.into()),
+        tree_hash: recorded("source_tree")?,
+        lock_hash: recorded("lock_hash")?,
+        toolchain_hash,
+        manifest_id: Some(
+            blake3::hash(encode(manifest).as_bytes())
+                .to_hex()
+                .to_string(),
+        ),
+        bot_version: Some(text(request, "version")?.into()),
+    })
+}
 /// Copy bytes, never hard-link a build into a batch. Archive relocation resolves
 /// these paths again at load time; the original development directory is unused.
 pub(crate) fn copy_into(source: &Path, dest: &Path) -> io::Result<()> {

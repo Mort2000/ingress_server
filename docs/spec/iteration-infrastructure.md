@@ -1,7 +1,7 @@
 # Alpha 基础设施改进与交付计划
 
 - 日期：2026-09-12。
-- 状态：第一批已交付并验收，使用方式与兼容设计见 [第一批说明](iteration-batch-1.md)，证据见 [验收记录](../reports/iteration-batch-1.md)；第二、三批待实施。本文不是全部已完成能力清单。
+- 状态：第一、二批已交付并验收；使用方式见 [第一批说明](iteration-batch-1.md)、[第二批说明](iteration-batch-2.md)，证据见 [第一批验收](../reports/iteration-batch-1.md)、[第二批验收](../reports/iteration-batch-2.md)。第三批待实施。本文保留原始缺口与完整需求，不是全部已完成能力清单。
 - 适用范围：server 的选手开发支持、地图资产、双阵营比赛调度、运行归档、比较分析与 Tactical Replay。
 - 当前阶段与历史证据见 [开发进度](../progress.md)；规则语义仍以 [游戏规则](rules/README.md) 为准。
 
