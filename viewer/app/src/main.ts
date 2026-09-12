@@ -2,6 +2,7 @@ import "./style.css";
 import { ReplayModel, type Replay, type View } from "./model";
 import { TacticalMap } from "./map";
 import { dossier, roster, timeline, updateScores } from "./panels";
+import { TournamentPanel } from "./tournaments";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 $("app").innerHTML = `
@@ -12,6 +13,7 @@ $("app").innerHTML = `
 let model: ReplayModel | undefined,
   map: TacticalMap | undefined,
   worker: Worker | undefined;
+let tournaments: TournamentPanel | undefined;
 for (const faction of ["enl", "res"]) {
   const area = document.querySelector(`.fscore.${faction}`)!;
   area.querySelector(".fname")!.textContent = faction.toUpperCase();
@@ -148,6 +150,7 @@ function highlight() {
   }
 }
 async function load(file: File) {
+  tournaments?.close();
   const request = ++generation;
   worker?.terminate();
   worker = undefined;
@@ -311,6 +314,7 @@ $("zoom-box").onclick = () => {
 };
 document.addEventListener("keydown", (e) => {
   if (
+    tournaments?.visible ||
     (e.target as HTMLElement).closest(
       'input,select,textarea,button,[contenteditable="true"]',
     ) ||
@@ -361,3 +365,8 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "+" || e.key === "=") map?.zoom(1.5);
   else if (e.key === "-") map?.zoom(1 / 1.5);
 });
+
+tournaments = new TournamentPanel(
+  (file) => void load(file),
+  () => setPlaying(false),
+);

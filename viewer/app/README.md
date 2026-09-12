@@ -1,6 +1,6 @@
 # Tactical Replay
 
-正式回放前端采用 Vite + TypeScript + SVG，遵循 HUD 设计稿的顶部比分、左侧阵营名册、中央地图、右侧 Agent 档案和底部时间轴布局。所有页面资源随构建本地提供，无字体 CDN 或服务端 API。
+正式回放前端采用 Vite + TypeScript + SVG，遵循 HUD 设计稿的顶部比分、左侧阵营名册、中央地图、右侧 Agent 档案和底部时间轴布局。所有页面资源随构建本地提供，无字体 CDN。手动文件模式不需要数据后台；可选的独立赛事后台提供同源只读查询，不依赖 runner 进程或 runner HTTP 接口。
 
 ## 启动
 
@@ -18,6 +18,19 @@ npm run dev
 打开 Vite 输出的地址，选择或拖入 `.iarp`。文件全部在浏览器本地处理。生产构建使用 `npm run build`，预览使用 `npm run preview`；将 `dist/` 部署至任意静态 HTTP 服务即可，也支持部署在子目录。构建步骤会重新编译 WASM，不依赖本地实验归档或未跟踪设计稿。
 
 修改 Rust 回放代码后重新运行 `npm run wasm`。生成的 WASM、npm 依赖和构建输出不提交。`viewer/wasm` 使用独立 Rust workspace / `Cargo.lock`，浏览器依赖不会进入根 workspace 的参赛程序冻结依赖闭包；npm 依赖由 `package-lock.json` 固定。
+
+## 独立赛事监控
+
+前端构建完成后，从 server 根目录运行：
+
+```sh
+cargo build --manifest-path viewer/host/Cargo.toml
+viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets viewer/app/dist
+```
+
+打开终端打印的完整授权链接，即可浏览赛事进度、最新结果、暂定排名和历史尝试，按名称／版本、地图、状态和结果筛选；点击比赛打开正式 replay，返回时保留筛选。后台默认仅监听 `127.0.0.1:8080`，支持 `--listen 127.0.0.1:0`。`--runs` 可指向单个赛事或包含赛事的集合目录，也可重复指定多个目录。
+
+监控只读归档，不调用 rebuild、不执行／恢复／补赛；可先于 runner 启动，亦可在 runner 退出后继续浏览。录制为 running 的状态不证明进程仍然存活。无回放的赛前失败、损坏和未发布记录分别显示。完整接口、安全约束与部署说明见 [Viewer 赛事监控](../../docs/spec/viewer-tournaments.md)。纯静态文件模式继续可用。
 
 ## 操作
 
@@ -73,6 +86,9 @@ UI -> UI: 构建索引、选择回合、绘制 HUD
 
 ```sh
 cargo test -p arena-viewer hud_telemetry_and_browser_fixtures
+cargo build --workspace
+cargo build --manifest-path viewer/host/Cargo.toml
+cargo test --manifest-path viewer/host/Cargo.toml
 cd viewer/app
 npm run build
 npx playwright install chromium --no-shell

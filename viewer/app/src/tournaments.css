@@ -1,0 +1,125 @@
+#tournament-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 24px max(20px, calc((100vw - 1280px) / 2));
+}
+#tournament-panel[hidden] {
+  display: none;
+}
+.tournament-heading,
+.tournament-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.tournament-heading {
+  justify-content: space-between;
+}
+#tournament-panel h1 {
+  font-size: 28px;
+}
+#tournament-panel h2 {
+  margin-top: 28px;
+  margin-bottom: 12px;
+}
+#tournament-status {
+  color: var(--acc);
+  margin-bottom: 18px;
+  overflow-wrap: anywhere;
+}
+#event-progress {
+  margin: 16px 0;
+  line-height: 1.8;
+}
+#event-warning {
+  color: var(--amber);
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}
+.tournament-tools label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+}
+.tournament-tools input,
+.tournament-tools select {
+  color: var(--txt);
+  background: #101b2a;
+  border: 1px solid var(--line2);
+  border-radius: 4px;
+  padding: 8px;
+  max-width: 100%;
+}
+#event-map {
+  width: 90px;
+}
+#event-select {
+  width: min(650px, 85vw);
+}
+#match-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+.match-row {
+  border: 1px solid var(--line2);
+  background: var(--panel);
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.match-row h3 {
+  color: var(--acc);
+  margin-bottom: 10px;
+}
+.match-row p {
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+.match-row summary {
+  cursor: pointer;
+  margin-top: 14px;
+}
+.attempt-row {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.tournament-note {
+  color: #8c9fb3;
+  line-height: 1.7;
+  margin: 12px 0;
+}
+.standings-scroll {
+  overflow-x: auto;
+}
+#event-standings table {
+  border-collapse: collapse;
+  width: 100%;
+}
+#event-standings th,
+#event-standings td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+#tournament-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+@media (max-width: 650px) {
+  #tournament-panel {
+    padding: 16px;
+  }
+  #tournament-panel h1 {
+    font-size: 23px;
+  }
+  #event-filters label {
+    flex: 1 1 130px;
+  }
+}

@@ -12,6 +12,7 @@
 | 第一批使用说明 | 可信执行、恢复补赛、日志、选手身份及 IARP v2 兼容 | [iteration-batch-1.md](./iteration-batch-1.md) |
 | 第二批使用说明 | 地图集、声明式赛事、冻结版本及同输入比较 | [iteration-batch-2.md](./iteration-batch-2.md) |
 | 第三批使用说明 | SDK 回执、离线场景、动态调度与本机资源协调 | [iteration-batch-3.md](./iteration-batch-3.md) |
+| Viewer 赛事监控 | 独立只读后台、赛事进度／结果／排名与回放入口 | [viewer-tournaments.md](./viewer-tournaments.md) |
 | 领域语言 | 统一规则与实现使用的核心名词 | [CONTEXT.md](../../CONTEXT.md) |
 | 决策记录 | 记录难以反转且存在真实取舍的决定 | [ADR 索引](../adr/README.md) |
 

@@ -69,6 +69,7 @@ impl Drop for ServerGuard {
 }
 
 /// One executed external item.
+#[derive(Clone)]
 pub struct ExternalResult {
     pub outcome: TournamentOutcome,
     /// Path of the archived replay relative to the match dir

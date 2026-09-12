@@ -20,3 +20,4 @@ __pycache__/
 /viewer/app/playwright-report/
 /viewer/app/tests/fixtures/
 /viewer/wasm/target/
+/viewer/host/target/

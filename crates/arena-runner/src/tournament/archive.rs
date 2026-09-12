@@ -27,6 +27,11 @@ pub enum Json {
 }
 
 impl Json {
+    /// Compact JSON for archive and read-only consumers.
+    pub fn to_json(&self) -> String {
+        super::document::encode(self)
+    }
+
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Object(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),

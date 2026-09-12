@@ -403,7 +403,7 @@ fn pending() -> TournamentOutcome {
         reason: "pending".into(),
     }
 }
-fn infrastructure(result: &ExternalResult) -> bool {
+pub(crate) fn infrastructure(result: &ExternalResult) -> bool {
     matches!(
         result.outcome.stage(),
         Some(Stage::RunnerFault | Stage::SetupError)
@@ -423,7 +423,11 @@ pub(crate) fn attempt_dirs(root: &Path, index: u64) -> io::Result<Vec<PathBuf>> 
     Ok(dirs)
 }
 
-fn read_result(dir: &Path, plan: &Plan, item: &TournamentItem) -> io::Result<ExternalResult> {
+pub(crate) fn read_result(
+    dir: &Path,
+    plan: &Plan,
+    item: &TournamentItem,
+) -> io::Result<ExternalResult> {
     let meta = archive::parse_json(&fs::read_to_string(dir.join("meta.json"))?).map_err(invalid)?;
     let mut rows =
         archive::parse_index_tsv(&fs::read_to_string(dir.join("result.tsv"))?).map_err(invalid)?;

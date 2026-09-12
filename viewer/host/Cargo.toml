@@ -1,0 +1,18 @@
+[package]
+name = "tournament-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "arena-viewer"
+path = "src/main.rs"
+
+[dependencies]
+arena-runner = { path = "../../crates/arena-runner" }
+httparse = "=1.10.1"
+blake3 = "1.8.7"
+
+# Viewer-only HTTP dependencies must not expand the frozen participant lockfile.
+[workspace]
+resolver = "3"
