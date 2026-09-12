@@ -32,9 +32,31 @@ const USAGE: &str = "Usage: arena-runner tournament --out <new-directory> --clie
   map-inspect --input MAP.json | map-set --spec SET.json --out NEW_FILE\n\
   select --from DIR --items 0,1 --out NEW_DIR\n\
   compare-plan --from DIR --candidate ENTRY_ID --build BUILD_DIR --out NEW_DIR\n\
-  compare --out DIR (rebuilds comparison.json and comparison.md).";
+  compare --out DIR (rebuilds comparison.json and comparison.md).\n\
+  scenario --input REPLAY.iarp --faction enl|res --out NEW_DIR [--budgets FILE]\n\
+  diagnose --input DECISIONS.json --against EXPECTED.json\n\
+  resource-pool --out NEW_DIR --slots N | preflight --out PLAN_DIR\n\
+  timing-report --out PLAN_DIR";
 
 fn execute(args: &[String]) -> Result<(), String> {
+    if let Some(output) =
+        arena_runner::tournament::timing::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
+    if let Some(output) =
+        arena_runner::tournament::resources::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
+    if let Some(output) =
+        arena_runner::tournament::diagnostic::execute_cli(args).map_err(|e| e.to_string())?
+    {
+        print!("{output}");
+        return Ok(());
+    }
     if let Some(output) =
         arena_runner::tournament::selection::execute_cli(args).map_err(|e| e.to_string())?
     {

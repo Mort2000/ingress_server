@@ -19,4 +19,13 @@ pub trait ClientBot: Send {
     /// One round of participation. Submit inside the context (first
     /// submission of the last agent, `commit`, or the deadline closes it).
     fn on_round(&mut self, ctx: RoundContext<'_>);
+
+    /// Called in connection order after `on_round` returns, including the
+    /// final round. Never grants an observation or permission to resubmit.
+    /// Accepted means structurally accepted, not that commands executed.
+    fn on_submission_feedback(&mut self, _feedback: &crate::SubmissionFeedback) {}
+
+    /// Local wall-clock diagnostic, delivered after the planning callback.
+    /// Keep this callback short: it runs on the participant connection loop.
+    fn on_round_timing(&mut self, _timing: &crate::RoundTiming) {}
 }

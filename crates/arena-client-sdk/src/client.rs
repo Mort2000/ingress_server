@@ -157,8 +157,14 @@ pub fn run<B: ClientBot>(
             Envelope::RoundStartSignal => {
                 session.phase.on_round_start();
                 let round = session.public.read()?.current_round;
+                let started = std::time::Instant::now();
                 let ctx = session.round_context(&mut conn, round)?;
                 bot.on_round(ctx);
+                bot.on_round_timing(&crate::RoundTiming {
+                    round,
+                    callback_elapsed_us: started.elapsed().as_micros().min(u64::MAX as u128) as u64,
+                    submissions: session.take_timings(),
+                });
                 // The context is dropped here at the latest; late submits
                 // are refused by the server anyway.
             }
@@ -166,11 +172,19 @@ pub fn run<B: ClientBot>(
                 session.phase.on_round_closed();
             }
             Envelope::SubmissionResult {
+                round,
                 agent_id,
                 status,
                 detail,
-                ..
-            } => session.record_result(agent_id, status, detail),
+            } => {
+                session.record_result(agent_id, status, detail.clone());
+                bot.on_submission_feedback(&crate::SubmissionFeedback {
+                    round,
+                    agent: agent_id,
+                    status: status.into(),
+                    detail,
+                });
+            }
             Envelope::GameEnd {
                 outcome,
                 detail,

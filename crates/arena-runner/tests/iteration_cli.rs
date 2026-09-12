@@ -77,6 +77,168 @@ fn event(t: &Path, entries: &str, schedule: &str) -> PathBuf {
     fs::write(&p,format!(r#"{{"schema":"arena-event-v1","name":"example","seed":"42","mode":"functional","map_set":"set.json","entrants":[{entries}],"schedule":{schedule},"resources":{{"workers":1,"per_match_budget_ms":10000,"sandbox":null,"address_space_bytes":536870912}},"attempt_limit":3}}"#)).unwrap();
     p
 }
+
+#[test]
+fn resource_preflight_records_admission_caps_and_hard_limit_degradation() {
+    let t = Temp::new();
+    map_set(&t.0);
+    for id in ["a", "b"] {
+        register(
+            &t.0,
+            id,
+            "v1",
+            Path::new(env!("CARGO_BIN_EXE_arena-runner")),
+        );
+    }
+    let spec = event(
+        &t.0,
+        r#"{"id":"a","name":"A","build":"a-v1","args":[],"env":{}},{"id":"b","name":"B","build":"b-v1","args":[],"env":{}}"#,
+        r#"{"kind":"round-robin","repeats":1}"#,
+    );
+    let source = fs::read_to_string(&spec).unwrap().replace(
+        "\"workers\":1",
+        "\"workers\":4,\"cpu_slots\":2,\"memory_budget_bytes\":\"1207959552\"",
+    );
+    fs::write(&spec, source).unwrap();
+    let out = t.0.join("plan");
+    good(&["plan", "--spec", path(&spec), "--out", path(&out)]);
+    let output = good(&["preflight", "--out", path(&out)]);
+    let j = parse_json(&output).unwrap();
+    assert_eq!(j.get("effective_workers"), Some(&Json::Int(1)));
+    assert_eq!(
+        j.get("batch_memory_hard_enforced"),
+        Some(&Json::Bool(false))
+    );
+    assert_eq!(j.get("cpu_hard_enforced"), Some(&Json::Bool(false)));
+    assert_eq!(j.get("scheduler").unwrap().as_str(), Some("dynamic"));
+}
+
+#[test]
+fn dynamic_execution_claims_short_tasks_while_long_match_is_running() {
+    let t = Temp::new();
+    map_set(&t.0);
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/probe-client")
+        .canonicalize()
+        .expect("cargo build --workspace first");
+    for id in ["a", "b", "c"] {
+        register(&t.0, id, "v1", &probe);
+    }
+    let spec = event(
+        &t.0,
+        r#"{"id":"a","name":"Slow","build":"a-v1","args":[],"env":{"PROBE_MODE":"no-spawn"}},{"id":"b","name":"Fast B","build":"b-v1","args":[],"env":{}},{"id":"c","name":"Fast C","build":"c-v1","args":[],"env":{}}"#,
+        r#"{"kind":"round-robin","repeats":1}"#,
+    );
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("\"workers\":1", "\"workers\":2"),
+    )
+    .unwrap();
+    let source = t.0.join("source");
+    good(&["plan", "--spec", path(&spec), "--out", path(&source)]);
+    // Two maps per pair: a-b occupies 0..3, a-c 4..7, b-c 8..11.
+    let out = t.0.join("mixed");
+    good(&[
+        "select",
+        "--from",
+        path(&source),
+        "--items",
+        "0,8,9",
+        "--out",
+        path(&out),
+    ]);
+    good(&["resume", "--out", path(&out)]);
+    let load = |i| {
+        parse_json(
+            &fs::read_to_string(out.join(format!("matches/m{i}/attempts/0001/resources.json")))
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let slow = load(0);
+    let last_short = load(2);
+    assert!(
+        last_short.get("started_unix_ms").unwrap().as_int().unwrap()
+            < slow.get("finished_unix_ms").unwrap().as_int().unwrap(),
+        "idle worker must claim the third item before slow first item ends"
+    );
+    assert!(good(&["status", "--out", path(&out)]).contains("completed"));
+}
+
+#[test]
+fn cooperating_runner_processes_share_one_host_slot() {
+    let t = Temp::new();
+    map_set(&t.0);
+    let pool = t.0.join("pool");
+    good(&["resource-pool", "--out", path(&pool), "--slots", "1"]);
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/probe-client")
+        .canonicalize()
+        .unwrap();
+    for id in ["a", "b"] {
+        register(&t.0, id, "v1", &probe);
+    }
+    let spec = event(
+        &t.0,
+        r#"{"id":"a","name":"Slow","build":"a-v1","args":[],"env":{"PROBE_MODE":"no-spawn"}},{"id":"b","name":"B","build":"b-v1","args":[],"env":{}}"#,
+        r#"{"kind":"round-robin","repeats":1}"#,
+    );
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec).unwrap().replace(
+            "\"workers\":1",
+            &format!("\"workers\":2,\"host_pool\":{}", quoted(path(&pool))),
+        ),
+    )
+    .unwrap();
+    let source = t.0.join("source");
+    good(&["plan", "--spec", path(&spec), "--out", path(&source)]);
+    let a = t.0.join("one");
+    let b = t.0.join("two");
+    for out in [&a, &b] {
+        good(&[
+            "select",
+            "--from",
+            path(&source),
+            "--items",
+            "0",
+            "--out",
+            path(out),
+        ]);
+    }
+    let launch = |p: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_arena-runner"))
+            .args(["resume", "--out", path(p)])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut ca = launch(&a);
+    let mut cb = launch(&b);
+    assert!(ca.wait().unwrap().success());
+    assert!(cb.wait().unwrap().success());
+    let interval = |p: &Path| {
+        let j = parse_json(
+            &fs::read_to_string(p.join("matches/m0/attempts/0001/resources.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(j.get("host_slot"), Some(&Json::Int(0)));
+        (
+            j.get("started_unix_ms").unwrap().as_int().unwrap(),
+            j.get("finished_unix_ms").unwrap().as_int().unwrap(),
+        )
+    };
+    let ia = interval(&a);
+    let ib = interval(&b);
+    assert!(
+        ia.1 <= ib.0 || ib.1 <= ia.0,
+        "single-slot match execution intervals cannot overlap"
+    );
+    // Lock is released, including between successive invocations.
+    good(&["rebuild", "--out", path(&a)]);
+}
 #[test]
 fn declarative_plan_covers_every_map_and_is_independent_of_display_order() {
     let t = Temp::new();

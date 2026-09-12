@@ -11,6 +11,7 @@
 | Alpha 基础设施改进 | 选手自主迭代、地图资产、赛事调度、回放身份及三批交付计划 | [iteration-infrastructure.md](./iteration-infrastructure.md) |
 | 第一批使用说明 | 可信执行、恢复补赛、日志、选手身份及 IARP v2 兼容 | [iteration-batch-1.md](./iteration-batch-1.md) |
 | 第二批使用说明 | 地图集、声明式赛事、冻结版本及同输入比较 | [iteration-batch-2.md](./iteration-batch-2.md) |
+| 第三批使用说明 | SDK 回执、离线场景、动态调度与本机资源协调 | [iteration-batch-3.md](./iteration-batch-3.md) |
 | 领域语言 | 统一规则与实现使用的核心名词 | [CONTEXT.md](../../CONTEXT.md) |
 | 决策记录 | 记录难以反转且存在真实取舍的决定 | [ADR 索引](../adr/README.md) |
 

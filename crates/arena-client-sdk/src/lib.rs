@@ -22,12 +22,17 @@ pub mod shm;
 pub mod bot;
 pub mod client;
 pub mod conn;
+pub mod feedback;
+#[cfg(feature = "offline")]
+pub mod offline;
 pub mod phase;
 pub mod round;
+pub mod strategy;
 pub mod view;
 
 pub use bot::ClientBot;
 pub use client::{ConnectOptions, RunSummary, run};
+pub use feedback::{RoundTiming, SubmissionFeedback, SubmissionStatus, SubmissionTiming};
 pub use phase::{Phase, PhaseGate};
 pub use round::{RoundContext, SpawnContext, SubmissionAck};
 pub use view::ObservationView;

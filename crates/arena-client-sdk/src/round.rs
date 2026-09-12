@@ -32,6 +32,7 @@ pub struct Session {
     /// Latest private SubmissionResult per agent (the server's first /
     /// duplicate / structural verdicts).
     results: Mutex<BTreeMap<AgentId, (u8, String)>>,
+    timings: Mutex<Vec<crate::SubmissionTiming>>,
     /// The faction assigned by SERVER_HELLO.
     pub faction: Faction,
     /// The rule constants from INITIAL_SPAWN_START (MatchInfo).
@@ -60,6 +61,7 @@ impl Session {
             private,
             phase: PhaseGate::new(),
             results: Mutex::new(BTreeMap::new()),
+            timings: Mutex::new(Vec::new()),
             faction,
             config,
             match_id: match_id.to_string(),
@@ -81,11 +83,14 @@ impl Session {
     ) -> Result<RoundContext<'round>, SdkError> {
         self.phase.assert_read_licensed()?;
         let agents = self.own_agent_ids()?;
+        self.timings.lock().expect("uncontended").clear();
+        let started = Instant::now();
         Ok(RoundContext {
             session: self,
             conn,
             round,
-            deadline: Instant::now() + Duration::from_millis(self.config.decision_window_ms as u64),
+            started,
+            deadline: started + Duration::from_millis(self.config.decision_window_ms as u64),
             remaining_agents: agents,
             closed: None,
         })
@@ -117,6 +122,10 @@ impl Session {
             .get(&agent)
             .cloned()
     }
+
+    pub(crate) fn take_timings(&self) -> Vec<crate::SubmissionTiming> {
+        std::mem::take(&mut *self.timings.lock().expect("uncontended"))
+    }
 }
 
 /// Acknowledgement of a locally accepted submission. The server's verdict
@@ -137,6 +146,7 @@ pub struct RoundContext<'round> {
     pub(crate) session: &'round Session,
     pub(crate) conn: &'round mut Connection,
     round: u32,
+    started: Instant,
     deadline: Instant,
     /// Agents that have not yet submitted this round.
     remaining_agents: Vec<AgentId>,
@@ -208,6 +218,14 @@ impl<'round> RoundContext<'round> {
             agent_id: agent,
             commands,
         })?;
+        self.session
+            .timings
+            .lock()
+            .expect("uncontended")
+            .push(crate::SubmissionTiming {
+                agent,
+                sent_after_us: self.started.elapsed().as_micros().min(u64::MAX as u128) as u64,
+            });
         self.remaining_agents.retain(|&open| open != agent);
         if self.remaining_agents.is_empty() {
             self.closed = Some(ContextClose::Completed);

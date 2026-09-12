@@ -706,6 +706,13 @@ pub fn execute(root: &Path, action: Action) -> io::Result<TournamentRun> {
         }
     }
     if !matches!(action, Action::Rebuild) {
+        let resources = super::resources::Resources::inspect(&plan)?;
+        let measurements = root.join("executions");
+        fs::create_dir_all(&measurements)?;
+        atomic_write(
+            &measurements.join(format!("{}.json", super::exec_external::execution_id()?)),
+            super::document::encode(&resources.report).as_bytes(),
+        )?;
         // Validate the referenced build before launching anything (frozen build
         // registry comes in batch two; changed binaries are refused here).
         for entrant in &plan.config.entrants {
@@ -714,18 +721,20 @@ pub fn execute(root: &Path, action: Action) -> io::Result<TournamentRun> {
                 return Err(invalid("registered binary changed"));
             }
         }
+        let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| -> io::Result<()> {
+            let next = &next;
             let mut handles = Vec::new();
-            for worker in 0..plan.config.concurrency.min(plan.items.len()) {
+            for _ in 0..resources.workers.min(plan.items.len()) {
                 let plan = &plan;
+                let resources = &resources;
                 handles.push(scope.spawn(move || -> io::Result<()> {
-                    for item in plan
-                        .items
-                        .iter()
-                        .skip(worker)
-                        .step_by(plan.config.concurrency)
-                    {
-                        run_pending(root, plan, item, action)?;
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(item) = plan.items.get(index) else {
+                            break;
+                        };
+                        run_pending(root, plan, item, action, resources)?;
                     }
                     Ok(())
                 }));
@@ -739,7 +748,13 @@ pub fn execute(root: &Path, action: Action) -> io::Result<TournamentRun> {
     rebuild(root, &plan)
 }
 
-fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) -> io::Result<()> {
+fn run_pending(
+    root: &Path,
+    plan: &Plan,
+    item: &TournamentItem,
+    action: Action,
+    resources: &super::resources::Resources,
+) -> io::Result<()> {
     let dirs = attempt_dirs(root, item.index)?;
     let mut reason = "initial execution";
     if let Some(last) = dirs.last() {
@@ -766,6 +781,10 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
             item.index
         )));
     }
+    let waiting = std::time::Instant::now();
+    let permit = resources.acquire()?;
+    let started = super::resources::unix_ms();
+    let waited_ms = waiting.elapsed().as_millis();
     let parent = root.join(format!("matches/m{}/attempts", item.index));
     fs::create_dir_all(&parent)?;
     let dir = parent.join(format!("{:04}", dirs.len() + 1));
@@ -782,6 +801,31 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
         &launches,
     );
     let save = || -> io::Result<()> {
+        let mut measurement = resources.report.clone();
+        for (key, value) in [
+            ("started_unix_ms", Json::Int(started as i64)),
+            (
+                "finished_unix_ms",
+                Json::Int(super::resources::unix_ms() as i64),
+            ),
+            (
+                "admission_wait_ms",
+                Json::Int(waited_ms.min(i64::MAX as u128) as i64),
+            ),
+            (
+                "host_slot",
+                permit
+                    .slot
+                    .map(|n| Json::Int(n as i64))
+                    .unwrap_or(Json::Null),
+            ),
+        ] {
+            super::document::set(&mut measurement, key, value)?;
+        }
+        atomic_write(
+            &dir.join("resources.json"),
+            super::document::encode(&measurement).as_bytes(),
+        )?;
         for (side, report) in &result.sandbox_reports {
             atomic_write(&dir.join(format!("sandbox_{side}.json")), report.as_bytes())?;
         }

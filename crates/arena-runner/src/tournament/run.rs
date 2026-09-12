@@ -1,6 +1,6 @@
 //! Tournament execution drivers: expand the frozen schedule once, then
-//! run every item on `concurrency` scoped worker threads (stride
-//! partition over the item indices — the M6 pattern; execution order
+//! run every item on `concurrency` scoped worker threads (dynamic
+//! task claiming; execution order
 //! cannot influence records because every result lands in its indexed
 //! slot). Writes per-match artifacts under
 //! `<root>/matches/m<index>/` and hand the rest of the archive to
@@ -57,16 +57,21 @@ pub fn run_external_tournament(
     let mut replay_slots = slots(items.len());
     let mut budget_slots = slots(items.len());
     let mut connect_slots = slots(items.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(workers);
-        for worker in 0..workers {
+        for _ in 0..workers {
             // The closures move REFERENCES (the M6 run_batch pattern).
             let items = &items;
             let matches_dir = &matches_dir;
+            let next = &next;
             handles.push(scope.spawn(move || {
                 let mut ours = Vec::new();
-                let mut index = worker;
-                while index < items.len() {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= items.len() {
+                        break;
+                    }
                     let item = &items[index];
                     let match_dir = matches_dir.join(format!("m{}", item.index));
                     let result = run_item_external(item, cfg, &match_dir);
@@ -79,7 +84,6 @@ pub fn run_external_tournament(
                         result.connect_order_verified,
                         result.sandbox_reports,
                     ));
-                    index += workers;
                 }
                 ours
             }));

@@ -395,6 +395,104 @@ struct PassBot {
     rounds: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
+struct FeedbackBot {
+    receipts: std::sync::Arc<std::sync::Mutex<Vec<arena_client_sdk::SubmissionFeedback>>>,
+    timings: std::sync::Arc<std::sync::Mutex<Vec<arena_client_sdk::RoundTiming>>>,
+}
+
+impl ClientBot for FeedbackBot {
+    fn choose_spawns(&mut self, ctx: &SpawnContext<'_>) -> Vec<(AgentId, Coord)> {
+        ctx.roster()
+            .into_iter()
+            .map(|id| (id, Coord::new(0, 0)))
+            .collect()
+    }
+    fn on_round(&mut self, mut ctx: RoundContext<'_>) {
+        let agents = ctx.observation().unwrap().own_agents().unwrap();
+        // A second submission cannot replace the first, but its receipt
+        // must remain observable separately from the accepted receipt.
+        ctx.submit(agents[0].id, vec![]).unwrap();
+        ctx.submit(agents[0].id, vec![]).unwrap();
+        for agent in &agents[1..] {
+            ctx.submit(agent.id, vec![]).unwrap();
+        }
+    }
+    fn on_submission_feedback(&mut self, feedback: &arena_client_sdk::SubmissionFeedback) {
+        self.receipts.lock().unwrap().push(feedback.clone());
+    }
+    fn on_round_timing(&mut self, timing: &arena_client_sdk::RoundTiming) {
+        self.timings.lock().unwrap().push(timing.clone());
+    }
+}
+
+#[test]
+fn callbacks_preserve_round_duplicate_receipts_and_local_submission_timing() {
+    let dir = temp("feedback");
+    let socket = dir.join("arena.sock");
+    let setup = arena_server::MatchSetup {
+        game_seed: 71,
+        map_seed: 9,
+        config: arena_server::fast_config(2),
+        socket_path: socket.clone(),
+        match_id: format!("feedback-{}", std::process::id()),
+        out_dir: dir.join("out"),
+    };
+    let server = std::thread::spawn(move || arena_server::serve_match(setup).unwrap());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let receipts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let timings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let receipts = receipts.clone();
+            let timings = timings.clone();
+            let socket = &socket;
+            scope.spawn(move || {
+                run(
+                    |_, _, _| FeedbackBot { receipts, timings },
+                    ConnectOptions::new(socket, "feedback"),
+                )
+                .unwrap()
+            });
+        }
+    });
+    assert!(matches!(
+        server.join().unwrap().outcome,
+        arena_server::MatchOutcome::Normal { .. }
+    ));
+    let receipts = receipts.lock().unwrap();
+    for round in 1..=2 {
+        let rs: Vec<_> = receipts.iter().filter(|r| r.round == round).collect();
+        assert_eq!(
+            rs.iter()
+                .filter(|r| r.status == arena_client_sdk::SubmissionStatus::Accepted)
+                .count(),
+            6
+        );
+        assert_eq!(
+            rs.iter()
+                .filter(|r| r.status == arena_client_sdk::SubmissionStatus::IgnoredDuplicate)
+                .count(),
+            2
+        );
+    }
+    let timings = timings.lock().unwrap();
+    assert_eq!(timings.len(), 4);
+    for timing in timings.iter() {
+        assert_eq!(timing.submissions.len(), 4);
+        assert!(
+            timing
+                .submissions
+                .windows(2)
+                .all(|w| w[0].sent_after_us <= w[1].sent_after_us)
+        );
+        assert!(timing.submissions.last().unwrap().sent_after_us <= timing.callback_elapsed_us);
+    }
+}
+
 impl ClientBot for PassBot {
     fn choose_spawns(&mut self, ctx: &SpawnContext<'_>) -> Vec<(AgentId, Coord)> {
         let roster = ctx.roster();

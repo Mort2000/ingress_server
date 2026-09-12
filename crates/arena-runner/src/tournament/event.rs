@@ -178,6 +178,9 @@ pub fn resolve(spec: &Path) -> io::Result<Plan> {
             "per_match_budget_ms",
             "sandbox",
             "address_space_bytes",
+            "cpu_slots",
+            "memory_budget_bytes",
+            "host_pool",
         ],
     )?;
     let budget = number(resources, "per_match_budget_ms")? as u64;
@@ -399,14 +402,16 @@ pub fn resolve(spec: &Path) -> io::Result<Plan> {
         ),
         ("samples", Json::Array(samples)),
     ]);
-    Ok(Plan {
+    let plan = Plan {
         map_configs: assets.iter().map(|a| a.config).collect(),
         config: cfg,
         items,
         maps: assets.into_iter().map(|a| a.map).collect(),
         attempt_limit,
         extension: Some(extension),
-    })
+    };
+    super::resources::Resources::inspect(&plan)?;
+    Ok(plan)
 }
 
 pub fn preview(plan: &Plan) -> io::Result<String> {

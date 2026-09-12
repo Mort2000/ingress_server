@@ -14,7 +14,9 @@ version = "0.1.0"
 dependencies = [
  "arena-core",
  "arena-protocol",
+ "arena-replay",
  "arena-server",
+ "blake3",
  "planus",
 ]
 
@@ -46,6 +48,7 @@ dependencies = [
 name = "arena-runner"
 version = "0.1.0"
 dependencies = [
+ "arena-client-sdk",
  "arena-core",
  "arena-replay",
  "arena-server",
@@ -156,6 +159,14 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+]
+
+[[package]]
+name = "iteration-client"
+version = "0.1.0"
+dependencies = [
+ "arena-client-sdk",
+ "arena-core",
 ]
 
 [[package]]
