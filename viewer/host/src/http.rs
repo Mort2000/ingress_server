@@ -168,7 +168,14 @@ impl Host {
                                 mime: "application/octet-stream",
                                 bytes,
                             },
-                            Err(e) => Response::text(409, e.to_string()),
+                            Err(e) => Response::text(
+                                if e.kind() == io::ErrorKind::NotFound {
+                                    404
+                                } else {
+                                    409
+                                },
+                                e.to_string(),
+                            ),
                         };
                     }
                 }

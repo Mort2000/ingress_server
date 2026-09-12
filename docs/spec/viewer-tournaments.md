@@ -73,7 +73,7 @@ viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets
 
 详情查询参数：`offset`（默认 0）、`limit`（默认 50，1–200）、`q`（名称／ID／版本子串）、`map`（地图编号）、`state`、`outcome`、`order=latest|schedule`。空筛选代表全部，重复和未知参数拒绝。状态为 pending、recorded_running、publishing、completed、infrastructure_fault、interrupted、corrupt；liveness 始终为 unknown，不获取执行锁来推断存活。
 
-后台使用一个串行扫描线程和 8 个固定 HTTP worker；请求头至多 16 KiB／64 个字段，读取请求头总期限 5 秒，写响应总期限 15 秒，一次连接只处理一个请求。单文件上限 512 MiB，归档树限制深度与条目数；这是局部防御上限，不是进程 RSS／CPU 配额。首次归档验证和磁盘读取不受网络写超时强制中断，后台不提供实时性能 SLA。
+后台使用一个串行扫描线程和 8 个固定 HTTP worker；请求头至多 16 KiB／64 个字段，读取请求头总期限 5 秒，写响应总期限 15 秒，一次连接只处理一个请求。单文件上限 512 MiB，其中 attempt 的 state／reason.txt 文本进一步限制为 64 KiB；归档树限制深度与条目数，临时目录也接受检查。这是局部防御上限，不是进程 RSS／CPU 配额。首次归档验证和磁盘读取不受网络写超时强制中断，后台不提供实时性能 SLA。
 
 HTTP 请求解析使用独立工具依赖 [httparse 1.10.1](https://docs.rs/httparse/1.10.1/httparse/struct.Request.html)，不提供通用 Web 服务器功能。后台采用 [viewer/host](../../viewer/host/src/main.rs) 独立 Cargo workspace／锁文件，沿用 viewer/wasm 的隔离方式；HTTP 依赖不进入根 Cargo.lock、SDK 或 WASM 依赖闭包，不扩大选手审核白名单。官方只读查询位于 [monitor 模块](../../crates/arena-runner/src/tournament/monitor.rs)，复用既有结果验证和计分逻辑；后台只依赖库，不需要启动 arena-runner。
 

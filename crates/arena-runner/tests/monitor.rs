@@ -57,6 +57,79 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn oversized_uncommitted_text_is_rejected() {
+    let f = Fixture::new();
+    let root = f.plan();
+    let dir = root.join("matches/m0/attempts/0001");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("state"), "running").unwrap();
+    fs::write(dir.join("reason.txt"), vec![b'x'; 64 * 1024 + 1]).unwrap();
+    let mut reader = ArchiveMonitor::open(&root).unwrap();
+    let view = reader.snapshot().unwrap();
+    assert_eq!(view.matches[0].state(), "corrupt");
+    assert!(view.matches[0].attempts[0].attempt_reason.is_none());
+}
+
+#[test]
+fn non_ascii_hash_is_corrupt_without_stopping_other_matches() {
+    let f = Fixture::new();
+    let root = f.plan();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_arena-runner"))
+            .args(["resume", "--out"])
+            .arg(&root)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let path = root.join("matches/m0/attempts/0001/result.tsv");
+    let original = fs::read_to_string(&path).unwrap();
+    let mut rows = original.lines();
+    let header = rows.next().unwrap();
+    let hash_column = header
+        .split('\t')
+        .position(|c| c == "final_state_hash")
+        .unwrap();
+    let mut fields: Vec<String> = rows
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(str::to_owned)
+        .collect();
+    fields[hash_column] = format!("中{}", "0".repeat(61));
+    fs::write(path, format!("{header}\n{}\n", fields.join("\t"))).unwrap();
+    let mut reader = ArchiveMonitor::open(&root).unwrap();
+    let view = reader.snapshot().unwrap();
+    assert_eq!(view.matches[0].state(), "corrupt");
+    assert_eq!(view.matches[1].state(), "completed");
+}
+
+#[cfg(unix)]
+#[test]
+fn temporary_directories_cannot_hide_links_from_warm_cache() {
+    let f = Fixture::new();
+    let root = f.plan();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_arena-runner"))
+            .args(["resume", "--out"])
+            .arg(&root)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut reader = ArchiveMonitor::open(&root).unwrap();
+    assert_eq!(reader.snapshot().unwrap().matches[0].state(), "completed");
+    let hidden = root.join("matches/m0/attempts/0001/extra.tmp");
+    fs::create_dir(&hidden).unwrap();
+    fs::write(f.0.join("private"), "OUTSIDE").unwrap();
+    std::os::unix::fs::symlink(f.0.join("private"), hidden.join("linked.tmp")).unwrap();
+    assert_eq!(reader.snapshot().unwrap().matches[0].state(), "corrupt");
+    assert!(reader.replay(0, "0001").is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn linked_attempt_never_exposes_outside_reason_or_replay() {

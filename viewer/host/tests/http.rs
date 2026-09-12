@@ -145,6 +145,27 @@ fn serves_same_origin_page_and_discovers_a_plan_created_after_startup() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(!f.root.join("runs/new-event/execution.lock").exists());
+    for resource in ["matches/999/attempts/0001", "matches/0/attempts/9999"] {
+        assert!(
+            get(
+                &addr,
+                &format!("/api/events/{id}/{resource}/replay"),
+                &token
+            )
+            .starts_with(b"HTTP/1.1 404")
+        );
+    }
+    let attempt = f.root.join("runs/new-event/matches/m0/attempts/0001");
+    fs::create_dir_all(&attempt).unwrap();
+    fs::write(attempt.join("state"), "running").unwrap();
+    assert!(
+        get(
+            &addr,
+            &format!("/api/events/{id}/matches/0/attempts/0001/replay"),
+            &token
+        )
+        .starts_with(b"HTTP/1.1 409")
+    );
     let result = Command::new(&runner)
         .args(["resume", "--out"])
         .arg(f.root.join("runs/new-event"))
@@ -220,7 +241,13 @@ fn serves_same_origin_page_and_discovers_a_plan_created_after_startup() {
             arena_runner::tournament::archive::parse_json(std::str::from_utf8(body(&r)).unwrap())
                 .unwrap();
         let events = catalog.get("events").unwrap().as_array().unwrap();
-        if events.len() == 3 {
+        if events.len() == 3
+            && events
+                .iter()
+                .filter(|e| e.get("error") == Some(&arena_runner::tournament::archive::Json::Null))
+                .count()
+                == 2
+        {
             assert_eq!(
                 events
                     .iter()

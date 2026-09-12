@@ -18,6 +18,22 @@ use std::{
 
 /// Defensive bound for individual artifacts (including frozen builds and IARP).
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ATTEMPT_TEXT_BYTES: u64 = 64 * 1024;
+
+fn attempt_text(dir: &Path, name: &str) -> io::Result<String> {
+    use std::io::Read;
+    let file = fs::File::open(guarded_path(dir, Path::new(name))?)?;
+    if file.metadata()?.len() > MAX_ATTEMPT_TEXT_BYTES {
+        return Err(invalid("attempt text exceeds 64 KiB"));
+    }
+    let mut text = String::new();
+    file.take(MAX_ATTEMPT_TEXT_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_ATTEMPT_TEXT_BYTES {
+        return Err(invalid("attempt text exceeds 64 KiB"));
+    }
+    Ok(text)
+}
 
 /// Resolve only normal relative components under an operator-owned root.
 /// Reject links and special files. This is not a sandbox against a concurrent
@@ -50,8 +66,14 @@ struct Stamp {
     identity: (u64, u64, i64, i64),
 }
 fn stamps(dir: &Path) -> io::Result<Vec<Stamp>> {
-    fn visit(path: &Path, out: &mut Vec<Stamp>, depth: usize) -> io::Result<()> {
-        if depth > 12 || out.len() > 100_000 {
+    fn visit(
+        path: &Path,
+        out: &mut Vec<Stamp>,
+        depth: usize,
+        entries: &mut usize,
+    ) -> io::Result<()> {
+        *entries += 1;
+        if depth > 12 || *entries > 100_000 {
             return Err(invalid("archive tree limit exceeded"));
         }
         let m = fs::symlink_metadata(path)?;
@@ -60,13 +82,19 @@ fn stamps(dir: &Path) -> io::Result<Vec<Stamp>> {
         }
         if m.is_dir() {
             for e in fs::read_dir(path)? {
-                let p = e?.path();
-                if p.file_name().unwrap().to_string_lossy().ends_with(".tmp") {
-                    continue;
-                }
-                visit(&p, out, depth + 1)?;
+                visit(&e?.path(), out, depth + 1, entries)?;
             }
         } else if m.is_file() && m.len() <= MAX_FILE_BYTES {
+            // Match the official verifier: recurse into directories even when
+            // their names end in .tmp; ignore only ordinary temporary files.
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+            {
+                return Ok(());
+            }
             out.push(Stamp {
                 path: path.to_path_buf(),
                 len: m.len(),
@@ -83,9 +111,31 @@ fn stamps(dir: &Path) -> io::Result<Vec<Stamp>> {
         Ok(())
     }
     let mut out = Vec::new();
-    visit(dir, &mut out, 0)?;
+    visit(dir, &mut out, 0, &mut 0)?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttemptState {
+    RecordedRunning,
+    Publishing,
+    Completed,
+    InfrastructureFault,
+    Interrupted,
+    Corrupt,
+}
+impl AttemptState {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::RecordedRunning => "recorded_running",
+            Self::Publishing => "publishing",
+            Self::Completed => "completed",
+            Self::InfrastructureFault => "infrastructure_fault",
+            Self::Interrupted => "interrupted",
+            Self::Corrupt => "corrupt",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -93,7 +143,7 @@ pub struct AttemptView {
     pub number: String,
     pub attempt_reason: Option<String>,
     /// recorded_running is not a process-liveness claim.
-    pub state: String,
+    pub state: AttemptState,
     pub error: Option<String>,
     pub result: Option<ExternalResult>,
     pub finished_unix_ms: Option<u64>,
@@ -107,7 +157,7 @@ impl MatchView {
     pub fn state(&self) -> &str {
         self.attempts
             .last()
-            .map(|a| a.state.as_str())
+            .map(|a| a.state.tag())
             .unwrap_or("pending")
     }
     pub fn result(&self) -> Option<&ExternalResult> {
@@ -136,6 +186,11 @@ impl Snapshot {
         encode(&self.json())
     }
     pub fn json(&self) -> Json {
+        self.json_matches(self.matches.iter())
+    }
+    /// Serialize selected matches while retaining the full snapshot's totals
+    /// and standings. Selection never changes official scoring.
+    pub fn json_matches<'a>(&self, matches: impl Iterator<Item = &'a MatchView>) -> Json {
         let n = |n: u64| Json::Int(n as i64);
         let entries = self
             .entrants
@@ -152,9 +207,7 @@ impl Snapshot {
                 ])
             })
             .collect();
-        let rows = self
-            .matches
-            .iter()
+        let rows = matches
             .map(|m| {
                 object(vec![
                     ("index", n(m.item.index)),
@@ -218,7 +271,7 @@ impl Snapshot {
 fn attempt_json(a: &AttemptView) -> Json {
     let mut fields = vec![
         ("number", string(&a.number)),
-        ("state", string(&a.state)),
+        ("state", string(a.state.tag())),
         (
             "attempt_reason",
             a.attempt_reason.as_ref().map(string).unwrap_or(Json::Null),
@@ -385,7 +438,7 @@ impl ArchiveMonitor {
             .iter()
             .find(|m| m.item.index == index)
             .and_then(|m| m.attempts.iter().find(|a| a.number == attempt))
-            .ok_or_else(|| invalid("unknown attempt"))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown match or attempt"))?;
         let r = a
             .result
             .as_ref()
@@ -426,7 +479,7 @@ fn read_attempt(
     let mut view = AttemptView {
         number: dir.file_name().unwrap().to_string_lossy().into_owned(),
         attempt_reason: None,
-        state: "publishing".into(),
+        state: AttemptState::Publishing,
         error: None,
         result: None,
         finished_unix_ms: None,
@@ -449,11 +502,10 @@ fn read_attempt(
             match durable::read_result(dir, plan, item) {
                 Ok(result) => {
                     view.state = if durable::infrastructure(&result) {
-                        "infrastructure_fault"
+                        AttemptState::InfrastructureFault
                     } else {
-                        "completed"
-                    }
-                    .into();
+                        AttemptState::Completed
+                    };
                     view.result = Some(result);
                     view.finished_unix_ms = super::document::read(&dir.join("resources.json"))
                         .ok()
@@ -461,12 +513,12 @@ fn read_attempt(
                         .and_then(|n| n.try_into().ok());
                 }
                 Err(e) => {
-                    view.state = "corrupt".into();
+                    view.state = AttemptState::Corrupt;
                     view.error = Some(e.to_string());
                 }
             }
             if stamps(dir).ok().as_ref() != Some(&before) {
-                view.state = "publishing".into();
+                view.state = AttemptState::Publishing;
                 view.result = None;
                 view.error = None;
             } else {
@@ -480,28 +532,34 @@ fn read_attempt(
             }
         }
         Ok(None) => {
-            let state = guarded_path(dir, Path::new("state")).and_then(fs::read_to_string);
+            let state = attempt_text(dir, "state");
             match state.as_deref() {
-                Ok("running") => view.state = "recorded_running".into(),
-                Ok("interrupted") => view.state = "interrupted".into(),
+                Ok("running") => view.state = AttemptState::RecordedRunning,
+                Ok("interrupted") => view.state = AttemptState::Interrupted,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 _ => {
-                    view.state = "corrupt".into();
+                    view.state = AttemptState::Corrupt;
                     view.error =
                         Some("invalid state or committed attempt missing artifacts".into());
                 }
             }
         }
         Err(e) => {
-            view.state = "corrupt".into();
+            view.state = AttemptState::Corrupt;
             view.error = Some(e.to_string());
         }
     }
-    view.attempt_reason = guarded_path(dir, Path::new("reason.txt"))
-        .and_then(fs::read_to_string)
-        .ok();
+    match attempt_text(dir, "reason.txt") {
+        Ok(reason) => view.attempt_reason = Some(reason),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => {
+            view.state = AttemptState::Corrupt;
+            view.result = None;
+            view.error = Some(e.to_string());
+        }
+    }
     if let Some(c) = cache.get_mut(dir) {
-        c.view.attempt_reason = view.attempt_reason.clone();
+        c.view = view.clone();
     }
     view
 }

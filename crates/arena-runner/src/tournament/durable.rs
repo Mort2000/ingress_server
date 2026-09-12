@@ -447,7 +447,7 @@ pub(crate) fn read_result(
     let outcome = match row.outcome.as_str() {
         "enl_win" | "res_win" | "draw" => {
             let raw = row.final_state_hash.as_bytes();
-            if raw.len() != 64 {
+            if raw.len() != 64 || !raw.iter().all(u8::is_ascii_hexdigit) {
                 return Err(invalid("invalid state hash"));
             }
             let mut hash = [0u8; 32];

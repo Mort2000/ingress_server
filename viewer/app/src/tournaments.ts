@@ -321,13 +321,13 @@ export class TournamentPanel {
       ? `归档不可用；以下可能是旧快照，回放入口已停用：${data.error}`
       : "";
     if (!data.matches) return;
-    $("event-progress").textContent =
-      `已完成 ${data.completed} / ${data.total} · ${Object.entries(data.counts)
+    $("event-progress").textContent = [
+      `已完成 ${data.completed} / ${data.total}`,
+      ...Object.entries(data.counts)
         .filter(([s, n]) => s !== "completed" && n > 0)
-        .map(([s, n]) => `${states[s] || s} ${n}`)
-        .join(
-          " · ",
-        )} · 归档扫描 ${new Date(data.scanned_unix_ms).toLocaleTimeString()}`;
+        .map(([s, n]) => `${states[s] || s} ${n}`),
+      `归档扫描 ${new Date(data.scanned_unix_ms).toLocaleTimeString()}`,
+    ].join(" · ");
     const rows = data.matches.map((m) => {
       const row = element("article", "", "match-row");
       row.append(element("h3", `M${m.index} · 地图 ${m.map}`));

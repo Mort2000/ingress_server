@@ -1,7 +1,7 @@
 //! Incremental local discovery. Network writes never hold a verifier lock.
 use arena_runner::tournament::{
     archive::Json,
-    monitor::{ArchiveMonitor, guarded_path},
+    monitor::{ArchiveMonitor, Snapshot, guarded_path},
 };
 use std::{
     collections::BTreeMap,
@@ -29,7 +29,7 @@ pub struct Event {
     pub id: String,
     pub label: String,
     pub error: Option<String>,
-    pub snapshot: Option<Arc<Json>>,
+    pub snapshot: Option<Arc<Snapshot>>,
     pub reader: Option<Arc<Mutex<ArchiveMonitor>>>,
 }
 #[derive(Clone, Default)]
@@ -54,12 +54,23 @@ impl Published {
                         .iter()
                         .map(|e| {
                             let mut summary = e.base();
-                            if let Some(j) = &e.snapshot {
-                                for key in
-                                    ["name", "identity", "total", "completed", "scanned_unix_ms"]
-                                {
-                                    summary.push((key, j.get(key).unwrap().clone()));
-                                }
+                            if let Some(s) = &e.snapshot {
+                                summary.extend([
+                                    ("name", text(&s.name)),
+                                    ("identity", text(&s.identity)),
+                                    ("total", Json::Int(s.matches.len() as i64)),
+                                    (
+                                        "completed",
+                                        Json::Int(
+                                            s.matches
+                                                .iter()
+                                                .filter(|m| m.state() == "completed")
+                                                .count()
+                                                as i64,
+                                        ),
+                                    ),
+                                    ("scanned_unix_ms", Json::Int(s.scanned_unix_ms as i64)),
+                                ]);
                             }
                             object(summary)
                         })
@@ -79,104 +90,69 @@ impl Event {
         ]
     }
     pub fn detail(&self, query: &Query) -> Json {
-        let mut fields = self.base();
-        if let Some(snapshot) = &self.snapshot {
-            for (k, v) in snapshot.as_object().unwrap() {
-                if k != "matches" {
-                    fields.push((k, v.clone()));
-                }
-            }
-            let entrants = snapshot.get("entrants").unwrap().as_array().unwrap();
-            let names: Vec<_> = entrants
-                .iter()
-                .map(|e| {
-                    ["name", "registered_id", "version"]
-                        .map(|k| e.get(k).and_then(Json::as_str).unwrap_or(""))
-                        .join(" ")
-                        .to_lowercase()
-                })
-                .collect();
-            let all = snapshot.get("matches").unwrap().as_array().unwrap();
-            fields.push((
-                "counts",
-                object(
-                    [
-                        "pending",
-                        "recorded_running",
-                        "publishing",
-                        "completed",
-                        "infrastructure_fault",
-                        "interrupted",
-                        "corrupt",
-                    ]
-                    .into_iter()
-                    .map(|state| {
-                        (
-                            state,
-                            Json::Int(
-                                all.iter()
-                                    .filter(|m| {
-                                        m.get("state").and_then(Json::as_str) == Some(state)
-                                    })
-                                    .count() as i64,
-                            ),
-                        )
-                    })
-                    .collect(),
-                ),
-            ));
-            let mut rows: Vec<_> = all
-                .iter()
-                .filter(|m| {
-                    let a = m.get("enl").and_then(Json::as_int).unwrap() as usize;
-                    let b = m.get("res").and_then(Json::as_int).unwrap() as usize;
-                    let last = m
-                        .get("attempts")
-                        .and_then(Json::as_array)
-                        .and_then(|a| a.last());
-                    (query.q.is_empty()
-                        || names[a].contains(&query.q)
-                        || names[b].contains(&query.q))
-                        && query
-                            .map
-                            .is_none_or(|i| m.get("map").and_then(Json::as_int) == Some(i))
-                        && (query.state.is_empty()
-                            || m.get("state").and_then(Json::as_str) == Some(&query.state))
-                        && (query.outcome.is_empty()
-                            || last.and_then(|a| a.get("outcome")).and_then(Json::as_str)
-                                == Some(&query.outcome))
-                })
-                .collect();
-            if query.latest {
-                rows.sort_by_key(|m| {
-                    std::cmp::Reverse((
-                        m.get("attempts")
-                            .and_then(Json::as_array)
-                            .and_then(|a| a.last())
-                            .and_then(|a| a.get("finished_unix_ms"))
-                            .and_then(Json::as_int)
-                            .unwrap_or(0),
-                        m.get("index").and_then(Json::as_int).unwrap(),
-                    ))
-                });
-            }
+        let Some(snapshot) = &self.snapshot else {
+            return object(self.base());
+        };
+        let names: Vec<_> = snapshot
+            .entrants
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} {} {}",
+                    e.name,
+                    e.registered_id,
+                    e.version.as_deref().unwrap_or("")
+                )
+                .to_lowercase()
+            })
+            .collect();
+        let mut counts = BTreeMap::new();
+        for m in &snapshot.matches {
+            *counts.entry(m.state()).or_insert(0i64) += 1;
+        }
+        let mut rows: Vec<_> = snapshot
+            .matches
+            .iter()
+            .filter(|m| {
+                let a = m.item.enl_entrant() as usize;
+                let b = m.item.res_entrant() as usize;
+                (query.q.is_empty() || names[a].contains(&query.q) || names[b].contains(&query.q))
+                    && query.map.is_none_or(|i| m.item.map_index as i64 == i)
+                    && (query.state.is_empty() || m.state() == query.state)
+                    && (query.outcome.is_empty()
+                        || m.result()
+                            .is_some_and(|r| r.outcome.outcome_tag() == query.outcome))
+            })
+            .collect();
+        if query.latest {
+            rows.sort_by_key(|m| {
+                std::cmp::Reverse((
+                    m.attempts
+                        .last()
+                        .and_then(|a| a.finished_unix_ms)
+                        .unwrap_or(0),
+                    m.item.index,
+                ))
+            });
+        }
+        let matched = rows.len();
+        let mut response =
+            snapshot.json_matches(rows.into_iter().skip(query.offset).take(query.limit));
+        // JSON is assembled only at the HTTP boundary; filtering and caching
+        // use the official typed snapshot rather than navigating JSON fields.
+        if let Json::Object(fields) = &mut response {
+            fields.extend(self.base().into_iter().map(|(k, v)| (k.into(), v)));
             fields.extend([
-                ("matched", Json::Int(rows.len() as i64)),
-                ("offset", Json::Int(query.offset as i64)),
-                ("limit", Json::Int(query.limit as i64)),
+                ("matched".into(), Json::Int(matched as i64)),
+                ("offset".into(), Json::Int(query.offset as i64)),
+                ("limit".into(), Json::Int(query.limit as i64)),
                 (
-                    "matches",
-                    Json::Array(
-                        rows.into_iter()
-                            .skip(query.offset)
-                            .take(query.limit)
-                            .cloned()
-                            .collect(),
-                    ),
+                    "counts".into(),
+                    object(counts.into_iter().map(|(s, n)| (s, Json::Int(n))).collect()),
                 ),
             ]);
         }
-        object(fields)
+        response
     }
     pub fn replay(&self, item: u64, attempt: &str) -> io::Result<Vec<u8>> {
         if self.error.is_some() {
@@ -335,22 +311,21 @@ impl Catalog {
                 entry.error = Some(error.clone());
                 continue;
             }
-            let scan = || -> io::Result<(Arc<Mutex<ArchiveMonitor>>, Json)> {
+            let scan = || -> io::Result<(Arc<Mutex<ArchiveMonitor>>, Snapshot)> {
                 let reader = match &entry.reader {
                     Some(r) => r.clone(),
                     None => Arc::new(Mutex::new(ArchiveMonitor::open(&path)?)),
                 };
-                let json = reader
+                let snapshot = reader
                     .lock()
                     .map_err(|_| io::Error::other("reader failed"))?
-                    .snapshot()?
-                    .json();
-                Ok((reader, json))
+                    .snapshot()?;
+                Ok((reader, snapshot))
             };
             match scan() {
-                Ok((reader, json)) => {
+                Ok((reader, snapshot)) => {
                     entry.reader = Some(reader);
-                    entry.snapshot = Some(Arc::new(json));
+                    entry.snapshot = Some(Arc::new(snapshot));
                     entry.error = None;
                 }
                 Err(e) => entry.error = Some(e.to_string()),
