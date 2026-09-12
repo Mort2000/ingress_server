@@ -417,16 +417,18 @@ fn split_and_pipelined_writes_reassemble_in_order() {
                 if round == 1 {
                     // Two submissions pipelined in one write, second fed
                     // byte-by-byte across three more writes.
+                    // Thread/client names do not determine accept order;
+                    // use the roster assigned by the actual handshake.
                     let first =
                         arena_protocol::build::envelope_frame(&Envelope::SubmitCommandStream {
                             round,
-                            agent_id: AgentId(0),
+                            agent_id: roster[0],
                             commands: vec![],
                         });
                     let second =
                         arena_protocol::build::envelope_frame(&Envelope::SubmitCommandStream {
                             round,
-                            agent_id: AgentId(1),
+                            agent_id: roster[1],
                             commands: vec![],
                         });
                     let mut one_write = first.clone();

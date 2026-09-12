@@ -25,6 +25,25 @@ pub fn unix_ms() -> u64 {
         .as_millis()
         .min(u64::MAX as u128) as u64
 }
+
+/// Point-in-time host observations, not a continuous profiler.
+pub fn host_sample() -> Json {
+    object(vec![
+        ("sampled_unix_ms", Json::Int(unix_ms() as i64)),
+        (
+            "loadavg",
+            string(
+                fs::read_to_string("/proc/loadavg")
+                    .unwrap_or_else(|_| "unavailable".into())
+                    .trim(),
+            ),
+        ),
+        (
+            "meminfo",
+            string(fs::read_to_string("/proc/meminfo").unwrap_or_else(|_| "unavailable".into())),
+        ),
+    ])
+}
 fn positive(j: &Json, key: &str) -> io::Result<u64> {
     let value = match j.get(key) {
         Some(Json::Str(s)) => s.parse().map_err(invalid)?,
@@ -122,20 +141,7 @@ impl Resources {
                 }),
             ),
             ("declared", declared.cloned().unwrap_or(Json::Null)),
-            (
-                "loadavg",
-                string(
-                    fs::read_to_string("/proc/loadavg")
-                        .unwrap_or_else(|_| "unavailable".into())
-                        .trim(),
-                ),
-            ),
-            (
-                "meminfo",
-                string(
-                    fs::read_to_string("/proc/meminfo").unwrap_or_else(|_| "unavailable".into()),
-                ),
-            ),
+            ("preflight_sample", host_sample()),
         ]);
         Ok(Self {
             workers,

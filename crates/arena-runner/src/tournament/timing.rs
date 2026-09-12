@@ -23,14 +23,6 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
         if let Some(relative) = &replay {
             let replay_path = root.join(relative);
             let log = arena_replay::format::decode(&fs::read(&replay_path)?).map_err(invalid)?;
-            let attempt = replay_path
-                .parent()
-                .and_then(Path::parent)
-                .ok_or_else(|| invalid("invalid replay path"))?;
-            let resources = attempt.join("resources.json");
-            if resources.exists() {
-                conditions = read(&resources)?;
-            }
             for round in log.round_records() {
                 for s in &round.submissions {
                     receipts.push(object(vec![
@@ -56,6 +48,16 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
                     ]));
                 }
             }
+        }
+        // Rebuild has verified committed attempts, including technical endings
+        // without IARP. Keep their logs and conditions as first-class evidence.
+        let attempts = durable::attempt_dirs(root, item.index)?;
+        let attempt = attempts.last();
+        if let Some(attempt) = attempt {
+            let resources = attempt.join("resources.json");
+            if resources.exists() {
+                conditions = read(&resources)?;
+            }
             for label in ["a", "b"] {
                 let side = if !run.connect_order_verified[i] {
                     "unverified"
@@ -66,8 +68,14 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
                 };
                 let direct = attempt.join(format!("client_{label}.stderr"));
                 let sandbox = attempt.join(format!("sandbox_{label}.json"));
-                let (source, content) = if direct.exists() {
-                    (direct.clone(), fs::read_to_string(&direct)?)
+                let (source, content, invalid_utf8) = if direct.exists() {
+                    let bytes = fs::read(&direct)?;
+                    let invalid_utf8 = std::str::from_utf8(&bytes).is_err();
+                    (
+                        direct.clone(),
+                        String::from_utf8_lossy(&bytes).into_owned(),
+                        invalid_utf8,
+                    )
                 } else if sandbox.exists() {
                     let r = read(&sandbox)?;
                     (
@@ -76,16 +84,23 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
                             .and_then(Json::as_str)
                             .unwrap_or("")
                             .to_string(),
+                        false,
                     )
                 } else {
                     continue;
                 };
-                logs.push(string(
-                    source
-                        .strip_prefix(root)
-                        .unwrap_or(&source)
-                        .to_string_lossy(),
-                ));
+                logs.push(object(vec![
+                    (
+                        "path",
+                        string(
+                            source
+                                .strip_prefix(root)
+                                .unwrap_or(&source)
+                                .to_string_lossy(),
+                        ),
+                    ),
+                    ("invalid_utf8", Json::Bool(invalid_utf8)),
+                ]));
                 for line in content.lines() {
                     if let Some(payload) = line.strip_prefix("ARENA_TIMING ") {
                         match super::archive::parse_json(payload) {
@@ -110,6 +125,24 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
         }
         matches.push(object(vec![
             ("item", Json::Int(item.index as i64)),
+            ("outcome", string(run.outcomes[i].outcome_tag())),
+            (
+                "stage",
+                run.outcomes[i]
+                    .stage()
+                    .map(|s| string(s.tag()))
+                    .unwrap_or(Json::Null),
+            ),
+            (
+                "reason",
+                run.outcomes[i].reason().map(string).unwrap_or(Json::Null),
+            ),
+            (
+                "attempt",
+                attempt
+                    .map(|p| string(p.strip_prefix(root).unwrap_or(p).to_string_lossy()))
+                    .unwrap_or(Json::Null),
+            ),
             ("replay", replay.map(string).unwrap_or(Json::Null)),
             ("conditions", conditions),
             ("logs", Json::Array(logs)),

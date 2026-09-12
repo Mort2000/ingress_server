@@ -98,7 +98,6 @@ pub fn execute_cli(args: &[String]) -> io::Result<Option<String>> {
     }
     let bytes = fs::read(get("--input")?)?;
     let log = arena_replay::format::decode(&bytes).map_err(invalid)?;
-    arena_replay::replay::replay(&log).map_err(invalid)?;
     let faction = match get("--faction")? {
         "enl" => Faction::Enl,
         "res" => Faction::Res,

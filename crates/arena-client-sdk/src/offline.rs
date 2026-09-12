@@ -49,9 +49,7 @@ pub fn reconstruct(
     let resolver = Resolver::with_seed(h.game_seed);
     let mut result = History {
         source_hash: blake3::hash(&log.encode()).to_hex().to_string(),
-        budget_input_hash: blake3::hash(format!("{:?}", budgets.0).as_bytes())
-            .to_hex()
-            .to_string(),
+        budget_input_hash: budgets.content_hash(),
         faction,
         first_difference: None,
         rounds: vec![],
@@ -194,6 +192,19 @@ fn invalid(message: impl ToString) -> io::Error {
 /// An empty list declares that the strategy must not read a budget that round.
 pub struct Budgets(BTreeMap<u32, Vec<u64>>);
 impl Budgets {
+    fn content_hash(&self) -> String {
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"arena-budgets-v1\0");
+        hash.update(&(self.0.len() as u64).to_le_bytes());
+        for (round, values) in &self.0 {
+            hash.update(&round.to_le_bytes());
+            hash.update(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                hash.update(&value.to_le_bytes());
+            }
+        }
+        hash.finalize().to_hex().to_string()
+    }
     pub fn parse(text: &str) -> io::Result<Self> {
         let mut lines = text.lines();
         if lines.next() != Some("arena-budgets-v1") {

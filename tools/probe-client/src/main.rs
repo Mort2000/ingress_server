@@ -37,6 +37,10 @@ fn env_arg() -> u64 {
 }
 
 fn main() {
+    if std::env::var_os("PROBE_LOG_INVALID_UTF8").is_some() {
+        use std::io::Write;
+        std::io::stderr().write_all(&[0xff, b'\n']).unwrap();
+    }
     if let Ok(bytes) = std::env::var("PROBE_LOG_BYTES") {
         use std::io::Write;
         let bytes: usize = bytes.parse().expect("PROBE_LOG_BYTES integer");

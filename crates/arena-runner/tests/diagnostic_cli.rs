@@ -1,4 +1,76 @@
 use arena_runner::tournament::archive::parse_json;
+#[test]
+fn timing_report_keeps_failed_attempt_conditions_and_non_utf8_logs() {
+    use arena_runner::tournament::archive::Json;
+    let root = std::env::temp_dir().join(format!(
+        "arena-timing-errors-{}",
+        arena_runner::tournament::exec_external::execution_id().unwrap()
+    ));
+    fs::create_dir(&root).unwrap();
+    let client = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/probe-client")
+        .canonicalize()
+        .unwrap();
+    for mode in ["no-spawn", "valid"] {
+        let run = root.join(mode);
+        let result = Command::new(env!("CARGO_BIN_EXE_arena-runner"))
+            .args([
+                "tournament",
+                "--out",
+                run.to_str().unwrap(),
+                "--client",
+                client.to_str().unwrap(),
+                "--client",
+                client.to_str().unwrap(),
+                "--rounds",
+                "1",
+                "--fast",
+            ])
+            .env("PROBE_MODE", mode)
+            .env("PROBE_LOG_INVALID_UTF8", "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let report = Command::new(env!("CARGO_BIN_EXE_arena-runner"))
+            .args(["timing-report", "--out", run.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            report.status.success(),
+            "{}",
+            String::from_utf8_lossy(&report.stderr)
+        );
+        let json = parse_json(&String::from_utf8(report.stdout).unwrap()).unwrap();
+        let first = &json.get("matches").unwrap().as_array().unwrap()[0];
+        let conditions = first.get("conditions").unwrap();
+        assert_ne!(conditions, &Json::Null);
+        assert!(
+            conditions
+                .get("start_sample")
+                .unwrap()
+                .get("sampled_unix_ms")
+                .is_some()
+        );
+        assert!(
+            conditions
+                .get("finish_sample")
+                .unwrap()
+                .get("sampled_unix_ms")
+                .is_some()
+        );
+        let logs = first.get("logs").unwrap().as_array().unwrap();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].get("invalid_utf8"), Some(&Json::Bool(true)));
+        if mode == "no-spawn" {
+            assert_eq!(first.get("replay"), Some(&Json::Null));
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
 use std::{fs, process::Command};
 #[test]
 fn scenario_is_self_contained_and_decision_comparison_locates_first_difference() {

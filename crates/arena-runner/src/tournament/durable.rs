@@ -410,7 +410,7 @@ fn infrastructure(result: &ExternalResult) -> bool {
     )
 }
 
-fn attempt_dirs(root: &Path, index: u64) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn attempt_dirs(root: &Path, index: u64) -> io::Result<Vec<PathBuf>> {
     let dir = root.join(format!("matches/m{index}/attempts"));
     if !dir.exists() {
         return Ok(Vec::new());
@@ -784,6 +784,7 @@ fn run_pending(
     let waiting = std::time::Instant::now();
     let permit = resources.acquire()?;
     let started = super::resources::unix_ms();
+    let start_sample = super::resources::host_sample();
     let waited_ms = waiting.elapsed().as_millis();
     let parent = root.join(format!("matches/m{}/attempts", item.index));
     fs::create_dir_all(&parent)?;
@@ -802,6 +803,12 @@ fn run_pending(
     );
     let save = || -> io::Result<()> {
         let mut measurement = resources.report.clone();
+        super::document::set(&mut measurement, "start_sample", start_sample.clone())?;
+        super::document::set(
+            &mut measurement,
+            "finish_sample",
+            super::resources::host_sample(),
+        )?;
         for (key, value) in [
             ("started_unix_ms", Json::Int(started as i64)),
             (
