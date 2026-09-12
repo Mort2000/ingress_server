@@ -844,22 +844,20 @@ mod tests {
     }
 
     #[test]
-    fn stale_leftover_is_replaced_at_creation() {
+    fn existing_name_is_never_assumed_stale() {
         let name = unique_name("stale");
         let orphan = ShmPublisher::create(&name, REGION_KIND_PUBLIC, PUBLIC_SNAPSHOT_VERSION, 512)
             .expect("orphan");
         drop(orphan);
-        // Simulate a crash leftover: create without dropping.
-        let leftover =
+        let mut leftover =
             ShmPublisher::create(&name, REGION_KIND_PUBLIC, PUBLIC_SNAPSHOT_VERSION, 512)
                 .expect("leftover");
-        std::mem::forget(leftover);
-        // A fresh publisher takes the name over.
-        let mut fresh =
-            ShmPublisher::create(&name, REGION_KIND_PUBLIC, PUBLIC_SNAPSHOT_VERSION, 512)
-                .expect("stale name replaced");
-        fresh.publish(&[1], 1, 0, 0).expect("publish");
-        assert_eq!(fresh.seq_value(), 2);
+        leftover.publish(&[1], 1, 0, 0).expect("publish");
+        assert!(matches!(
+            ShmPublisher::create(&name, REGION_KIND_PUBLIC, PUBLIC_SNAPSHOT_VERSION, 512),
+            Err(ShmError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(leftover.seq_value(), 2);
     }
 
     /// Concurrent publish/read: the reader never observes a torn payload —

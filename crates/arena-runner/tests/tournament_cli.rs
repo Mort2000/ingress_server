@@ -158,6 +158,9 @@ fn completed_matches_are_reused_and_retry_cannot_select_a_game_result() {
     versions.sort();
     assert_eq!(versions, ["v1", "v2"]);
     for verb in ["resume", "rebuild"] {
+        // Crash after the artifact commit point, before the state marker.
+        std::fs::remove_file(out.join("matches/m0/attempts/0001/state")).unwrap();
+        std::fs::write(out.join("matches/m1/attempts/0001/state"), "running").unwrap();
         let result = Command::new(binary)
             .args([verb, "--out"])
             .arg(&out)
@@ -183,6 +186,47 @@ fn completed_matches_are_reused_and_retry_cannot_select_a_game_result() {
         .output()
         .unwrap();
     assert!(!retry.status.success());
+    std::fs::remove_dir_all(out).unwrap();
+}
+
+#[test]
+fn partially_created_attempt_is_recoverable() {
+    let out = output_path("partial-attempt");
+    let binary = env!("CARGO_BIN_EXE_arena-runner");
+    let probe = probe_binary();
+    let planned = Command::new(binary)
+        .args(["plan", "--out"])
+        .arg(&out)
+        .arg("--client")
+        .arg(&probe)
+        .arg("--client")
+        .arg(&probe)
+        .args(["--rounds", "1", "--fast"])
+        .output()
+        .unwrap();
+    assert!(planned.status.success());
+    std::fs::create_dir_all(out.join("matches/m0/attempts/0001")).unwrap();
+    let status = Command::new(binary)
+        .args(["status", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(String::from_utf8_lossy(&status.stdout).contains("interrupted=1"));
+    let resumed = Command::new(binary)
+        .args(["resume", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert!(
+        out.join("matches/m0/attempts/0002/server/replay.iarp")
+            .exists()
+    );
     std::fs::remove_dir_all(out).unwrap();
 }
 
@@ -251,6 +295,7 @@ fn same_named_batches_have_distinct_observation_resources() {
                 .arg("--client")
                 .arg(&probe)
                 .args(["--rounds", "4", "--fast"])
+                .env("PROBE_OBSERVATION_LOG", "1")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn()
@@ -281,6 +326,7 @@ fn same_named_batches_have_distinct_observation_resources() {
                 let text =
                     std::fs::read_to_string(dir.join(format!("client_{side}.stdout"))).unwrap();
                 assert!(text.contains(&format!("match_id={id}")));
+                assert!(text.contains(&format!("cwd=/tmp/ia-{id}")));
                 assert!(text.contains(&format!("public=/ingress-{id}-public")));
                 let entrant = log
                     .header

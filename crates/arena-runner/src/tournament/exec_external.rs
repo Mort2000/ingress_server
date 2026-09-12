@@ -91,6 +91,7 @@ pub struct ExternalResult {
 /// sandbox-runner binary (when any). Kills and reaps everything on Drop,
 /// so a panicking worker never leaks a client process.
 struct ChildGuard {
+    archive: Option<PathBuf>,
     children: Vec<(Child, String, bool)>,
     /// The `tools/sandbox-runner` binary when clients run sandboxed —
     /// needed for containment: the supervised client is a GRANDCHILD in
@@ -148,9 +149,29 @@ impl ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         // Only kill unreaped processes; don't signal a pid recycled after wait.
-        self.children
-            .retain_mut(|(child, _, _)| !matches!(child.try_wait(), Ok(Some(_))));
-        self.kill_all();
+        for (child, side, sandboxed) in &mut self.children {
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let grandchildren = if *sandboxed {
+                    child_pids(child.id())
+                } else {
+                    Vec::new()
+                };
+                let _ = child.kill();
+                if let Some(runner) = &self.sandbox_runner {
+                    for pid in grandchildren {
+                        kill_process_group(runner, pid);
+                    }
+                }
+            }
+            if let (Some(dir), Ok(status)) = (&self.archive, child.wait()) {
+                // Normal paths write explicitly and propagate IO errors. Drop
+                // is the fallback for already-failed attempts only.
+                let _ = super::durable::atomic_write(
+                    &dir.join(format!("exit_{side}.txt")),
+                    status.to_string().as_bytes(),
+                );
+            }
+        }
         self.wait_all();
     }
 }
@@ -403,8 +424,16 @@ fn play(
     }
     let _runtime = RuntimeDir(scratch.clone());
     let server_dir = match_dir.join(SERVER_SUBDIR);
-    if let Err(error) =
-        std::fs::create_dir_all(&scratch).and_then(|_| std::fs::create_dir_all(&server_dir))
+    let scratch_archive = match_dir.join(SCRATCH_SUBDIR);
+    if let Err(error) = std::fs::create_dir_all(&scratch)
+        .and_then(|_| std::fs::create_dir_all(&server_dir))
+        .and_then(|_| std::fs::create_dir_all(&scratch_archive))
+        .and_then(|_| {
+            super::durable::atomic_write(
+                &scratch_archive.join("runtime-path.txt"),
+                scratch.to_string_lossy().as_bytes(),
+            )
+        })
     {
         return fault(format!("match dirs: {error}"), 0);
     }
@@ -472,6 +501,7 @@ fn play(
     // Drop order: kill/reap clients before joining their output drainers.
     let mut captures = Vec::new();
     let mut guard = ChildGuard {
+        archive: Some(match_dir.clone()),
         children: Vec::new(),
         sandbox_runner: match &cfg.sandbox {
             ClientSandbox::SandboxRunner { runner, .. } => Some(runner.clone()),
@@ -509,6 +539,7 @@ fn play(
             ClientSandbox::Off => {
                 let mut command = Command::new(binary);
                 command.arg(&socket).arg(&seed);
+                command.current_dir(&scratch);
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
                 command
             }
@@ -552,16 +583,27 @@ fn play(
             command.env(key, value);
         }
         match command.spawn() {
-            Ok(mut child) => {
+            Ok(child) => {
+                guard.children.push((child, side.clone(), sandboxed));
+                let child = &mut guard.children.last_mut().unwrap().0;
                 let prefix = if sandboxed { "sandbox" } else { "client" };
-                let stdout = super::logs::Capture::start(
+                let stdout = match super::logs::Capture::start(
                     child.stdout.take().unwrap(),
                     match_dir.join(format!("{prefix}_{side}.stdout")),
-                );
-                let stderr = super::logs::Capture::start(
+                ) {
+                    Ok(capture) => capture,
+                    Err(e) => return fault(format!("stdout capture: {e}"), 0),
+                };
+                let stderr = match super::logs::Capture::start(
                     child.stderr.take().unwrap(),
                     match_dir.join(format!("{prefix}_{side}.stderr")),
-                );
+                ) {
+                    Ok(capture) => capture,
+                    Err(e) => {
+                        guard.kill_all();
+                        return fault(format!("stderr capture: {e}"), 0);
+                    }
+                };
                 captures.push((side.clone(), sandboxed, stdout, stderr));
                 let pid = child.id();
                 if enl_child_pid.is_none() {
@@ -574,7 +616,12 @@ fn play(
                     let confirmed = loop {
                         enl_pids.extend(tree_pids(pid));
                         match accepted_rx.recv_timeout(Duration::from_millis(3)) {
-                            Ok((0, Some(peer))) if enl_pids.contains(&peer) => break true,
+                            Ok((0, Some(peer))) => {
+                                // The sandbox may have forked between our tree
+                                // snapshot and recv. Refresh after the event.
+                                enl_pids.extend(tree_pids(pid));
+                                break enl_pids.contains(&peer);
+                            }
                             Ok(_) => break false,
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break false,
                             Err(_) => {}
@@ -584,7 +631,6 @@ fn play(
                         }
                     };
                     if !confirmed {
-                        guard.children.push((child, side, sandboxed));
                         drop(guard);
                         let _ = server.join();
                         return fault(
@@ -598,7 +644,6 @@ fn play(
                     res_pids.extend(tree_pids(pid));
                     res_child_pid = Some(pid);
                 }
-                guard.children.push((child, side, sandboxed));
             }
             // Drop of `guard` kills the already-spawned peer (and, when
             // sandboxed, its client's whole process group).
@@ -925,6 +970,7 @@ mod tests {
         assert!(any_process_cmdline_contains(&needle), "client is alive");
 
         let mut guard = ChildGuard {
+            archive: None,
             children: vec![(child, "a".to_string(), true)],
             sandbox_runner: Some(runner),
         };

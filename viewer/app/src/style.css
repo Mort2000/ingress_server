@@ -1155,6 +1155,7 @@ button[aria-pressed="true"] {
   cursor: pointer;
 }
 .key-ring {
+  pointer-events: none;
   fill: none;
   stroke: var(--amber);
   stroke-width: 2;

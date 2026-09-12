@@ -372,14 +372,14 @@ fn read_result(dir: &Path, plan: &Plan, item: &TournamentItem) -> io::Result<Ext
     Ok(result)
 }
 
-fn artifact_manifest(dir: &Path, current: &Path, out: &mut String) -> io::Result<()> {
+fn artifact_manifest(dir: &Path, current: &Path, out: &mut String, sync: bool) -> io::Result<()> {
     let mut entries = fs::read_dir(current)?
         .map(|e| e.map(|e| e.path()))
         .collect::<io::Result<Vec<_>>>()?;
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            artifact_manifest(dir, &path, out)?;
+            artifact_manifest(dir, &path, out, sync)?;
         } else if path.is_file() {
             let relative = path
                 .strip_prefix(dir)
@@ -388,6 +388,9 @@ fn artifact_manifest(dir: &Path, current: &Path, out: &mut String) -> io::Result
                 .ok_or_else(|| invalid("artifact name"))?;
             if matches!(relative, "artifacts" | "state") || relative.ends_with(".tmp") {
                 continue;
+            }
+            if sync {
+                File::open(&path)?.sync_all()?;
             }
             out.push_str(&format!(
                 "{} {relative}\n",
@@ -400,7 +403,7 @@ fn artifact_manifest(dir: &Path, current: &Path, out: &mut String) -> io::Result
 fn verify_artifacts(dir: &Path) -> io::Result<()> {
     let recorded = fs::read_to_string(dir.join("artifacts"))?;
     let mut actual = String::new();
-    artifact_manifest(dir, dir, &mut actual)?;
+    artifact_manifest(dir, dir, &mut actual, false)?;
     if actual != recorded {
         return Err(invalid(format!(
             "artifact validation failed: {}",
@@ -439,20 +442,72 @@ pub fn status(root: &Path) -> io::Result<String> {
     for item in &plan.items {
         match attempt_dirs(root, item.index)?.last() {
             None => pending += 1,
-            Some(dir) => match fs::read_to_string(dir.join("state"))?.as_str() {
-                "completed" => {
-                    read_result(dir, &plan, item)?;
-                    completed += 1;
-                }
-                "infrastructure_fault" => faults += 1,
-                "running" if active => running += 1,
-                _ => interrupted += 1,
+            Some(dir) => match attempt_state(dir, &plan, item, active)? {
+                AttemptState::Completed => completed += 1,
+                AttemptState::Fault => faults += 1,
+                AttemptState::Running => running += 1,
+                AttemptState::Interrupted => interrupted += 1,
             },
         }
     }
     Ok(format!(
         "pending={pending} running={running} completed={completed} infrastructure_fault={faults} interrupted={interrupted}\n"
     ))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttemptState {
+    Running,
+    Completed,
+    Fault,
+    Interrupted,
+}
+impl AttemptState {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Fault => "infrastructure_fault",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// One crash-recovery rule for status, resume, retry and rebuild. A published,
+/// validated artifact manifest is the commit point; the state label is a cache.
+fn attempt_state(
+    dir: &Path,
+    plan: &Plan,
+    item: &TournamentItem,
+    active: bool,
+) -> io::Result<AttemptState> {
+    let recorded = match fs::read_to_string(dir.join("state")) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => "interrupted".into(),
+        Err(e) => return Err(e),
+    };
+    let state = match recorded.as_str() {
+        "running" => AttemptState::Running,
+        "completed" => AttemptState::Completed,
+        "infrastructure_fault" => AttemptState::Fault,
+        "interrupted" => AttemptState::Interrupted,
+        _ => return Err(invalid("unknown attempt state")),
+    };
+    if state == AttemptState::Running && active {
+        return Ok(state);
+    }
+    if dir.join("artifacts").is_file() {
+        let result = read_result(dir, plan, item)?;
+        return Ok(if infrastructure(&result) {
+            AttemptState::Fault
+        } else {
+            AttemptState::Completed
+        });
+    }
+    if matches!(state, AttemptState::Completed | AttemptState::Fault) {
+        return Err(invalid("committed attempt missing artifacts"));
+    }
+    Ok(AttemptState::Interrupted)
 }
 
 #[derive(Clone, Copy)]
@@ -465,6 +520,12 @@ pub enum Action {
 pub fn execute(root: &Path, action: Action) -> io::Result<TournamentRun> {
     let _lock = lock(root)?;
     let plan = load(root)?;
+    for item in &plan.items {
+        if let Some(dir) = attempt_dirs(root, item.index)?.last() {
+            let state = attempt_state(dir, &plan, item, false)?;
+            atomic_write(&dir.join("state"), state.tag().as_bytes())?;
+        }
+    }
     if let Action::Retry(index) = action {
         let item = plan
             .items
@@ -523,17 +584,15 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
     let dirs = attempt_dirs(root, item.index)?;
     let mut reason = "initial execution";
     if let Some(last) = dirs.last() {
-        let state = fs::read_to_string(last.join("state"))?;
-        match state.as_str() {
-            "completed" => {
-                read_result(last, plan, item)?;
+        match attempt_state(last, plan, item, false)? {
+            AttemptState::Completed => {
                 return Ok(());
             }
-            "infrastructure_fault" if !matches!(action, Action::Retry(i) if i == item.index) => {
+            AttemptState::Fault if !matches!(action, Action::Retry(i) if i == item.index) => {
                 return Ok(());
             }
-            "infrastructure_fault" => reason = "explicit bounded infrastructure retry",
-            _ => {
+            AttemptState::Fault => reason = "explicit bounded infrastructure retry",
+            AttemptState::Running | AttemptState::Interrupted => {
                 atomic_write(&last.join("state"), b"interrupted")?;
                 reason = "resume interrupted attempt";
             }
@@ -589,7 +648,7 @@ fn run_pending(root: &Path, plan: &Plan, item: &TournamentItem, action: Action) 
             archive::index_records_to_tsv(&[record]).as_bytes(),
         )?;
         let mut manifest = String::new();
-        artifact_manifest(&dir, &dir, &mut manifest)?;
+        artifact_manifest(&dir, &dir, &mut manifest, true)?;
         atomic_write(&dir.join("artifacts"), manifest.as_bytes())?;
         read_result(&dir, plan, item)?;
         atomic_write(

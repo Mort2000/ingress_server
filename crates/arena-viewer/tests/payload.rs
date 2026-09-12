@@ -612,6 +612,14 @@ fn hud_telemetry_and_browser_fixtures() {
     )
     .unwrap();
     write_edge_browser_fixtures(&dir);
+    let mut abnormal = decode_log(abnormal_iarp()).unwrap();
+    let mut identity = arena_replay::format::ReplayIdentity::default();
+    identity.participants[0].client_name = "self-reported".into();
+    identity.participants[0].bot_version = "own-v3".into();
+    identity.participants[1].client_name = "self-reported".into();
+    identity.participants[1].client_version = "sdk-0.1.0".into();
+    abnormal.header.identity = Some(identity);
+    std::fs::write(dir.join("identity-abnormal.iarp"), abnormal.encode()).unwrap();
 }
 
 fn write_edge_browser_fixtures(dir: &Path) {

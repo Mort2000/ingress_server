@@ -106,6 +106,41 @@ fn spawn_client(bin: &str, socket: &Path, seed: u64) -> Child {
 }
 
 #[test]
+fn standalone_server_preserves_explicit_bot_version_without_registry_claims() {
+    let mut m = start_match(2);
+    let mut clients = Vec::new();
+    for _ in 0..2 {
+        clients.push(
+            Command::new(target_bin("probe-client"))
+                .arg(&m._socket)
+                .env("PROBE_BOT_VERSION", "independent-v1")
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in &mut clients {
+        assert!(child.wait().unwrap().success());
+    }
+    assert!(m.server.wait().unwrap().success());
+    let dir = std::fs::read_dir(&m.out_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let log = replay::decode_log(&std::fs::read(dir.join("replay.iarp")).unwrap()).unwrap();
+    let identity = log.header.identity.unwrap();
+    for participant in identity.participants {
+        assert_eq!(participant.client_name, "probe");
+        assert_eq!(participant.bot_version, "independent-v1");
+        assert_eq!(participant.client_version, "probe");
+        assert!(participant.registered_id.is_empty());
+        assert!(!participant.binding_verified);
+    }
+}
+
+#[test]
 fn live_match_500_rounds_with_external_clients() {
     maybe_skip();
     let started = Instant::now();

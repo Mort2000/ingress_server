@@ -19,7 +19,21 @@ async function seek(page: Page, round: number) {
 test("standalone replay identity keeps versions and sources distinct and resets for old files", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const Original = window.Worker;
+    window.Worker = class extends Original {
+      constructor(url: URL | string, options?: WorkerOptions) {
+        super(url, options);
+        this.addEventListener("message", (e) => {
+          if (e.data.replay) (window as any).parsedReplay = e.data.replay;
+        });
+      }
+    };
+  });
   await open(page, "identity.iarp");
+  expect(await page.evaluate(() => (window as any).parsedReplay)).toEqual(
+    JSON.parse(readFileSync(resolve(fixtures, "identity.json"), "utf8")),
+  );
   await expect(page.locator("#identity-enl")).toContainText("星际 <astra-bot>");
   await expect(page.locator("#version-enl")).toHaveText("v1");
   await expect(page.locator("#version-res")).toHaveText("v2");
@@ -42,6 +56,11 @@ test("standalone replay identity keeps versions and sources distinct and resets 
   await expect(page.locator("#identity-details")).not.toContainText(
     "different-self-report",
   );
+  await page.locator("#file-input").setInputFiles(resolve(fixtures, "identity-abnormal.iarp"));
+  await expect(page.locator("#identity-enl")).toHaveText("self-reported");
+  await expect(page.locator("#version-enl")).toHaveText("own-v3");
+  await expect(page.locator("#version-res")).toHaveText("版本未知");
+  await expect(page.locator("#resultpill")).toContainText("ABNORMAL");
 });
 
 test("browser WASM payload equals the native verifier, and rejects corrupt archives", async ({

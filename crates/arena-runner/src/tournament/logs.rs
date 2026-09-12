@@ -10,44 +10,58 @@ pub struct Capture {
     handle: Option<JoinHandle<io::Result<Vec<u8>>>>,
 }
 impl Capture {
-    pub fn start(mut input: impl Read + Send + 'static, path: PathBuf) -> Self {
-        let handle = std::thread::spawn(move || {
-            let mut output = std::fs::File::create(&path);
-            let mut saved = Vec::new();
-            let mut total = 0u64;
-            let mut buf = [0u8; 8192];
-            loop {
-                let count = match input.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(e) => return Err(e),
-                };
-                total += count as u64;
-                let keep = count.min(LOG_LIMIT - saved.len());
-                saved.extend_from_slice(&buf[..keep]);
-                if let Ok(file) = &mut output {
-                    if let Err(e) = file.write_all(&buf[..keep]) {
-                        output = Err(e);
+    pub fn start(mut input: impl Read + Send + 'static, path: PathBuf) -> io::Result<Self> {
+        let handle = std::thread::Builder::new()
+            .name("client-output".into())
+            .spawn(move || {
+                let mut output = std::fs::File::create(&path);
+                let mut saved = Vec::new();
+                let mut total = 0u64;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let count = match input.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(e) => return Err(e),
+                    };
+                    total += count as u64;
+                    let keep = count.min(LOG_LIMIT - saved.len());
+                    saved.extend_from_slice(&buf[..keep]);
+                    if let Ok(file) = &mut output {
+                        if let Err(e) = file.write_all(&buf[..keep]) {
+                            output = Err(e);
+                        }
                     }
                 }
-            }
-            let file = output?;
-            file.sync_all()?;
-            super::durable::atomic_write(
-                &PathBuf::from(format!("{}.meta.json", path.display())),
-                format!(
-                    "{{\"bytes_seen\":{total},\"bytes_saved\":{},\"truncated\":{}}}\n",
-                    saved.len(),
-                    total > saved.len() as u64
-                )
-                .as_bytes(),
-            )?;
-            Ok(saved)
-        });
-        Self {
+                let file = output?;
+                file.sync_all()?;
+                if path
+                    .file_name()
+                    .is_some_and(|s| s.to_string_lossy().starts_with("sandbox_"))
+                    && path.extension().is_some_and(|s| s == "stdout")
+                {
+                    let report = if !saved.is_empty() {
+                        saved.clone()
+                    } else {
+                        b"{\"capture_status\":\"sandbox terminated before report\"}\n".to_vec()
+                    };
+                    super::durable::atomic_write(&path.with_extension("json"), &report)?;
+                }
+                super::durable::atomic_write(
+                    &PathBuf::from(format!("{}.meta.json", path.display())),
+                    format!(
+                        "{{\"bytes_seen\":{total},\"bytes_saved\":{},\"truncated\":{}}}\n",
+                        saved.len(),
+                        total > saved.len() as u64
+                    )
+                    .as_bytes(),
+                )?;
+                Ok(saved)
+            })?;
+        Ok(Self {
             handle: Some(handle),
-        }
+        })
     }
     pub fn finish(mut self) -> io::Result<Vec<u8>> {
         self.handle

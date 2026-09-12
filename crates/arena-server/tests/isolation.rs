@@ -132,6 +132,27 @@ fn second_server_cannot_replace_an_active_socket() {
     assert!(b.wait().unwrap().success());
 }
 
+#[test]
+fn colliding_server_cannot_unlink_a_live_publishers_region() {
+    use arena_server::shm::{PUBLIC_CAPACITY, REGION_KIND_PUBLIC, ShmPublisher};
+    let name = format!("/ingress-shm-collision-{}-public", std::process::id());
+    let owner = ShmPublisher::create(&name, REGION_KIND_PUBLIC, 1, PUBLIC_CAPACITY).unwrap();
+    let tag = format!("shm-collision-{}", std::process::id());
+    let mut server = spawn_server(&tag, 1);
+    let mut a = spawn_probe(&server.socket, "valid");
+    let mut b = spawn_probe(&server.socket, "valid");
+    let _ = a.wait();
+    let _ = b.wait();
+    assert!(!server.child.wait().unwrap().success());
+    assert!(
+        Path::new("/dev/shm")
+            .join(name.trim_start_matches('/'))
+            .exists(),
+        "the original publisher's name must survive"
+    );
+    drop(owner);
+}
+
 /// Before INITIAL_SPAWN_START — in fact before BOTH client HELLOs
 /// arrive — no region file for the match exists: the glob over
 /// /dev/shm for the fresh, unguessable match id finds nothing, even
