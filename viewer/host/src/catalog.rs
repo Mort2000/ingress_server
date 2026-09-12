@@ -1,7 +1,8 @@
 //! Incremental local discovery. Network writes never hold a verifier lock.
 use arena_runner::tournament::{
     archive::Json,
-    monitor::{ArchiveMonitor, Snapshot, guarded_path},
+    monitor::{ArchiveMonitor, MatchView, Snapshot, guarded_path},
+    outcome::TournamentOutcome,
 };
 use std::{
     collections::BTreeMap,
@@ -117,6 +118,12 @@ impl Event {
                 let a = m.item.enl_entrant() as usize;
                 let b = m.item.res_entrant() as usize;
                 (query.q.is_empty() || names[a].contains(&query.q) || names[b].contains(&query.q))
+                    && query
+                        .entrant
+                        .is_none_or(|id| m.item.a == id || m.item.b == id)
+                    && query
+                        .opponent
+                        .is_none_or(|id| m.item.a == id || m.item.b == id)
                     && query.map.is_none_or(|i| m.item.map_index as i64 == i)
                     && (query.state.is_empty() || m.state() == query.state)
                     && (query.outcome.is_empty()
@@ -146,6 +153,7 @@ impl Event {
                 ("matched".into(), Json::Int(matched as i64)),
                 ("offset".into(), Json::Int(query.offset as i64)),
                 ("limit".into(), Json::Int(query.limit as i64)),
+                ("matchups".into(), matchups(snapshot)),
                 (
                     "counts".into(),
                     object(counts.into_iter().map(|(s, n)| (s, Json::Int(n))).collect()),
@@ -172,6 +180,8 @@ pub struct Query {
     pub limit: usize,
     pub q: String,
     pub map: Option<i64>,
+    pub entrant: Option<u32>,
+    pub opponent: Option<u32>,
     pub state: String,
     pub outcome: String,
     pub latest: bool,
@@ -183,6 +193,8 @@ impl Query {
             limit: 50,
             q: String::new(),
             map: None,
+            entrant: None,
+            opponent: None,
             state: String::new(),
             outcome: String::new(),
             latest: true,
@@ -207,6 +219,13 @@ impl Query {
                     q.map = Some(value.parse().map_err(|_| "invalid map")?)
                 }
                 "map" => {}
+                "entrant" if !value.is_empty() => {
+                    q.entrant = Some(value.parse().map_err(|_| "invalid entrant")?)
+                }
+                "opponent" if !value.is_empty() => {
+                    q.opponent = Some(value.parse().map_err(|_| "invalid opponent")?)
+                }
+                "entrant" | "opponent" => {}
                 "state" => q.state = value,
                 "outcome" => q.outcome = value,
                 "order" => {
@@ -219,8 +238,84 @@ impl Query {
                 _ => return Err("unknown query option".into()),
             }
         }
+        if q.entrant.is_some() && q.entrant == q.opponent {
+            return Err("entrant and opponent must differ".into());
+        }
         Ok(q)
     }
+}
+
+/// One logical match contributes once, using the same latest attempt as rankings.
+/// Pair order is canonical; faction swaps do not create another matrix cell.
+#[derive(Default)]
+struct Matchup {
+    total: u64,
+    a_wins: u64,
+    b_wins: u64,
+    draws: u64,
+    a_technical_wins: u64,
+    b_technical_wins: u64,
+    pending: u64,
+    faults: u64,
+    unscored: u64,
+}
+impl Matchup {
+    fn apply(&mut self, m: &MatchView, a: u32) {
+        self.total += 1;
+        match m.state() {
+            "corrupt" | "interrupted" | "infrastructure_fault" => self.faults += 1,
+            "completed" => match m.result().map(|r| &r.outcome) {
+                Some(outcome @ TournamentOutcome::Normal { .. }) => {
+                    match outcome.normal_winner(m.item.a, m.item.b, m.item.a_is_enl) {
+                        Some(winner) if winner == a => self.a_wins += 1,
+                        Some(_) => self.b_wins += 1,
+                        None => self.draws += 1,
+                    }
+                }
+                Some(TournamentOutcome::TechnicalWin { winner, .. }) if *winner == a => {
+                    self.a_technical_wins += 1
+                }
+                Some(TournamentOutcome::TechnicalWin { .. }) => self.b_technical_wins += 1,
+                Some(TournamentOutcome::Unscored { .. }) => self.unscored += 1,
+                None => self.faults += 1,
+            },
+            _ => self.pending += 1,
+        }
+    }
+    fn json(&self, a: u32, b: u32) -> Json {
+        object(
+            [
+                ("a", u64::from(a)),
+                ("b", u64::from(b)),
+                ("total", self.total),
+                ("a_wins", self.a_wins),
+                ("b_wins", self.b_wins),
+                ("draws", self.draws),
+                ("a_technical_wins", self.a_technical_wins),
+                ("b_technical_wins", self.b_technical_wins),
+                ("pending", self.pending),
+                ("faults", self.faults),
+                ("unscored", self.unscored),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key, Json::Int(value as i64)))
+            .collect(),
+        )
+    }
+}
+fn matchups(snapshot: &Snapshot) -> Json {
+    let mut pairs = BTreeMap::<(u32, u32), Matchup>::new();
+    for m in &snapshot.matches {
+        let a = m.item.a.min(m.item.b);
+        let b = m.item.a.max(m.item.b);
+        pairs.entry((a, b)).or_default().apply(m, a);
+    }
+    Json::Array(
+        pairs
+            .into_iter()
+            .map(|((a, b), pair)| pair.json(a, b))
+            .collect(),
+    )
 }
 fn decode(s: &str) -> Result<String, String> {
     if s.len() > 2048 {
@@ -336,5 +431,206 @@ impl Catalog {
             events: self.events.values().cloned().collect(),
             errors,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arena_core::types::MatchResult;
+    use arena_runner::tournament::{
+        exec_external::ExternalResult,
+        monitor::{AttemptState, AttemptView, Participant},
+        outcome::Stage,
+        schedule::TournamentItem,
+    };
+
+    fn attempt(state: AttemptState, outcome: Option<TournamentOutcome>) -> AttemptView {
+        AttemptView {
+            number: "0001".into(),
+            attempt_reason: None,
+            state,
+            error: None,
+            result: outcome.map(|outcome| ExternalResult {
+                outcome,
+                replay_rel: None,
+                sandbox_reports: vec![],
+                budget_exceeded: false,
+                connect_order_verified: true,
+                elapsed_ms: 0,
+            }),
+            finished_unix_ms: None,
+        }
+    }
+    fn normal(result: MatchResult) -> TournamentOutcome {
+        TournamentOutcome::Normal {
+            result,
+            score_enl: 0,
+            score_res: 0,
+            rounds_completed: 0,
+            final_state_hash: [0; 32],
+        }
+    }
+    fn item(index: u64, a: u32, b: u32, a_is_enl: bool, attempts: Vec<AttemptView>) -> MatchView {
+        MatchView {
+            item: TournamentItem {
+                index,
+                a,
+                b,
+                a_is_enl,
+                tag: String::new(),
+                j: 0,
+                map_index: 0,
+                map_seed: 0,
+                map_hash: String::new(),
+                game_seed: 0,
+                client_seed: 0,
+                schedule_seed: 0,
+                config_hash: 0,
+            },
+            attempts,
+        }
+    }
+    fn value(json: &Json, key: &str) -> i64 {
+        json.get(key).unwrap().as_int().unwrap()
+    }
+
+    #[test]
+    fn matrix_covers_all_pages_and_maps_faction_swaps_without_counting_old_attempts() {
+        let mut matches: Vec<_> = (0..55)
+            .map(|i| {
+                item(
+                    i,
+                    0,
+                    1,
+                    i % 2 == 0,
+                    vec![attempt(
+                        AttemptState::Completed,
+                        Some(normal(MatchResult::EnlWin)),
+                    )],
+                )
+            })
+            .collect();
+        // Latest attempt supersedes an earlier completed result, even while pending.
+        matches.push(item(
+            55,
+            0,
+            1,
+            true,
+            vec![
+                attempt(AttemptState::Completed, Some(normal(MatchResult::EnlWin))),
+                attempt(AttemptState::RecordedRunning, None),
+            ],
+        ));
+        matches.push(item(
+            56,
+            1,
+            0,
+            false,
+            vec![attempt(
+                AttemptState::Completed,
+                Some(normal(MatchResult::Draw)),
+            )],
+        ));
+        matches.push(item(
+            57,
+            0,
+            1,
+            true,
+            vec![attempt(
+                AttemptState::Completed,
+                Some(TournamentOutcome::TechnicalWin {
+                    winner: 1,
+                    stage: Stage::ClientForfeit,
+                    reason: String::new(),
+                }),
+            )],
+        ));
+        matches.push(item(
+            58,
+            0,
+            1,
+            true,
+            vec![attempt(
+                AttemptState::Completed,
+                Some(TournamentOutcome::Unscored {
+                    stage: Stage::SpawnForfeit,
+                    reason: String::new(),
+                }),
+            )],
+        ));
+        for (i, state) in [
+            AttemptState::Corrupt,
+            AttemptState::InfrastructureFault,
+            AttemptState::Interrupted,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            matches.push(item(59 + i as u64, 0, 1, true, vec![attempt(state, None)]));
+        }
+        matches.push(item(62, 0, 2, true, vec![]));
+        matches.push(item(63, 1, 2, false, vec![]));
+        let event = Event {
+            id: "test".into(),
+            label: "test".into(),
+            error: None,
+            reader: None,
+            snapshot: Some(Arc::new(Snapshot {
+                name: "test".into(),
+                identity: "test".into(),
+                scanned_unix_ms: 0,
+                entrants: (0..3)
+                    .map(|id| Participant {
+                        id,
+                        registered_id: id.to_string(),
+                        name: format!("Bot {id}"),
+                        version: None,
+                    })
+                    .collect(),
+                matches,
+                standings: vec![],
+            })),
+        };
+        let all = event.detail(&Query::parse("limit=50").unwrap());
+        assert_eq!(all.get("matches").unwrap().as_array().unwrap().len(), 50);
+        let pairs = all.get("matchups").unwrap().as_array().unwrap();
+        assert_eq!(pairs.len(), 3);
+        for (key, expected) in [
+            ("total", 62),
+            ("a_wins", 28),
+            ("b_wins", 27),
+            ("draws", 1),
+            ("b_technical_wins", 1),
+            ("a_technical_wins", 0),
+            ("pending", 1),
+            ("faults", 3),
+            ("unscored", 1),
+        ] {
+            assert_eq!(value(&pairs[0], key), expected, "{key}");
+        }
+        let page = event.detail(
+            &Query::parse("entrant=1&opponent=0&offset=50&limit=50&order=schedule").unwrap(),
+        );
+        assert_eq!(value(&page, "matched"), 62);
+        assert_eq!(page.get("matches").unwrap().as_array().unwrap().len(), 12);
+        assert_eq!(page.get("matchups"), all.get("matchups"));
+        let empty = event.detail(&Query::parse("entrant=2&opponent=0&state=completed").unwrap());
+        assert_eq!(value(&empty, "matched"), 0);
+        assert_eq!(empty.get("matchups"), all.get("matchups"));
+    }
+
+    #[test]
+    fn pair_query_rejects_invalid_or_identical_entrants() {
+        for query in [
+            "entrant=-1",
+            "opponent=bad",
+            "entrant=1&opponent=1",
+            "entrant=0&entrant=1",
+        ] {
+            assert!(Query::parse(query).is_err(), "{query}");
+        }
+        assert!(Query::parse("entrant=0&opponent=1").is_ok());
+        assert!(Query::parse("entrant=&opponent=").is_ok());
     }
 }

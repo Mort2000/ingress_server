@@ -55,7 +55,16 @@ viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets
 
 `--poll-ms` 默认 2000，范围 100–60000。后台每轮扫描结束后等待该间隔，浏览器赛事页每 2 秒查询；“立即刷新”只读取最新快照，不强制重放整个赛事。首次验证随档案规模增长，不承诺固定延迟。相同计划被重新写入时复核内容；同一路径的计划身份改变则拒绝继续采用，需要操作者重启监控确认。单个事件损坏不阻止其他事件显示；集合目录暂时不可读时保留旧快照并禁用下载。
 
-通过“赛事”按钮打开监控，“返回回放”退出。支持名称／注册 ID／版本、地图编号、状态和结果筛选，每页 50 场。最新完成排序使用第三批 resources 中的完成时间，旧 attempt 缺少时间时用赛程编号作为稳定后备，不伪造完成时间。排名总是整个赛事的已验证结果，不随筛选变化；分数按原始 `score2` 十进制整数展示。尝试记录可展开，历史结果不重复计分；无 IARP 的赛前失败显示无可用回放。
+通过“赛事”按钮打开监控，“返回回放”退出。监控分为两个 tab：
+
+- **赛事概览**：默认首屏，显示参赛人数、完成／未决／异常场次、暂定排名和 N×N 对决表。宽屏并排展示排名与对决表；窄屏纵向排列，表格内部滚动。
+- **比赛详情与回放**：显示筛选、分页比赛、尝试记录和回放入口。支持精确选手／对手、名称／注册 ID／版本、地图编号、状态和结果筛选，每页 50 场。输入内容在“应用筛选”后生效，轮询不会提交尚未确认的输入。
+
+对决格按行选手的视角显示普通胜／平／负，合并全部地图和双方阵营。多场结果使用按数量占比绘制的分段渐变底色与底部色带，同时提供文字数量和完整提示；技术胜／负单列。未决包含待执行、记录为运行中和发布中；异常包含基础设施故障、中断及损坏；已完成的无评分结果另列。对角线不可点击，没有排赛的组合显示“无赛程”。每个逻辑比赛只采用当前最新 attempt，与官方监控结果采用方式一致，历史结果不重复计数。
+
+点击有赛程的格子切换到详情 tab，清除先前筛选并设置精确选手／对手、回到第 1 页。两个方向的格子都查询该组合的全部比赛。tab 切换和回放往返保留已提交筛选与分页；换赛事时重置到概览。tab 支持方向键和 Home／End，后台轮询保留对决格及尝试记录的焦点。排名和对决汇总始终来自全赛事，不受列表筛选和分页影响，不通过前端抓取多页推算。
+
+最新完成排序使用第三批 resources 中的完成时间，旧 attempt 缺少时间时用赛程编号作为稳定后备，不伪造完成时间。分数按原始 `score2` 十进制整数展示。无 IARP 的赛前失败显示无可用回放。
 
 纯静态部署仍可手动打开 IARP，不必启动赛事后台。后台断开时已加载回放仍可查看、旧赛事列表保留；重新载入页面／Worker／WASM 仍需静态资源可访问，不承诺离线缓存整个应用。
 
@@ -68,10 +77,12 @@ viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets
 | 路径 | 返回 |
 |---|---|
 | `/api/events` | `arena-catalog-v1`：赛事摘要、扫描时间及目录级错误 |
-| `/api/events/<id>` | `arena-monitor-v1`：选手、计数、排名、分页比赛及 attempts；未就绪时只有定位与错误字段 |
+| `/api/events/<id>` | `arena-monitor-v1`：选手、计数、排名、全赛事 `matchups`、分页比赛及 attempts；未就绪时只有定位与错误字段 |
 | `/api/events/<id>/matches/<index>/attempts/<number>/replay` | 已提交且验证通过的原始 IARP 字节 |
 
-详情查询参数：`offset`（默认 0）、`limit`（默认 50，1–200）、`q`（名称／ID／版本子串）、`map`（地图编号）、`state`、`outcome`、`order=latest|schedule`。空筛选代表全部，重复和未知参数拒绝。状态为 pending、recorded_running、publishing、completed、infrastructure_fault、interrupted、corrupt；liveness 始终为 unknown，不获取执行锁来推断存活。
+详情查询参数：`offset`（默认 0）、`limit`（默认 50，1–200）、`q`（名称／ID／版本子串）、`entrant`／`opponent`（非负选手编号，均匹配任一阵营，同时提供则限定该组合，二者相同返回 400）、`map`（地图编号）、`state`、`outcome`、`order=latest|schedule`。空筛选代表全部，重复和未知参数拒绝。状态为 pending、recorded_running、publishing、completed、infrastructure_fault、interrupted、corrupt；liveness 始终为 unknown，不获取执行锁来推断存活。
+
+`matchups` 是按 `a < b` 排序的稀疏组合数组，只包含有赛程的组合。每项包含 `a`、`b`、`total`、`a_wins`、`b_wins`、`draws`、`a_technical_wins`、`b_technical_wins`、`pending`、`faults`、`unscored`，八个结果计数之和等于 `total`。普通胜者复用官方 `normal_winner` 的阵营映射；不会重新比较比分或改变 Elo。该扩展由 viewer host 从完整的官方类型化快照生成，无需下载回放。更新前端时需同步构建并重启 host；旧后台缺少汇总时前端明确提示，不将当前页伪装为全赛事。
 
 后台使用一个串行扫描线程和 8 个固定 HTTP worker；请求头至多 16 KiB／64 个字段，读取请求头总期限 5 秒，写响应总期限 15 秒，一次连接只处理一个请求。单文件上限 512 MiB，其中 attempt 的 state／reason.txt 文本进一步限制为 64 KiB；归档树限制深度与条目数，临时目录也接受检查。这是局部防御上限，不是进程 RSS／CPU 配额。首次归档验证和磁盘读取不受网络写超时强制中断，后台不提供实时性能 SLA。
 

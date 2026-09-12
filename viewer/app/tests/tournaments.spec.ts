@@ -74,15 +74,23 @@ test("independent host discovers results, filters versions and opens verified re
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(url);
     await expect(page.locator("#tournament-panel")).toBeVisible();
+    await expect(
+      page.getByRole("tab", { name: "赛事概览", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#panel-matches")).toBeHidden();
     await expect(page.locator("#event-progress")).toContainText("0 / 2");
     await expect(page.locator("#match-list")).toContainText("星际 <A>");
     await exec(runner, ["resume", "--out", event]);
     await expect(page.locator("#event-progress")).toContainText("2 / 2");
+    await expect(page.locator("#event-standings")).toContainText("暂定排名");
+    await expect(page.locator('[data-pair="0:1"]')).toContainText("0 / 2 / 0");
+    await page.locator('[data-pair="0:1"]').click();
+    await expect(page.getByLabel("对决选手", { exact: true })).toHaveValue("0");
+    await expect(page.getByLabel("对决对手", { exact: true })).toHaveValue("1");
     await page.getByLabel("选手或版本").fill("v2");
     await page.getByLabel("结果筛选").selectOption("draw");
     await page.getByRole("button", { name: "应用筛选" }).click();
     await expect(page.locator("#match-list .match-row")).toHaveCount(2);
-    await expect(page.locator("#event-standings")).toContainText("暂定排名");
     await page
       .locator("#match-list")
       .getByRole("button", { name: "打开回放", exact: true })

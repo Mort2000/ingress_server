@@ -10,6 +10,7 @@
 - **正式回放工具已就绪**：[Tactical Replay](../viewer/app/README.md) 在浏览器本地打开 `.iarp`，完整验证后展示逐轮状态、库存、轨迹和命令结果。
 - **Viewer 独立赛事监控已交付**：独立只读后台提供同源页面、进度、最新结果、暂定排名、名称／版本筛选及历史 replay；通过增量扫描官方归档与 runner 解耦，不提供运行控制，文件中 running 不代表进程存活。静态手动文件模式保留。见 [使用与规范](spec/viewer-tournaments.md)、[验收与边界](reports/viewer-tournaments.md)。
 - **四参数 Development 复核已完成**：综合 Astra 策略自博弈、抽样回放与外部对照，建议暂保留 20 HP 充电／20 HP 攻击／1500 m 链距／200 m 移动。15 HP 维修保留为候选方向，其结论受连续维修与协同策略能力限制；见 [实验报告](../../reports/astra-selfplay-balance-20260911/README.md)。
+- **6000 m Link 已形成首轮适配结果**：六个现有 Bot 保留策略，完成单图、共同参考对手的 20 场规则配对（18 场正常、2 场技术判负）。Sol 份额提高，Astra 保持优势，GLM／Kimi 下降；DeepSeek 的 6000 m 运行失败在补充三图换边中重复。仅为 Development 简单回归，不改变正式 1500 m 默认值；见[首轮报告](../../reports/long-link-6000-20260912/first-pass.md)，三图全对阵 180 场的进度与最终结果见[实验首页](../../reports/long-link-6000-20260912/README.md)。
 - **基础工程三批已交付**：第一批提供可信执行、恢复补赛、日志与回放身份；第二批补齐地图集、声明式赛事、冻结构建与版本对照；第三批提供 SDK 回执／计时、共享策略适配、从开局恢复的离线场景与 trace、动态领取及合作运行器本机资源池。见 [第一批说明](spec/iteration-batch-1.md)、[第二批说明](spec/iteration-batch-2.md)、[第三批说明](spec/iteration-batch-3.md)、[第三批验收](reports/iteration-batch-3.md)。离线复现及资源准入的适用边界已明确，cgroup 限制未消除；继续调参不作为本阶段主线。
 
 ## 关键里程碑

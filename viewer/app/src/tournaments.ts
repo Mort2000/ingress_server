@@ -1,6 +1,7 @@
 import "./tournaments.css";
+import { TournamentOverview } from "./tournament-overview";
 
-interface Entrant {
+export interface Entrant {
   id: number;
   registered_id: string;
   name: string;
@@ -57,7 +58,20 @@ interface Standing {
   forfeit_losses: number;
   unscored: number;
 }
-interface Event extends Summary {
+export interface Matchup {
+  a: number;
+  b: number;
+  total: number;
+  a_wins: number;
+  b_wins: number;
+  draws: number;
+  a_technical_wins: number;
+  b_technical_wins: number;
+  pending: number;
+  faults: number;
+  unscored: number;
+}
+export interface Event extends Summary {
   schema?: string;
   scanned_unix_ms: number;
   counts: Record<string, number>;
@@ -67,6 +81,7 @@ interface Event extends Summary {
   matched: number;
   offset: number;
   limit: number;
+  matchups?: Matchup[];
 }
 const states: Record<string, string> = {
   pending: "待执行",
@@ -109,6 +124,9 @@ export class TournamentPanel {
   private offset = 0;
   private data?: Event;
   private expanded = new Set<number>();
+  private overview: TournamentOverview;
+  private filters = new URLSearchParams();
+  private rowsSignature = "";
 
   constructor(
     private openReplay: (file: File) => void,
@@ -127,7 +145,16 @@ export class TournamentPanel {
       <p id="tournament-status" role="status" aria-live="polite">尚未连接</p>
       <div class="tournament-tools"><label>赛事 <select id="event-select" aria-label="赛事选择"></select></label><button class="btn" id="refresh-tournaments">立即刷新</button></div>
       <p id="event-progress"></p><p id="event-warning"></p>
+      <nav class="tournament-tabs" role="tablist" aria-label="赛事视图">
+        <button id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true">赛事概览</button>
+        <button id="tab-matches" role="tab" aria-controls="panel-matches" aria-selected="false" tabindex="-1">比赛详情与回放</button>
+      </nav>
+      <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview"></section>
+      <section id="panel-matches" role="tabpanel" aria-labelledby="tab-matches" hidden>
+      <h2>比赛详情与回放</h2>
       <form id="event-filters" class="tournament-tools">
+        <label>选手<select id="event-entrant" aria-label="对决选手"><option value="">全部选手</option></select></label>
+        <label>对手<select id="event-opponent" aria-label="对决对手"><option value="">全部对手</option></select></label>
         <label>选手或版本<input id="event-search" aria-label="选手或版本" maxlength="256" placeholder="名称、注册 ID、版本"></label>
         <label>地图<input id="event-map" aria-label="地图编号" type="number" min="0" placeholder="全部"></label>
         <label>状态<select id="event-state" aria-label="状态筛选"><option value="">全部</option>${Object.entries(
@@ -142,25 +169,59 @@ export class TournamentPanel {
           .join("")}</select></label>
         <label>排序<select id="event-order" aria-label="比赛排序"><option value="latest">最新完成优先</option><option value="schedule">冻结赛程顺序</option></select></label>
         <button class="btn" type="submit">应用筛选</button>
+        <button class="btn" type="button" id="clear-event-filters">清除筛选</button>
       </form>
+      <p id="active-match-filter" class="tournament-note" aria-live="polite"></p>
       <div id="match-list"></div>
       <nav class="tournament-tools"><button class="btn" id="matches-prev">上一页</button><span id="matches-page"></span><button class="btn" id="matches-next">下一页</button></nav>
-      <section id="event-standings"></section>
+      </section>
       <p class="tournament-note">后台只读归档，不启动／恢复／补赛。运行标记不证明进程存活；回放包含双方赛后私有信息，不是参赛程序可使用的输入。</p>`;
     document.body.append(this.panel);
+    $<HTMLButtonElement>("matches-prev").disabled = true;
+    $<HTMLButtonElement>("matches-next").disabled = true;
+    this.overview = new TournamentOverview($("panel-overview"), (a, b) => {
+      $<HTMLFormElement>("event-filters").reset();
+      $<HTMLSelectElement>("event-entrant").value = String(a);
+      $<HTMLSelectElement>("event-opponent").value = String(b);
+      this.setTab("matches", true);
+      this.applyFilters();
+    });
+    const tabs = ["overview", "matches"] as const;
+    for (const [index, tab] of tabs.entries()) {
+      $(`tab-${tab}`).onclick = () => this.setTab(tab);
+      $(`tab-${tab}`).onkeydown = (e) => {
+        let next: number;
+        if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = tabs.length - 1;
+        else if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
+        else if (e.key === "ArrowLeft")
+          next = (index + tabs.length - 1) % tabs.length;
+        else return;
+        e.preventDefault();
+        this.setTab(tabs[next], true);
+      };
+    }
     $("close-tournaments").onclick = () => this.close();
     $("refresh-tournaments").onclick = () => void this.refresh(true);
     $("event-select").onchange = () => {
       this.selected = $<HTMLSelectElement>("event-select").value;
       this.offset = 0;
       this.expanded.clear();
+      this.filters = new URLSearchParams();
+      $<HTMLFormElement>("event-filters").reset();
+      this.setTab("overview");
       this.clear();
       void this.refresh(true);
     };
     $("event-filters").onsubmit = (e) => {
       e.preventDefault();
-      this.offset = 0;
-      void this.refresh(true);
+      this.applyFilters();
+    };
+    $("event-filters").oninput = () =>
+      $<HTMLSelectElement>("event-opponent").setCustomValidity("");
+    $("clear-event-filters").onclick = () => {
+      $<HTMLFormElement>("event-filters").reset();
+      this.applyFilters();
     };
     $("matches-prev").onclick = () => {
       this.offset = Math.max(0, this.offset - 50);
@@ -182,6 +243,50 @@ export class TournamentPanel {
       if (this.readAuthorization()) this.show();
     });
   }
+  private setTab(tab: "overview" | "matches", focus = false) {
+    for (const name of ["overview", "matches"]) {
+      const selected = name === tab;
+      $(`tab-${name}`).setAttribute("aria-selected", String(selected));
+      $(`tab-${name}`).tabIndex = selected ? 0 : -1;
+      $(`panel-${name}`).hidden = !selected;
+    }
+    if (focus) $(`tab-${tab}`).focus();
+  }
+  private applyFilters() {
+    const entrant = $<HTMLSelectElement>("event-entrant").value;
+    const opponent = $<HTMLSelectElement>("event-opponent");
+    opponent.setCustomValidity(
+      entrant && entrant === opponent.value ? "请选择不同的对手" : "",
+    );
+    if (!$<HTMLFormElement>("event-filters").reportValidity()) return;
+    this.filters = new URLSearchParams();
+    for (const [key, id] of [
+      ["entrant", "event-entrant"],
+      ["opponent", "event-opponent"],
+      ["q", "event-search"],
+      ["map", "event-map"],
+      ["state", "event-state"],
+      ["outcome", "event-outcome"],
+      ["order", "event-order"],
+    ])
+      this.filters.set(key, $<HTMLInputElement>(id).value);
+    this.offset = 0;
+    this.rowsSignature = "";
+    this.expanded.clear();
+    $("match-list").replaceChildren(
+      element("p", "正在查询比赛…", "tournament-note"),
+    );
+    this.updateFilterLabel();
+    void this.refresh(true);
+  }
+  private updateFilterLabel() {
+    const a = this.filters.get("entrant"),
+      b = this.filters.get("opponent");
+    $("active-match-filter").textContent =
+      a || b
+        ? `当前对决：${a ? this.participant(Number(a)) : "全部选手"} ↔ ${b ? this.participant(Number(b)) : "全部对手"}（包含双方阵营）`
+        : "全部对决 · 可从赛事概览的对决表点击进入";
+  }
   private readAuthorization() {
     const raw = new URLSearchParams(location.hash.slice(1)).get("token");
     const token = raw && /^[a-f0-9]{32}$/.test(raw) ? raw : null;
@@ -201,10 +306,16 @@ export class TournamentPanel {
   show() {
     this.pauseReplay();
     this.panel.hidden = false;
+    $("app").inert = true;
+    this.panel
+      .querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus();
     void this.refresh(true);
   }
   close() {
     this.panel.hidden = true;
+    $("app").inert = false;
+    $("open-tournaments").focus({ preventScroll: true });
     this.generation++;
     this.refreshRequest?.abort();
     this.refreshRequest = undefined;
@@ -212,12 +323,24 @@ export class TournamentPanel {
   }
   private clear() {
     this.data = undefined;
+    this.rowsSignature = "";
+    this.overview.clear();
+    for (const id of ["event-entrant", "event-opponent"]) {
+      const option = element(
+        "option",
+        id === "event-entrant" ? "全部选手" : "全部对手",
+      );
+      option.value = "";
+      $(id).replaceChildren(option);
+    }
+    $<HTMLButtonElement>("matches-prev").disabled = true;
+    $<HTMLButtonElement>("matches-next").disabled = true;
     for (const id of [
       "event-progress",
       "event-warning",
       "match-list",
       "matches-page",
-      "event-standings",
+      "active-match-filter",
     ])
       $(id).replaceChildren();
   }
@@ -270,22 +393,17 @@ export class TournamentPanel {
       if (!catalog.events.some((e) => e.id === this.selected)) {
         this.selected = catalog.events[0]?.id || "";
         this.offset = 0;
+        this.expanded.clear();
+        this.filters = new URLSearchParams();
+        $<HTMLFormElement>("event-filters").reset();
+        this.setTab("overview");
         this.clear();
       }
       select.value = this.selected;
       if (this.selected) {
-        const query = new URLSearchParams({
-          offset: String(this.offset),
-          limit: "50",
-        });
-        for (const [key, id] of [
-          ["q", "event-search"],
-          ["map", "event-map"],
-          ["state", "event-state"],
-          ["outcome", "event-outcome"],
-          ["order", "event-order"],
-        ])
-          query.set(key, $<HTMLInputElement>(id).value);
+        const query = new URLSearchParams(this.filters);
+        query.set("offset", String(this.offset));
+        query.set("limit", "50");
         const data: Event = await (
           await this.fetch(
             `./api/events/${this.selected}?${query}`,
@@ -320,7 +438,45 @@ export class TournamentPanel {
     $("event-warning").textContent = data.error
       ? `归档不可用；以下可能是旧快照，回放入口已停用：${data.error}`
       : "";
-    if (!data.matches) return;
+    if (!data.matches) {
+      this.clear();
+      $("event-warning").textContent =
+        `赛事归档尚未就绪：${data.error || "没有可用快照"}`;
+      return;
+    }
+    this.overview.render(data);
+    for (const id of ["event-entrant", "event-opponent"]) {
+      const select = $<HTMLSelectElement>(id);
+      const entries = data.entrants.map((e) => ({
+        value: String(e.id),
+        label: `#${e.id} ${this.participant(e.id)}`,
+      }));
+      if (
+        select.options.length !== entries.length + 1 ||
+        entries.some(
+          (e, i) =>
+            select.options[i + 1]?.value !== e.value ||
+            select.options[i + 1]?.text !== e.label,
+        )
+      ) {
+        const value = select.value;
+        const all = element(
+          "option",
+          id === "event-entrant" ? "全部选手" : "全部对手",
+        );
+        all.value = "";
+        select.replaceChildren(
+          all,
+          ...entries.map((e) => {
+            const option = element("option", e.label);
+            option.value = e.value;
+            return option;
+          }),
+        );
+        select.value = entries.some((e) => e.value === value) ? value : "";
+      }
+    }
+    this.updateFilterLabel();
     $("event-progress").textContent = [
       `已完成 ${data.completed} / ${data.total}`,
       ...Object.entries(data.counts)
@@ -328,6 +484,19 @@ export class TournamentPanel {
         .map(([s, n]) => `${states[s] || s} ${n}`),
       `归档扫描 ${new Date(data.scanned_unix_ms).toLocaleTimeString()}`,
     ].join(" · ");
+    const signature = JSON.stringify([
+      data.matches,
+      data.entrants,
+      data.error,
+      data.matched,
+      data.offset,
+    ]);
+    if (signature === this.rowsSignature) return;
+    this.rowsSignature = signature;
+    const focused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement.dataset.matchFocus
+        : undefined;
     const rows = data.matches.map((m) => {
       const row = element("article", "", "match-row");
       row.append(element("h3", `M${m.index} · 地图 ${m.map}`));
@@ -359,7 +528,9 @@ export class TournamentPanel {
       if (m.attempts.length) {
         const history = element("details");
         history.open = this.expanded.has(m.index);
-        history.append(element("summary", `尝试记录（${m.attempts.length}）`));
+        const summary = element("summary", `尝试记录（${m.attempts.length}）`);
+        summary.dataset.matchFocus = `history-${m.index}`;
+        history.append(summary);
         for (const a of m.attempts) {
           const info = element("div", "", "attempt-row");
           info.append(
@@ -388,47 +559,18 @@ export class TournamentPanel {
         ? rows
         : [element("p", "没有符合筛选条件的比赛。", "tournament-note")]),
     );
+    if (focused) {
+      for (const node of $("match-list").querySelectorAll<HTMLElement>(
+        "[data-match-focus]",
+      ))
+        if (node.dataset.matchFocus === focused)
+          node.focus({ preventScroll: true });
+    }
     $("matches-page").textContent =
       `${data.matched} 场匹配 · 第 ${Math.floor(this.offset / 50) + 1} 页`;
     $<HTMLButtonElement>("matches-prev").disabled = this.offset === 0;
     $<HTMLButtonElement>("matches-next").disabled =
       this.offset + 50 >= data.matched;
-    const ranking = element("table");
-    const head = element("tr");
-    for (const title of [
-      "名次",
-      "选手 / 版本",
-      "Elo",
-      "胜 / 平 / 负",
-      "技术胜 / 负",
-      "无评分",
-    ])
-      head.append(element("th", title));
-    ranking.append(head);
-    for (const s of data.standings) {
-      const row = element("tr");
-      for (const value of [
-        s.rank,
-        this.participant(s.entrant),
-        s.rating,
-        `${s.wins} / ${s.draws} / ${s.losses}`,
-        `${s.forfeit_wins} / ${s.forfeit_losses}`,
-        s.unscored,
-      ])
-        row.append(element("td", String(value)));
-      ranking.append(row);
-    }
-    const wrap = element("div", "", "standings-scroll");
-    wrap.append(ranking);
-    $("event-standings").replaceChildren(
-      element("h2", "暂定排名"),
-      element(
-        "p",
-        "全赛事已验证结果，按冻结赛程顺序计算；不随列表筛选改变。技术结果不计入正常胜平负及 Elo。",
-        "tournament-note",
-      ),
-      wrap,
-    );
   }
   private result(a: Attempt) {
     const parts = [
@@ -448,6 +590,7 @@ export class TournamentPanel {
   }
   private replayButton(m: Match, a: Attempt, title: string) {
     const button = element("button", title, "btn");
+    button.dataset.matchFocus = `replay-${m.index}-${a.number}-${title}`;
     const event = this.selected;
     button.onclick = async () => {
       this.replayRequest?.abort();

@@ -81,7 +81,23 @@ body::before {
   z-index: 1;
   height: 100vh;
   display: grid;
-  grid-template-rows: 58px minmax(0, 1fr) 118px;
+  grid-template-areas: "header" "identity" "status" "stage" "chrono";
+  grid-template-rows: minmax(80px, auto) auto auto minmax(0, 1fr) 118px;
+}
+#topbar {
+  grid-area: header;
+}
+#identity-details {
+  grid-area: identity;
+}
+#load-status {
+  grid-area: status;
+}
+#stage {
+  grid-area: stage;
+}
+#chrono {
+  grid-area: chrono;
 }
 
 /* ---------- generic HUD pieces ---------- */
@@ -1045,9 +1061,6 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
-#app {
-  grid-template-rows: 64px auto minmax(0, 1fr) 118px;
-}
 #load-status {
   padding: 7px 16px;
   background: #0c1925;
@@ -1058,9 +1071,6 @@ button:disabled {
 #load-status.error {
   color: var(--red);
   background: #23121c;
-}
-#app:has(#load-status[hidden]) {
-  grid-template-rows: 64px minmax(0, 1fr) 118px;
 }
 #brand .t1 {
   font-size: 13px;
@@ -1374,8 +1384,7 @@ button[aria-pressed="true"] {
     min-height: 100%;
     overflow: auto;
   }
-  #app,
-  #app:has(#load-status[hidden]) {
+  #app {
     height: auto;
     min-height: 100vh;
     display: flex;

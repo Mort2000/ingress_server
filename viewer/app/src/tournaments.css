@@ -4,7 +4,7 @@
   z-index: 50;
   overflow-y: auto;
   background: var(--bg);
-  padding: 24px max(20px, calc((100vw - 1280px) / 2));
+  padding: 20px max(24px, calc((100vw - 1560px) / 2));
 }
 #tournament-panel[hidden] {
   display: none;
@@ -15,7 +15,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 .tournament-heading {
   justify-content: space-between;
@@ -29,7 +29,7 @@
 }
 #tournament-status {
   color: var(--acc);
-  margin-bottom: 18px;
+  margin-bottom: 12px;
   overflow-wrap: anywhere;
 }
 #event-progress {
@@ -121,5 +121,299 @@
   }
   #event-filters label {
     flex: 1 1 130px;
+  }
+}
+
+#tournament-panel {
+  --match-win: #278a62;
+  --match-loss: #b34d66;
+  --match-draw: #388dc1;
+  --match-pending: #596a7f;
+  --match-fault: #bc8737;
+  --match-unscored: #8762ab;
+}
+.tournament-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--line2);
+  margin: 16px 0;
+}
+.tournament-tabs [role="tab"] {
+  color: #a4b8cb;
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 14px 20px;
+  font: 600 14px var(--fu);
+  cursor: pointer;
+}
+.tournament-tabs [aria-selected="true"] {
+  color: var(--acc);
+  border-bottom-color: var(--acc);
+  background: var(--acc-dim);
+}
+#tournament-panel [role="tabpanel"][hidden] {
+  display: none;
+}
+#tournament-panel :focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+.event-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.event-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  min-width: 0;
+}
+.event-metric > span {
+  color: #a4b8cb;
+  font-size: 12px;
+}
+.event-metric strong {
+  font: 600 26px var(--fm);
+  color: #e6f4ff;
+}
+.event-metric small,
+.ranking-version {
+  color: #a4b8cb;
+  font-weight: normal;
+}
+.ranking-name,
+.ranking-version {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.ranking-name {
+  max-width: 380px;
+}
+#event-standings th,
+#event-standings td {
+  padding: 10px;
+}
+#event-standings thead {
+  background: #102031;
+  color: #a7c5dc;
+}
+#event-standings tbody tr:nth-child(even) {
+  background: #0c1723;
+}
+#event-standings td {
+  white-space: nowrap;
+  font-family: var(--fm);
+}
+.rank-number {
+  color: var(--acc);
+}
+.matchup-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 16px 0;
+  font-size: 12px;
+}
+.matchup-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.matchup-legend span::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--status-color);
+}
+.matchup-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  border: 1px solid var(--line2);
+  background: #080f1b;
+}
+.matchup-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12px;
+}
+.matchup-table caption {
+  text-align: left;
+  padding: 10px 14px;
+  color: #a4b8cb;
+}
+.matchup-table th,
+.matchup-table td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 5px;
+  text-align: center;
+}
+.matchup-table th {
+  background: #102031;
+}
+.matchup-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.matchup-table th[scope="row"],
+.matchup-corner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+.matchup-table thead .matchup-corner {
+  z-index: 3;
+}
+.matchup-heading {
+  min-width: 138px;
+  width: 160px;
+  max-width: 180px;
+}
+.matchup-heading span,
+.matchup-heading small {
+  display: block;
+  max-width: 166px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin: 3px auto;
+}
+.matchup-heading small {
+  color: #a4b8cb;
+  font-weight: normal;
+}
+.matchup-cell {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  isolation: isolate;
+  width: 100%;
+  min-width: 104px;
+  min-height: 78px;
+  padding: 12px 8px;
+  cursor: pointer;
+  border: 1px solid #ffffff25;
+  border-radius: 4px;
+  color: #e9f3ff;
+  background: #0b1623;
+}
+.matchup-cell::before,
+.matchup-cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--match-gradient);
+  pointer-events: none;
+  z-index: -1;
+}
+.matchup-cell::before {
+  opacity: 0.22;
+}
+.matchup-cell::after {
+  top: auto;
+  height: 5px;
+}
+.matchup-cell strong {
+  font: 600 16px var(--fm);
+}
+.matchup-cell small {
+  font-size: 11px;
+}
+.matchup-cell:hover {
+  border-color: var(--acc);
+}
+.matchup-cell:hover::before {
+  opacity: 0.38;
+}
+.matchup-extra {
+  max-width: 155px;
+  line-height: 1.4;
+}
+.matchup-self,
+.matchup-empty {
+  color: #8c9fb3;
+  background: #0c1520;
+}
+#event-entrant,
+#event-opponent {
+  width: 250px;
+}
+@media (max-width: 650px) {
+  .event-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .event-metric {
+    padding: 12px;
+  }
+  .event-metric strong {
+    font-size: 21px;
+  }
+  .tournament-tabs [role="tab"] {
+    flex: 1;
+    padding: 12px 8px;
+    font-size: 13px;
+  }
+  .matchup-heading {
+    min-width: 110px;
+    max-width: 120px;
+  }
+  .matchup-heading span,
+  .matchup-heading small {
+    max-width: 110px;
+  }
+  #event-select {
+    width: 100%;
+  }
+  #event-filters select,
+  #event-filters input {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* Keep rankings and the matrix together on the desktop overview. */
+.overview-tables {
+  display: grid;
+  gap: 24px;
+}
+.overview-tables > section {
+  min-width: 0;
+}
+#event-standings table {
+  min-width: 560px;
+}
+#event-standings th,
+#event-standings td {
+  padding: 10px;
+}
+#event-standings thead th {
+  white-space: nowrap;
+}
+#event-standings th[scope="row"] {
+  min-width: 145px;
+}
+@media (min-width: 1200px) {
+  .overview-tables {
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  }
+  .matchup-heading {
+    min-width: 110px;
+    max-width: 130px;
+  }
+  .matchup-heading span,
+  .matchup-heading small {
+    max-width: 120px;
   }
 }

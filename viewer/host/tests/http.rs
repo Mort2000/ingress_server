@@ -194,6 +194,21 @@ fn serves_same_origin_page_and_discovers_a_plan_created_after_startup() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert_eq!(page.get("matched").unwrap().as_int(), Some(2));
+    let pairs = page.get("matchups").unwrap().as_array().unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].get("total").unwrap().as_int(), Some(2));
+    assert_eq!(pairs[0].get("draws").unwrap().as_int(), Some(2));
+    let filtered = get(
+        &addr,
+        &format!("/api/events/{id}?entrant=1&opponent=0&limit=1"),
+        &token,
+    );
+    let filtered = arena_runner::tournament::archive::parse_json(
+        std::str::from_utf8(body(&filtered)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(filtered.get("matched").unwrap().as_int(), Some(2));
+    assert_eq!(filtered.get("matchups"), page.get("matchups"));
     let matches = page.get("matches").unwrap().as_array().unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].get("index").unwrap().as_int(), Some(1));
@@ -217,6 +232,9 @@ fn serves_same_origin_page_and_discovers_a_plan_created_after_startup() {
         "offset=bad",
         "limit=1&limit=2",
         "q=%ZZ",
+        "entrant=-1",
+        "opponent=invalid",
+        "entrant=0&opponent=0",
     ] {
         assert!(
             get(&addr, &format!("/api/events/{id}?{query}"), &token).starts_with(b"HTTP/1.1 400")

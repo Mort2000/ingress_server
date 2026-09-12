@@ -316,7 +316,7 @@ document.addEventListener("keydown", (e) => {
   if (
     tournaments?.visible ||
     (e.target as HTMLElement).closest(
-      'input,select,textarea,button,[contenteditable="true"]',
+      'input,select,textarea,button,summary,[contenteditable="true"]',
     ) ||
     e.altKey ||
     e.ctrlKey ||

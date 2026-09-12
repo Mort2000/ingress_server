@@ -16,6 +16,73 @@ async function seek(page: Page, round: number) {
   await expect(page.locator("#seek")).toHaveValue(String(round));
 }
 
+test("desktop HUD keeps the map and identity within their layout rows", async ({
+  page,
+}) => {
+  const checkLayout = async (expanded = false) => {
+    const header = (await page.locator("#topbar").boundingBox())!;
+    const details = (await page.locator("#identity-details").boundingBox())!;
+    const stage = (await page.locator("#stage").boundingBox())!;
+    const transport = (await page.locator("#chrono").boundingBox())!;
+    expect(stage.height).toBeGreaterThan(expanded ? 200 : 450);
+    if (!expanded) expect(details.height).toBeLessThan(40);
+    expect(stage.y).toBeGreaterThanOrEqual(details.y + details.height);
+    expect(stage.y + stage.height).toBeCloseTo(transport.y, 0);
+    expect(transport.y + transport.height).toBeLessThanOrEqual(900);
+    for (const selector of [
+      ".fname",
+      ".participant-name",
+      ".participant-version",
+      ".fval",
+    ]) {
+      for (const label of await page.locator(`#versus ${selector}`).all()) {
+        const box = (await label.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(header.y);
+        expect(box.y + box.height).toBeLessThanOrEqual(
+          header.y + header.height,
+        );
+      }
+    }
+  };
+  await page.goto("/");
+  await checkLayout();
+  await page
+    .locator("#file-input")
+    .setInputFiles(resolve(fixtures, "identity.iarp"));
+  await expect(page.locator("#verified")).toHaveText("✓ VERIFIED");
+  await checkLayout();
+  await page.locator("#identity-details summary").click();
+  await checkLayout(true);
+  await page.locator("#identity-details summary").click();
+  await page.locator("#file-input").setInputFiles({
+    name: "broken.iarp",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("IARP invalid"),
+  });
+  await expect(page.locator("#load-status")).toContainText("无法打开回放");
+  await checkLayout();
+});
+
+test("identity disclosure keeps native keyboard behavior without controlling playback", async ({
+  page,
+}) => {
+  await open(page);
+  const summary = page.locator("#identity-details summary");
+  await summary.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("#identity-details")).toHaveAttribute("open", "");
+  await expect(page.locator("#btn-play")).toHaveAttribute("aria-label", "播放");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#seek")).toHaveValue("0");
+  await page.keyboard.press("Space");
+  await expect(page.locator("#identity-details")).not.toHaveAttribute("open");
+  await page.locator("#map").focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("#btn-play")).toHaveAttribute("aria-label", "暂停");
+  await page.keyboard.press("Space");
+  await expect(page.locator("#btn-play")).toHaveAttribute("aria-label", "播放");
+});
+
 test("standalone replay identity keeps versions and sources distinct and resets for old files", async ({
   page,
 }) => {
