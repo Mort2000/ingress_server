@@ -386,7 +386,11 @@ fn artifact_manifest(dir: &Path, current: &Path, out: &mut String, sync: bool) -
                 .map_err(invalid)?
                 .to_str()
                 .ok_or_else(|| invalid("artifact name"))?;
-            if matches!(relative, "artifacts" | "state") || relative.ends_with(".tmp") {
+            // Supervisor diagnostics may be written after the artifact commit
+            // point (e.g. state/adoption fsync failed). They are not evidence.
+            if matches!(relative, "artifacts" | "state" | "storage-error.txt")
+                || relative.ends_with(".tmp")
+            {
                 continue;
             }
             if sync {

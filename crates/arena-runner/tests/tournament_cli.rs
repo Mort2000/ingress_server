@@ -161,6 +161,11 @@ fn completed_matches_are_reused_and_retry_cannot_select_a_game_result() {
         // Crash after the artifact commit point, before the state marker.
         std::fs::remove_file(out.join("matches/m0/attempts/0001/state")).unwrap();
         std::fs::write(out.join("matches/m1/attempts/0001/state"), "running").unwrap();
+        std::fs::write(
+            out.join("matches/m1/attempts/0001/storage-error.txt"),
+            "simulated post-commit state write failure",
+        )
+        .unwrap();
         let result = Command::new(binary)
             .args([verb, "--out"])
             .arg(&out)
@@ -186,6 +191,25 @@ fn completed_matches_are_reused_and_retry_cannot_select_a_game_result() {
         .output()
         .unwrap();
     assert!(!retry.status.success());
+    let replay = out.join("matches/m0/attempts/0001/server/replay.iarp");
+    let mut corrupt = std::fs::read(&replay).unwrap();
+    corrupt[0] ^= 1;
+    std::fs::write(&replay, corrupt).unwrap();
+    let resume = Command::new(binary)
+        .args(["resume", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        !resume.status.success(),
+        "corrupt evidence must not be reused or silently rerun"
+    );
+    assert_eq!(
+        std::fs::read_dir(out.join("matches/m0/attempts"))
+            .unwrap()
+            .count(),
+        1
+    );
     std::fs::remove_dir_all(out).unwrap();
 }
 
@@ -378,6 +402,15 @@ fn interrupted_batch_reuses_completed_items_and_preserves_attempt_history() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let first = std::fs::read(out.join("matches/m0/attempts/0001/artifacts")).unwrap();
+    let competing = Command::new(binary)
+        .args(["resume", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        !competing.status.success(),
+        "a second supervisor must not own this archive"
+    );
     child.kill().unwrap();
     child.wait().unwrap();
     let status = Command::new(binary)
