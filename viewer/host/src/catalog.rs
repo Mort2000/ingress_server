@@ -590,6 +590,8 @@ mod tests {
                     .collect(),
                 matches,
                 standings: vec![],
+                provisional: true,
+                rating_method: "online_elo_v1",
             })),
         };
         let all = event.detail(&Query::parse("limit=50").unwrap());

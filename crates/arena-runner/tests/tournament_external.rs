@@ -431,11 +431,25 @@ fn external_tournament_gate_r1_shape_completes_and_ranks() {
     // ordered rating desc.
     let standings = std::fs::read_to_string(root.join("standings.txt")).unwrap();
     assert!(standings.starts_with("# arena-runner tournament standings: gate-r1"));
+    assert!(standings.contains("method=batch_elo_v1 status=final"));
+    let final_table = arena_runner::tournament::elo::EloTable::for_standings(
+        &cfg.elo,
+        cfg.entrants.len(),
+        run.items.len(),
+        run.items.iter().zip(&run.outcomes),
+    )
+    .unwrap();
     let mut ratings: Vec<i64> = Vec::new();
     for line in standings.lines().skip(5) {
         let columns: Vec<&str> = line.split('\t').collect();
         if columns.len() >= 3 {
             if let Ok(rating) = columns[2].parse::<i64>() {
+                let id = cfg
+                    .entrants
+                    .iter()
+                    .position(|e| e.name == columns[1])
+                    .unwrap();
+                assert_eq!(rating, final_table.rating(id as u32));
                 ratings.push(rating);
             }
         }
@@ -449,7 +463,7 @@ fn external_tournament_gate_r1_shape_completes_and_ranks() {
     let ratings_rows =
         parse_ratings_tsv(&std::fs::read_to_string(root.join("ratings.tsv")).unwrap()).unwrap();
     assert_eq!(scored, ratings_rows.len());
-    // The last row's post ratings reproduce the standings order.
+    // The online audit trail still follows the original item order.
     if let Some(last) = ratings_rows.last() {
         assert_eq!(last.0, run.items.iter().map(|i| i.index).max().unwrap());
     }

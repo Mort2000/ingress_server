@@ -125,6 +125,7 @@ test("overview matrix uses full totals, mirrors results and drills into paginate
     exact: true,
   });
   await expect(overview).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#event-standings h2")).toContainText("暂定排名");
   await expect(page.locator("#panel-matches")).toBeHidden();
   await expect(page.locator("#event-standings tbody tr")).toHaveCount(4);
   const cell = page.locator('[data-pair="0:1"]');
@@ -208,4 +209,16 @@ test("overview matrix uses full totals, mirrors results and drills into paginate
   await page.getByLabel("赛事选择").selectOption("mixed");
   await expect(cell).toBeVisible();
   await expect(overview).toHaveAttribute("aria-selected", "true");
+  // A status-only change must invalidate the overview's render cache.
+  data.provisional = false;
+  data.rating_method = "batch_elo_v1";
+  await page.getByRole("button", { name: "立即刷新" }).click();
+  await expect(page.locator("#event-standings h2")).toContainText("最终排名");
+  await expect(page.locator("#event-standings")).toContainText(
+    "不受对局排列顺序影响",
+  );
+  data.provisional = true;
+  data.rating_method = "online_elo_v1";
+  await page.getByRole("button", { name: "立即刷新" }).click();
+  await expect(page.locator("#event-standings h2")).toContainText("暂定排名");
 });

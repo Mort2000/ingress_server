@@ -223,6 +223,8 @@ fn spawn_failures_are_final_without_replays_or_normal_ratings() {
     assert_eq!(snapshot.standings[0].rating, 1500);
     assert_eq!(snapshot.standings[0].draws, 0);
     assert_eq!(snapshot.standings[0].unscored, 2);
+    assert!(!snapshot.provisional);
+    assert_eq!(snapshot.rating_method, "batch_elo_v1");
     assert!(reader.replay(0, "0001").is_err());
 }
 
@@ -234,6 +236,14 @@ fn observes_plan_then_finished_results_without_runner_or_rebuild() {
     let plan = parse_json(&monitor.snapshot().unwrap().to_json()).unwrap();
     assert_eq!(plan.get("matches").unwrap().as_array().unwrap().len(), 2);
     assert_eq!(plan.get("completed").unwrap().as_int(), Some(0));
+    assert_eq!(
+        plan.get("provisional"),
+        Some(&arena_runner::tournament::archive::Json::Bool(true))
+    );
+    assert_eq!(
+        plan.get("rating_method").unwrap().as_str(),
+        Some("online_elo_v1")
+    );
     assert!(
         !root.join("execution.lock").exists(),
         "reader must not create or acquire execution lock"
@@ -244,6 +254,8 @@ fn observes_plan_then_finished_results_without_runner_or_rebuild() {
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let standings = fs::read_to_string(root.join("standings.txt")).unwrap();
+    assert!(standings.contains("method=batch_elo_v1 status=final"));
     // These are disposable: a reader must neither need nor regenerate them.
     for file in ["index.tsv", "ratings.tsv", "standings.txt"] {
         fs::remove_file(root.join(file)).unwrap();
@@ -251,6 +263,8 @@ fn observes_plan_then_finished_results_without_runner_or_rebuild() {
     let snapshot = monitor.snapshot().unwrap();
     let json = parse_json(&snapshot.to_json()).unwrap();
     assert_eq!(json.get("completed").unwrap().as_int(), Some(2));
+    assert!(!snapshot.provisional);
+    assert_eq!(snapshot.rating_method, "batch_elo_v1");
     let rows = json.get("matches").unwrap().as_array().unwrap();
     assert_eq!(rows[0].get("state").unwrap().as_str(), Some("completed"));
     assert_eq!(
@@ -316,6 +330,8 @@ fn incomplete_attempts_are_not_replays_and_committed_tampering_invalidates_cache
     let changed = monitor.snapshot().unwrap();
     assert_eq!(changed.matches[0].state(), "corrupt");
     assert_eq!(changed.standings[0].draws, 1);
+    assert!(changed.provisional);
+    assert_eq!(changed.rating_method, "online_elo_v1");
     assert!(monitor.replay(0, "0002").is_err());
     assert!(!root.join("matches/m0/attempts/0003").exists());
 }

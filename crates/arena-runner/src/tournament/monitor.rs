@@ -179,6 +179,8 @@ pub struct Snapshot {
     pub entrants: Vec<Participant>,
     pub matches: Vec<MatchView>,
     pub standings: Vec<super::report::StandingRow>,
+    pub provisional: bool,
+    pub rating_method: &'static str,
     pub scanned_unix_ms: u64,
 }
 impl Snapshot {
@@ -252,7 +254,8 @@ impl Snapshot {
             ("identity", string(&self.identity)),
             ("scanned_unix_ms", n(self.scanned_unix_ms)),
             ("liveness", string("unknown")),
-            ("provisional", Json::Bool(true)),
+            ("provisional", Json::Bool(self.provisional)),
+            ("rating_method", string(self.rating_method)),
             ("total", n(self.matches.len() as u64)),
             (
                 "completed",
@@ -365,7 +368,6 @@ impl ArchiveMonitor {
             *self = refreshed;
         }
         let mut matches = Vec::new();
-        let mut table = EloTable::new(&self.plan.config.elo, self.plan.config.entrants.len());
         for item in &self.plan.items {
             let relative = PathBuf::from(format!("matches/m{}/attempts", item.index));
             let dirs = match guarded_path(&self.root, &relative) {
@@ -385,11 +387,16 @@ impl ArchiveMonitor {
                 item: item.clone(),
                 attempts,
             };
-            if let Some(result) = view.result() {
-                table.apply(item, &result.outcome);
-            }
             matches.push(view);
         }
+        let table = EloTable::for_standings(
+            &self.plan.config.elo,
+            self.plan.config.entrants.len(),
+            self.plan.items.len(),
+            matches
+                .iter()
+                .filter_map(|view| view.result().map(|result| (&view.item, &result.outcome))),
+        )?;
         let entrants = self
             .plan
             .config
@@ -420,6 +427,8 @@ impl ArchiveMonitor {
             entrants,
             matches,
             standings: super::report::standings(&self.plan.config, &table),
+            provisional: !table.is_final(),
+            rating_method: table.method(),
             scanned_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

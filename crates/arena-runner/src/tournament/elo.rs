@@ -25,7 +25,7 @@ pub const Q_ONE: i64 = 1 << 32;
 
 /// `ln(10)` in Q32.32: `round(2.302585092994046 * 2^32)` (golden
 /// constant, like the other pinned values — no runtime float involved).
-const LN10_Q: i64 = 9_889_527_671;
+pub(super) const LN10_Q: i64 = 9_889_527_671;
 
 /// Taylor terms for `exp` (k = 0..=17).
 const EXP_TERMS: usize = 18;
@@ -66,17 +66,22 @@ fn exp_q(z_q: i64) -> i64 {
 /// The expected score of the `a` player, `1 / (1 + 10^((rb - ra)/400))`,
 /// in Q32.32.
 pub fn expected_score_q(ra: i64, rb: i64) -> i64 {
+    expected_score_scaled(ra, rb, 1)
+}
+
+/// Same probability for ratings expressed in `scale` units per Elo point.
+pub(super) fn expected_score_scaled(ra: i64, rb: i64, scale: i64) -> i64 {
     let delta = rb.saturating_sub(ra);
-    if delta >= SATURATE_DELTA {
+    if delta >= SATURATE_DELTA * scale {
         return 0;
     }
-    if delta <= -SATURATE_DELTA {
+    if delta <= -SATURATE_DELTA * scale {
         return Q_ONE;
     }
-    let q = delta.div_euclid(400);
-    let r = delta.rem_euclid(400); // 0..=399
+    let q = delta.div_euclid(400 * scale);
+    let r = delta.rem_euclid(400 * scale);
     // z = r * ln10 / 400 in Q32.32.
-    let z_q = round_half_away(r as i128 * LN10_Q as i128, 400) as i64;
+    let z_q = round_half_away(r as i128 * LN10_Q as i128, 400 * scale as i128) as i64;
     let t = exp_q(z_q); // 10^(r/400)
     if q >= 0 {
         let scale = 10i128.pow(q as u32); // 1..=1e7 under the saturate bound
@@ -130,6 +135,7 @@ pub struct EloTable {
     forfeit_wins: Vec<u64>,
     forfeit_losses: Vec<u64>,
     unscored: Vec<u64>,
+    final_ratings: bool,
 }
 
 impl EloTable {
@@ -144,6 +150,7 @@ impl EloTable {
             forfeit_wins: vec![0; entrants],
             forfeit_losses: vec![0; entrants],
             unscored: vec![0; entrants],
+            final_ratings: false,
         }
     }
 
@@ -234,6 +241,41 @@ impl EloTable {
 
     pub fn ratings(&self) -> &[i64] {
         &self.ratings
+    }
+
+    /// Standings use online Elo until every scheduled item has a terminal
+    /// Bot result, then fit the complete set. The online audit trail is kept.
+    pub fn for_standings<'a>(
+        config: &crate::tournament::config::EloConfig,
+        entrants: usize,
+        total_items: usize,
+        results: impl IntoIterator<Item = (&'a TournamentItem, &'a TournamentOutcome)>,
+    ) -> std::io::Result<Self> {
+        let results: Vec<_> = results.into_iter().collect();
+        let mut table = Self::new(config, entrants);
+        for &(item, outcome) in &results {
+            table.apply(item, outcome);
+        }
+        if total_items > 0
+            && results.len() == total_items
+            && results.iter().all(|(_, outcome)| outcome.is_terminal())
+        {
+            table.ratings = super::batch_elo::fit(config.initial, entrants, &results)?;
+            table.final_ratings = true;
+        }
+        Ok(table)
+    }
+
+    pub fn is_final(&self) -> bool {
+        self.final_ratings
+    }
+
+    pub fn method(&self) -> &'static str {
+        if self.final_ratings {
+            "batch_elo_v1"
+        } else {
+            "online_elo_v1"
+        }
     }
 
     pub fn initial(&self) -> i64 {

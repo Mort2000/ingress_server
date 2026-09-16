@@ -73,6 +73,8 @@ export interface Matchup {
 }
 export interface Event extends Summary {
   schema?: string;
+  provisional?: boolean;
+  rating_method?: string;
   scanned_unix_ms: number;
   counts: Record<string, number>;
   entrants: Entrant[];

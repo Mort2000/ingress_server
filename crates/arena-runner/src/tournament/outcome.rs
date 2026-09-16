@@ -65,6 +65,12 @@ pub enum TournamentOutcome {
 }
 
 impl TournamentOutcome {
+    /// Infrastructure faults (including pending slots) may still be retried.
+    /// Bot technical failures are terminal, although excluded from ratings.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self.stage(), Some(Stage::RunnerFault | Stage::SetupError))
+    }
+
     /// Stable outcome tag for `index.tsv` (`Normal` reports its result).
     pub fn outcome_tag(&self) -> &'static str {
         match self {

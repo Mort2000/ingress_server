@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod assets_cli;
+mod batch_elo;
 pub mod builds;
 pub mod comparison;
 pub mod config;
@@ -48,10 +49,12 @@ pub fn write_tournament_artifacts(
     doc_path: Option<&std::path::Path>,
 ) -> std::io::Result<()> {
     let records = archive::write_archive(root, cfg, run)?;
-    let mut table = elo::EloTable::new(&cfg.elo, cfg.entrants.len());
-    for (item, outcome) in run.items.iter().zip(run.outcomes.iter()) {
-        let _ = table.apply(item, outcome);
-    }
+    let table = elo::EloTable::for_standings(
+        &cfg.elo,
+        cfg.entrants.len(),
+        cfg.total_matches() as usize,
+        run.items.iter().zip(&run.outcomes),
+    )?;
     let splits = report::faction_splits(cfg, &run.items, &run.outcomes);
     std::fs::create_dir_all(root)?;
     std::fs::write(

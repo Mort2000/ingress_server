@@ -61,6 +61,8 @@ export class TournamentOverview {
       data.counts,
       data.total,
       data.completed,
+      data.provisional,
+      data.rating_method,
     ]);
     if (signature === this.signature) return;
     this.signature = signature;
@@ -104,11 +106,14 @@ export class TournamentOverview {
     }
     const ranking = node("section");
     ranking.id = "event-standings";
+    const final = data.provisional === false;
     ranking.append(
-      node("h2", "参赛选手 · 暂定排名"),
+      node("h2", final ? "参赛选手 · 最终排名" : "参赛选手 · 暂定排名"),
       node(
         "p",
-        "全赛事已验证结果，按冻结赛程顺序计算；技术结果单列，不计入普通胜平负及 Elo。",
+        final
+          ? "全部比赛已结束，最终 Elo 根据全量胜负批量拟合，不受对局排列顺序影响；技术结果单列。"
+          : "全赛事已验证结果，按冻结赛程顺序计算实时 Elo；全部结束后重算最终 Elo。技术结果单列，不计入普通胜平负及 Elo。",
         "tournament-note",
       ),
     );

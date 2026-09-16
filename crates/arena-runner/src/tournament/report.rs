@@ -139,9 +139,17 @@ pub fn standings_text(cfg: &TournamentConfig, table: &EloTable, splits: &[Entran
         cfg.name
     ));
     out.push_str(&format!(
-        "# elo K={} initial={} (draw=0.5; technical outcomes excluded from ratings and W/D/L)\n",
-        cfg.elo.k, cfg.elo.initial
+        "# elo method={} status={} initial={} (draw=0.5; technical outcomes excluded from ratings and W/D/L)\n",
+        table.method(), if table.is_final() { "final" } else { "provisional" }, cfg.elo.initial
     ));
+    if table.is_final() {
+        out.push_str("# batch Elo: Bradley-Terry fit, Gaussian prior sigma=400; ratings.tsv retains online Elo history\n");
+    } else {
+        out.push_str(&format!(
+            "# online Elo: K={}, replayed in item-index order\n",
+            cfg.elo.k
+        ));
+    }
     out.push_str("# rank by rating desc, tie-break entrant name asc\n");
     out.push_str("# ENL/RES splits are over scored matches only — they validate the no-faction-swap hypothesis\n");
     out.push_str("rank\tentrant\trating\tW\tD\tL\tffW\tffL\tunscored\tENL W-D-L\tRES W-D-L\tENL mean dScore2\tRES mean dScore2\n");
@@ -236,8 +244,13 @@ pub fn tournament_doc_markdown(
         format!("{:#018x}", cfg.config_identity())
     ));
     out.push_str(&format!(
-        "| Elo | K = {}, initial = {}, Q32.32 integer fixed point, replayed in item order over scored matches only | \n",
-        cfg.elo.k, cfg.elo.initial
+        "| Elo | method = {}, initial = {}, Q32.32 integer fixed point; {} | \n",
+        table.method(), cfg.elo.initial,
+        if table.is_final() {
+            "order-independent Bradley-Terry fit, Gaussian prior sigma=400; ratings.tsv retains online Elo history".to_owned()
+        } else {
+            format!("provisional online Elo, K={}, replayed in item order", cfg.elo.k)
+        }
     ));
     out.push_str(&format!(
         "| Execution | {} workers, sandbox {}, per-match budget {} ms | \n",
@@ -346,7 +359,7 @@ pub fn tournament_doc_markdown(
     }
     out.push_str("\n## 5. Reproducibility\n\n");
     out.push_str(&format!(
-        "The schedule, seeds, map hashes, and both entrants' provenance are frozen in\n`runs/tournaments/{}/tournament.json`; every match row (seeds, factions,\nmap hash, config identity, provenance ids, replay path) is in `index.tsv`;\nper-match Elo pre/post ratings are in `ratings.tsv` and reproduce the\nstandings exactly. Each `matches/m<index>/` directory carries `meta.json`\nplus the server's `journal.txt`/`result.txt` and — for every match that\nentered Round 1 — a `replay.iarp` that decodes and replays to the recorded\nfinal state hash.\n\nCode: M9 milestone worktree (base commit `24029ce`, the M8 handoff; the\norchestrator records the milestone commit). The cited build manifest\ncannot hash the sentence citing it (the M8 limitation): verify any tree\nwith `target/release/provenance --root .` — the entrant binaries above\nmatch the manifest hashes exactly.\n",
+        "The schedule, seeds, map hashes, and both entrants' provenance are frozen in\n`runs/tournaments/{}/tournament.json`; every match row (seeds, factions,\nmap hash, config identity, provenance ids, replay path) is in `index.tsv`;\nper-match online Elo pre/post ratings are in `ratings.tsv`; the standings\nheader records whether rankings use online Elo or the completed batch fit. Each `matches/m<index>/` directory carries `meta.json`\nplus the server's `journal.txt`/`result.txt` and — for every match that\nentered Round 1 — a `replay.iarp` that decodes and replays to the recorded\nfinal state hash.\n\nCode: M9 milestone worktree (base commit `24029ce`, the M8 handoff; the\norchestrator records the milestone commit). The cited build manifest\ncannot hash the sentence citing it (the M8 limitation): verify any tree\nwith `target/release/provenance --root .` — the entrant binaries above\nmatch the manifest hashes exactly.\n",
         cfg.name
     ));
     out

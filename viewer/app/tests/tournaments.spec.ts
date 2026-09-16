@@ -82,7 +82,7 @@ test("independent host discovers results, filters versions and opens verified re
     await expect(page.locator("#match-list")).toContainText("星际 <A>");
     await exec(runner, ["resume", "--out", event]);
     await expect(page.locator("#event-progress")).toContainText("2 / 2");
-    await expect(page.locator("#event-standings")).toContainText("暂定排名");
+    await expect(page.locator("#event-standings")).toContainText("最终排名");
     await expect(page.locator('[data-pair="0:1"]')).toContainText("0 / 2 / 0");
     await page.locator('[data-pair="0:1"]').click();
     await expect(page.getByLabel("对决选手", { exact: true })).toHaveValue("0");
