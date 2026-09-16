@@ -126,12 +126,11 @@ impl Event {
                         .is_none_or(|id| m.item.a == id || m.item.b == id)
                     && query.map.is_none_or(|i| m.item.map_index as i64 == i)
                     && (query.state.is_empty() || m.state() == query.state)
-                    && (query.outcome.is_empty()
-                        || m.result()
-                            .is_some_and(|r| r.outcome.outcome_tag() == query.outcome))
+                    && query.matches_outcome(m)
+                    && query.matches_attention(m)
             })
             .collect();
-        if query.latest {
+        if query.order == "latest" {
             rows.sort_by_key(|m| {
                 std::cmp::Reverse((
                     m.attempts
@@ -140,6 +139,30 @@ impl Event {
                         .unwrap_or(0),
                     m.item.index,
                 ))
+            });
+        } else if query.order != "schedule" {
+            rows.sort_by_key(|m| {
+                let players = query.players(m);
+                let metric = match query.order.as_str() {
+                    "score" => players.iter().map(|s| s.score2).max(),
+                    "idle" => players
+                        .iter()
+                        .filter(|s| s.agent_rounds > 0)
+                        .map(|s| {
+                            u128::from(
+                                (s.pass_slots + s.not_submitted_slots) * 10000 / s.agent_rounds,
+                            )
+                        })
+                        .max(),
+                    "destruction" => players
+                        .iter()
+                        .map(|s| {
+                            u128::from(s.portals_destroyed + s.links_destroyed + s.fields_destroyed)
+                        })
+                        .max(),
+                    _ => None,
+                };
+                std::cmp::Reverse((metric, m.item.index))
             });
         }
         let matched = rows.len();
@@ -184,9 +207,74 @@ pub struct Query {
     pub opponent: Option<u32>,
     pub state: String,
     pub outcome: String,
-    pub latest: bool,
+    pub order: String,
+    pub attention: String,
 }
 impl Query {
+    fn players<'a>(
+        &self,
+        m: &'a MatchView,
+    ) -> Vec<&'a arena_runner::tournament::monitor_stats::PlayerStatistics> {
+        let Some(stats) = m.attempts.last().and_then(|a| a.statistics.as_ref()) else {
+            return vec![];
+        };
+        match self.entrant {
+            Some(id) if id == m.item.enl_entrant() => vec![&stats.enl],
+            Some(_) => vec![&stats.res],
+            None => vec![&stats.enl, &stats.res],
+        }
+    }
+    fn matches_attention(&self, m: &MatchView) -> bool {
+        if self.attention.is_empty() {
+            return true;
+        }
+        self.players(m)
+            .iter()
+            .any(|s| match self.attention.as_str() {
+                "high_idle" => {
+                    s.agent_rounds > 0
+                        && (s.pass_slots + s.not_submitted_slots) * 2 >= s.agent_rounds
+                }
+                "zero_score" => {
+                    s.score2 == 0
+                        && m.attempts
+                            .last()
+                            .and_then(|a| a.statistics.as_ref())
+                            .is_some_and(|s| s.rounds > 0)
+                }
+                "submission_issue" => s.not_submitted_slots > 0 || s.rejected_slots > 0,
+                _ => false,
+            })
+    }
+    fn matches_outcome(&self, m: &MatchView) -> bool {
+        if self.outcome.is_empty() {
+            return true;
+        }
+        let Some(result) = m.result() else {
+            return false;
+        };
+        match self.outcome.as_str() {
+            "win" | "loss" | "technical_win" | "technical_loss" if self.entrant.is_some() => {
+                let winner = match &result.outcome {
+                    TournamentOutcome::TechnicalWin { winner, .. }
+                        if self.outcome.starts_with("technical_") =>
+                    {
+                        Some(*winner)
+                    }
+                    outcome @ TournamentOutcome::Normal { .. }
+                        if !self.outcome.starts_with("technical_") =>
+                    {
+                        outcome.normal_winner(m.item.a, m.item.b, m.item.a_is_enl)
+                    }
+                    _ => None,
+                };
+                winner.is_some_and(|winner| {
+                    (Some(winner) == self.entrant) == self.outcome.ends_with("win")
+                })
+            }
+            _ => result.outcome.outcome_tag() == self.outcome,
+        }
+    }
     pub fn parse(raw: &str) -> Result<Self, String> {
         let mut q = Self {
             offset: 0,
@@ -197,7 +285,8 @@ impl Query {
             opponent: None,
             state: String::new(),
             outcome: String::new(),
-            latest: true,
+            order: "latest".into(),
+            attention: String::new(),
         };
         let mut seen = std::collections::BTreeSet::new();
         for pair in raw.split('&').filter(|s| !s.is_empty()) {
@@ -228,10 +317,17 @@ impl Query {
                 "entrant" | "opponent" => {}
                 "state" => q.state = value,
                 "outcome" => q.outcome = value,
+                "attention"
+                    if matches!(
+                        value.as_str(),
+                        "" | "high_idle" | "zero_score" | "submission_issue"
+                    ) =>
+                {
+                    q.attention = value
+                }
                 "order" => {
-                    q.latest = match value.as_str() {
-                        "latest" => true,
-                        "schedule" => false,
+                    q.order = match value.as_str() {
+                        "latest" | "schedule" | "score" | "idle" | "destruction" => value,
                         _ => return Err("invalid order".into()),
                     }
                 }
@@ -240,6 +336,9 @@ impl Query {
         }
         if q.entrant.is_some() && q.entrant == q.opponent {
             return Err("entrant and opponent must differ".into());
+        }
+        if matches!(q.outcome.as_str(), "win" | "loss" | "technical_loss") && q.entrant.is_none() {
+            return Err("entrant is required for player-relative outcome".into());
         }
         Ok(q)
     }
@@ -460,6 +559,7 @@ mod tests {
                 elapsed_ms: 0,
             }),
             finished_unix_ms: None,
+            statistics: None,
         }
     }
     fn normal(result: MatchResult) -> TournamentOutcome {
@@ -620,6 +720,97 @@ mod tests {
         let empty = event.detail(&Query::parse("entrant=2&opponent=0&state=completed").unwrap());
         assert_eq!(value(&empty, "matched"), 0);
         assert_eq!(empty.get("matchups"), all.get("matchups"));
+        for (query, count) in [
+            ("entrant=0&outcome=win", 28),
+            ("entrant=0&outcome=loss", 27),
+            ("entrant=1&outcome=win", 27),
+            ("entrant=1&outcome=loss", 28),
+            ("entrant=0&outcome=technical_loss", 1),
+            ("entrant=1&outcome=technical_win", 1),
+            ("entrant=0&outcome=technical_win", 0),
+            ("outcome=technical_win", 1),
+        ] {
+            assert_eq!(
+                value(&event.detail(&Query::parse(query).unwrap()), "matched"),
+                count,
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_filters_and_sorting_use_selected_player_before_pagination() {
+        use arena_runner::tournament::monitor_stats::{MatchStatistics, PlayerStatistics};
+        let matches = (0..60)
+            .map(|index| {
+                let mut a = attempt(AttemptState::Completed, Some(normal(MatchResult::Draw)));
+                a.statistics = Some(MatchStatistics {
+                    rounds: 10,
+                    enl: PlayerStatistics {
+                        score2: index as u128,
+                        agent_rounds: 100,
+                        pass_slots: index,
+                        ..PlayerStatistics::default()
+                    },
+                    res: PlayerStatistics {
+                        score2: 1000,
+                        agent_rounds: 100,
+                        not_submitted_slots: 1,
+                        ..PlayerStatistics::default()
+                    },
+                });
+                item(index, 0, 1, true, vec![a])
+            })
+            .collect();
+        let event = Event {
+            id: "stats".into(),
+            label: "stats".into(),
+            error: None,
+            reader: None,
+            snapshot: Some(Arc::new(Snapshot {
+                name: "stats".into(),
+                identity: "stats".into(),
+                entrants: (0..2)
+                    .map(|id| Participant {
+                        id,
+                        registered_id: id.to_string(),
+                        name: id.to_string(),
+                        version: None,
+                    })
+                    .collect(),
+                matches,
+                standings: vec![],
+                provisional: false,
+                rating_method: "batch_elo_v1",
+                scanned_unix_ms: 0,
+            })),
+        };
+        for (query, expected) in [
+            ("entrant=0&attention=high_idle", 10),
+            ("entrant=1&attention=high_idle", 0),
+            ("attention=high_idle", 10),
+            ("entrant=0&attention=zero_score", 1),
+            ("entrant=0&attention=submission_issue", 0),
+            ("entrant=1&attention=submission_issue", 60),
+        ] {
+            assert_eq!(
+                value(&event.detail(&Query::parse(query).unwrap()), "matched"),
+                expected,
+                "{query}"
+            );
+        }
+        for order in ["score", "idle"] {
+            let page = event.detail(
+                &Query::parse(&format!("entrant=0&order={order}&offset=50&limit=1")).unwrap(),
+            );
+            assert_eq!(
+                value(
+                    &page.get("matches").unwrap().as_array().unwrap()[0],
+                    "index"
+                ),
+                9
+            );
+        }
     }
 
     #[test]
@@ -629,6 +820,10 @@ mod tests {
             "opponent=bad",
             "entrant=1&opponent=1",
             "entrant=0&entrant=1",
+            "outcome=win",
+            "opponent=0&outcome=loss",
+            "outcome=technical_loss",
+            "attention=unknown",
         ] {
             assert!(Query::parse(query).is_err(), "{query}");
         }

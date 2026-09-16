@@ -275,6 +275,20 @@ fn observes_plan_then_finished_results_without_runner_or_rebuild() {
         Some("v1")
     );
     let bytes = monitor.replay(0, "0001").unwrap();
+    let statistics = snapshot.matches[0].attempts[0].statistics.as_ref().unwrap();
+    assert_eq!(statistics.rounds, 2);
+    assert_eq!(statistics.enl.agent_rounds, 6);
+    assert_eq!(statistics.res.agent_rounds, 6);
+    let attempts = rows[0].get("attempts").unwrap().as_array().unwrap();
+    assert_eq!(
+        attempts[0]
+            .get("statistics")
+            .unwrap()
+            .get("rounds")
+            .unwrap()
+            .as_int(),
+        Some(2)
+    );
     let replay = arena_replay::replay::decode_log(&bytes).unwrap();
     assert_eq!(
         arena_replay::replay::replay(&replay)
@@ -328,6 +342,14 @@ fn incomplete_attempts_are_not_replays_and_committed_tampering_invalidates_cache
     )
     .unwrap();
     let changed = monitor.snapshot().unwrap();
+    assert!(
+        changed.matches[0]
+            .attempts
+            .last()
+            .unwrap()
+            .statistics
+            .is_none()
+    );
     assert_eq!(changed.matches[0].state(), "corrupt");
     assert_eq!(changed.standings[0].draws, 1);
     assert!(changed.provisional);

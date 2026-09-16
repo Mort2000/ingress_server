@@ -58,7 +58,7 @@ viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets
 通过“赛事”按钮打开监控，“返回回放”退出。监控分为两个 tab：
 
 - **赛事概览**：默认首屏，显示参赛人数、完成／未决／异常场次、暂定排名和 N×N 对决表。宽屏并排展示排名与对决表；窄屏纵向排列，表格内部滚动。
-- **比赛详情与回放**：显示筛选、分页比赛、尝试记录和回放入口。支持精确选手／对手、名称／注册 ID／版本、地图编号、状态和结果筛选，每页 50 场。输入内容在“应用筛选”后生效，轮询不会提交尚未确认的输入。
+- **比赛详情与回放**：每场比赛以两行表格对照两名选手的胜负和技术统计；所选选手优先，否则胜者优先（平局按选手编号）。阵营作为身份辅助信息。支持精确选手／对手、名称／注册 ID／版本、地图编号、状态、选手视角胜负及技术指标筛选，每页 50 场。输入内容在“应用筛选”后生效，轮询不会提交尚未确认的输入。保留尝试记录和回放入口；窄屏表格独立横向滚动，选手列固定。
 
 对决格按行选手的视角显示普通胜／平／负，合并全部地图和双方阵营。多场结果使用按数量占比绘制的分段渐变底色与底部色带，同时提供文字数量和完整提示；技术胜／负单列。未决包含待执行、记录为运行中和发布中；异常包含基础设施故障、中断及损坏；已完成的无评分结果另列。对角线不可点击，没有排赛的组合显示“无赛程”。每个逻辑比赛只采用当前最新 attempt，与官方监控结果采用方式一致，历史结果不重复计数。
 
@@ -80,7 +80,17 @@ viewer/host/target/debug/arena-viewer serve --runs /path/to/tournaments --assets
 | `/api/events/<id>` | `arena-monitor-v1`：选手、计数、排名、全赛事 `matchups`、分页比赛及 attempts；未就绪时只有定位与错误字段 |
 | `/api/events/<id>/matches/<index>/attempts/<number>/replay` | 已提交且验证通过的原始 IARP 字节 |
 
-详情查询参数：`offset`（默认 0）、`limit`（默认 50，1–200）、`q`（名称／ID／版本子串）、`entrant`／`opponent`（非负选手编号，均匹配任一阵营，同时提供则限定该组合，二者相同返回 400）、`map`（地图编号）、`state`、`outcome`、`order=latest|schedule`。空筛选代表全部，重复和未知参数拒绝。状态为 pending、recorded_running、publishing、completed、infrastructure_fault、interrupted、corrupt；liveness 始终为 unknown，不获取执行锁来推断存活。
+详情查询参数：`offset`（默认 0）、`limit`（默认 50，1–200）、`q`（名称／ID／版本子串）、`entrant`／`opponent`（非负选手编号，均匹配任一阵营，同时提供则限定该组合，二者相同返回 400）、`map`（地图编号）、`state`、`outcome`、`attention`、`order`。空筛选代表全部，重复和未知参数拒绝。状态为 pending、recorded_running、publishing、completed、infrastructure_fault、interrupted、corrupt；liveness 始终为 unknown，不获取执行锁来推断存活。
+
+- `outcome=win|loss` 仅匹配所选 `entrant` 的普通胜负；`technical_win|technical_loss` 匹配技术胜负，独立于普通胜负。`win`、`loss`、`technical_loss` 未提供 `entrant` 时返回 400；未选选手的 `technical_win` 保持兼容，表示全部技术判胜。`draw`、`unscored` 以及旧接口的 `enl_win|res_win` 继续支持。
+- `attention=high_idle|zero_score|submission_issue` 分别匹配 Agent 空过比例 ≥50%、已完成至少一轮且得分为零、存在未提交或拒绝。选择选手时只看该选手，否则任一方满足即匹配。缺失统计不会被当作零。
+- `order=latest|schedule|score|idle|destruction`；后三项按总得分、Agent 空过比例、Portal + Link + Field 摧毁次数从高到低排序。按所选选手排序，未选时取双方较高值；未知统计排末尾，同值按比赛编号倒序。排序、筛选均在服务端分页前进行。
+
+每个 attempt 增加可空 `statistics`：包含 `rounds` 与 `enl`／`res` 两份选手统计。每方字段为十进制字符串 `score2`，以及整数 `portals_captured`、`portals_destroyed`、`links_created`、`links_destroyed`、`fields_created`、`fields_destroyed`、`agent_rounds`、`pass_slots`、`not_submitted_slots`、`rejected_slots`、`idle_rounds`。统计复用官方 committed-result 校验已解码且已验证的回放，仅缓存紧凑汇总；不再执行第二次回放，不写归档。归档变化时按原缓存失效机制重新验证，发布中或损坏尝试不暴露旧统计；无回放显示缺失，异常结束有有效回放时展示实际已完成轮数和得分。
+
+Portal 建立计成功占领，摧毁计中立化；Link／Field 计建立和摧毁事件，重复建立计次数，连锁摧毁归攻击方。`agent_rounds` 计每轮实际活跃 Agent 的 slot，包含已加入的增援。全队空过 `idle_rounds` 仅在所有活跃 Agent 均 PASS 或未提交时增加；Agent 空过比例为 `(pass_slots + not_submitted_slots) / agent_rounds`。拒绝独立统计；执行失败的命令不算 PASS，移动／补给不因无公共事件而被算空过。零轮比例不适用。
+
+表格使用 BigInt 将 score2 精确除以 2 显示总得分，得分数据条按本场占比，结构数据条按本场同类四个计数的最大值缩放，空过条显示实际比例。文本与颜色共同提示高空过、零分、未提交、拒绝及技术判定；分差占双方总分 ≤5% 提示胶着，≥90% 提示悬殊，双方零分不计算分差比例。提示仅作为回看线索，界面提供计算口径说明。
 
 `matchups` 是按 `a < b` 排序的稀疏组合数组，只包含有赛程的组合。每项包含 `a`、`b`、`total`、`a_wins`、`b_wins`、`draws`、`a_technical_wins`、`b_technical_wins`、`pending`、`faults`、`unscored`，八个结果计数之和等于 `total`。普通胜者复用官方 `normal_winner` 的阵营映射；不会重新比较比分或改变 Elo。该扩展由 viewer host 从完整的官方类型化快照生成，无需下载回放。更新前端时需同步构建并重启 host；旧后台缺少汇总时前端明确提示，不将当前页伪装为全赛事。
 

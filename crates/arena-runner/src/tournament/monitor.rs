@@ -147,6 +147,7 @@ pub struct AttemptView {
     pub error: Option<String>,
     pub result: Option<ExternalResult>,
     pub finished_unix_ms: Option<u64>,
+    pub statistics: Option<super::monitor_stats::MatchStatistics>,
 }
 #[derive(Clone)]
 pub struct MatchView {
@@ -273,6 +274,13 @@ impl Snapshot {
 }
 fn attempt_json(a: &AttemptView) -> Json {
     let mut fields = vec![
+        (
+            "statistics",
+            a.statistics
+                .as_ref()
+                .map(|s| s.json())
+                .unwrap_or(Json::Null),
+        ),
         ("number", string(&a.number)),
         ("state", string(a.state.tag())),
         (
@@ -492,6 +500,7 @@ fn read_attempt(
         error: None,
         result: None,
         finished_unix_ms: None,
+        statistics: None,
     };
     let inspect = || -> io::Result<Option<Vec<Stamp>>> {
         if fs::symlink_metadata(dir)?.file_type().is_symlink() {
@@ -508,8 +517,14 @@ fn read_attempt(
             if let Some(c) = cache.get(dir).filter(|c| c.stamps == before) {
                 return c.view.clone();
             }
-            match durable::read_result(dir, plan, item) {
+            let mut statistics = None;
+            match durable::read_result_inspect(dir, plan, item, |log, verified| {
+                statistics = Some(super::monitor_stats::MatchStatistics::from_verified(
+                    log, verified,
+                ));
+            }) {
                 Ok(result) => {
+                    view.statistics = statistics;
                     view.state = if durable::infrastructure(&result) {
                         AttemptState::InfrastructureFault
                     } else {
@@ -529,6 +544,7 @@ fn read_attempt(
             if stamps(dir).ok().as_ref() != Some(&before) {
                 view.state = AttemptState::Publishing;
                 view.result = None;
+                view.statistics = None;
                 view.error = None;
             } else {
                 cache.insert(

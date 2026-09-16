@@ -1,5 +1,7 @@
 import "./tournaments.css";
 import { TournamentOverview } from "./tournament-overview";
+import { matchTable, winner } from "./match-table";
+import { score } from "./model";
 
 export interface Entrant {
   id: number;
@@ -7,7 +9,26 @@ export interface Entrant {
   name: string;
   version: string | null;
 }
-interface Attempt {
+export interface PlayerStatistics {
+  score2: string;
+  portals_captured: number;
+  portals_destroyed: number;
+  links_created: number;
+  links_destroyed: number;
+  fields_created: number;
+  fields_destroyed: number;
+  agent_rounds: number;
+  pass_slots: number;
+  not_submitted_slots: number;
+  rejected_slots: number;
+  idle_rounds: number;
+}
+export interface Attempt {
+  statistics?: {
+    rounds: number;
+    enl: PlayerStatistics;
+    res: PlayerStatistics;
+  } | null;
   number: string;
   state: string;
   attempt_reason: string | null;
@@ -24,7 +45,7 @@ interface Attempt {
   finished_unix_ms: number | null;
   factions_verified?: boolean;
 }
-interface Match {
+export interface Match {
   index: number;
   map: number;
   map_hash: string;
@@ -95,10 +116,11 @@ const states: Record<string, string> = {
   corrupt: "归档损坏",
 };
 const outcomes: Record<string, string> = {
+  win: "所选选手胜",
+  loss: "所选选手负",
   draw: "平局",
-  enl_win: "ENL 胜",
-  res_win: "RES 胜",
   technical_win: "技术判胜",
+  technical_loss: "所选选手技术负",
   unscored: "无评分",
 };
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -169,11 +191,13 @@ export class TournamentPanel {
         )
           .map(([k, v]) => `<option value="${k}">${v}</option>`)
           .join("")}</select></label>
-        <label>排序<select id="event-order" aria-label="比赛排序"><option value="latest">最新完成优先</option><option value="schedule">冻结赛程顺序</option></select></label>
+        <label>关注<select id="event-attention" aria-label="关注筛选"><option value="">全部</option><option value="high_idle">高空过 ≥50%</option><option value="zero_score">零分</option><option value="submission_issue">未提交 / 拒绝</option></select></label>
+        <label>排序<select id="event-order" aria-label="比赛排序"><option value="latest">最新完成优先</option><option value="schedule">冻结赛程顺序</option><option value="score">总得分从高到低</option><option value="idle">空过比例从高到低</option><option value="destruction">摧毁总数从高到低</option></select></label>
         <button class="btn" type="submit">应用筛选</button>
         <button class="btn" type="button" id="clear-event-filters">清除筛选</button>
       </form>
       <p id="active-match-filter" class="tournament-note" aria-live="polite"></p>
+      <details class="statistics-help"><summary>统计口径与颜色说明</summary><p>得分 = score2 ÷ 2，数据条表示本场双方得分占比。Portal 为成功占领／摧毁（中立化），Link、Field 为成功建立／摧毁；摧毁计入攻击方，含连锁摧毁，重复建立按次数计。结构数据条按本场同类计数最大值缩放。</p><p>全队空过指本轮全部活跃 Agent 均主动 PASS 或未提交；Agent 空过比例 =（PASS + 未提交）÷ Agent 总轮次。拒绝单列，已执行命令即使失败也不计空过。无归档显示 —，零轮比例不适用。</p><p>关注提示：空过比例 ≥50%、零分、任何未提交／拒绝、技术判定。分差比例 = |双方得分之差| ÷ 双方总分：≤5% 标为胶着，≥90% 标为悬殊。提示用于定位值得回看的比赛，不代表已确认策略故障。</p></details>
       <div id="match-list"></div>
       <nav class="tournament-tools"><button class="btn" id="matches-prev">上一页</button><span id="matches-page"></span><button class="btn" id="matches-next">下一页</button></nav>
       </section>
@@ -219,8 +243,11 @@ export class TournamentPanel {
       e.preventDefault();
       this.applyFilters();
     };
-    $("event-filters").oninput = () =>
+    $("event-filters").oninput = () => {
       $<HTMLSelectElement>("event-opponent").setCustomValidity("");
+      $<HTMLSelectElement>("event-outcome").setCustomValidity("");
+      this.updateOutcomeOptions();
+    };
     $("clear-event-filters").onclick = () => {
       $<HTMLFormElement>("event-filters").reset();
       this.applyFilters();
@@ -257,6 +284,12 @@ export class TournamentPanel {
   private applyFilters() {
     const entrant = $<HTMLSelectElement>("event-entrant").value;
     const opponent = $<HTMLSelectElement>("event-opponent");
+    const outcome = $<HTMLSelectElement>("event-outcome");
+    outcome.setCustomValidity(
+      !entrant && ["win", "loss", "technical_loss"].includes(outcome.value)
+        ? "请先选择选手，胜负按该选手视角筛选"
+        : "",
+    );
     opponent.setCustomValidity(
       entrant && entrant === opponent.value ? "请选择不同的对手" : "",
     );
@@ -269,6 +302,7 @@ export class TournamentPanel {
       ["map", "event-map"],
       ["state", "event-state"],
       ["outcome", "event-outcome"],
+      ["attention", "event-attention"],
       ["order", "event-order"],
     ])
       this.filters.set(key, $<HTMLInputElement>(id).value);
@@ -288,6 +322,23 @@ export class TournamentPanel {
       a || b
         ? `当前对决：${a ? this.participant(Number(a)) : "全部选手"} ↔ ${b ? this.participant(Number(b)) : "全部对手"}（包含双方阵营）`
         : "全部对决 · 可从赛事概览的对决表点击进入";
+    const outcome = this.filters.get("outcome");
+    if (outcome)
+      $("active-match-filter").textContent +=
+        ` · ${outcomes[outcome] || outcome}${a ? "（选手视角）" : ""}`;
+    $("active-match-filter").textContent += a
+      ? " · 技术筛选与排序按所选选手"
+      : " · 技术筛选匹配任一选手，技术排序取双方较高值";
+  }
+  private updateOutcomeOptions() {
+    const hasEntrant = Boolean($<HTMLSelectElement>("event-entrant").value);
+    const select = $<HTMLSelectElement>("event-outcome");
+    for (const option of select.options) {
+      if (["win", "loss", "technical_loss"].includes(option.value))
+        option.disabled = !hasEntrant;
+      if (option.value === "technical_win")
+        option.text = hasEntrant ? "所选选手技术胜" : "技术判胜（全部）";
+    }
   }
   private readAuthorization() {
     const raw = new URLSearchParams(location.hash.slice(1)).get("token");
@@ -479,6 +530,7 @@ export class TournamentPanel {
       }
     }
     this.updateFilterLabel();
+    this.updateOutcomeOptions();
     $("event-progress").textContent = [
       `已完成 ${data.completed} / ${data.total}`,
       ...Object.entries(data.counts)
@@ -499,68 +551,28 @@ export class TournamentPanel {
       document.activeElement instanceof HTMLElement
         ? document.activeElement.dataset.matchFocus
         : undefined;
-    const rows = data.matches.map((m) => {
-      const row = element("article", "", "match-row");
-      row.append(element("h3", `M${m.index} · 地图 ${m.map}`));
-      row.title = `地图哈希 ${m.map_hash}`;
-      row.append(
-        element(
-          "p",
-          `ENL ${this.participant(m.enl)} ↔ RES ${this.participant(m.res)}`,
-        ),
-      );
-      const latest = m.attempts.at(-1);
-      row.append(
-        element(
-          "p",
-          `${states[m.state] || m.state}${latest ? ` · ${this.result(latest)}` : ""}`,
-          "match-result",
-        ),
-      );
-      if (latest?.replay && !data.error)
-        row.append(this.replayButton(m, latest, "打开回放"));
-      else
-        row.append(
-          element(
-            "span",
-            m.state === "completed" ? "无可用回放" : "回放未就绪",
-            "tournament-note",
-          ),
-        );
-      if (m.attempts.length) {
-        const history = element("details");
-        history.open = this.expanded.has(m.index);
-        const summary = element("summary", `尝试记录（${m.attempts.length}）`);
-        summary.dataset.matchFocus = `history-${m.index}`;
-        history.append(summary);
-        for (const a of m.attempts) {
-          const info = element("div", "", "attempt-row");
-          info.append(
-            element(
-              "p",
-              `#${a.number} · ${states[a.state] || a.state} · ${a.attempt_reason || "原因未记录"}`,
-            ),
-          );
-          info.append(element("p", this.result(a)));
-          if (a.replay && !data.error)
-            info.append(this.replayButton(m, a, `打开 #${a.number} 回放`));
-          history.append(info);
-        }
-        history.ontoggle = () => {
-          if (history.isConnected) {
-            if (history.open) this.expanded.add(m.index);
-            else this.expanded.delete(m.index);
-          }
-        };
-        row.append(history);
-      }
-      return row;
-    });
+    const previousScroll = $("match-list").querySelector(".match-table-scroll");
+    const scrollLeft = previousScroll?.scrollLeft ?? 0;
+    const scrollTop = previousScroll?.scrollTop ?? 0;
     $("match-list").replaceChildren(
-      ...(rows.length
-        ? rows
-        : [element("p", "没有符合筛选条件的比赛。", "tournament-note")]),
+      data.matches.length
+        ? matchTable(data, {
+            entrant: this.filters.get("entrant")
+              ? Number(this.filters.get("entrant"))
+              : undefined,
+            state: (s) => states[s] || s,
+            participant: (id) => this.participant(id),
+            result: (m, a) => this.result(m, a),
+            replay: (m, a, title) => this.replayButton(m, a, title),
+            expanded: this.expanded,
+          })
+        : element("p", "没有符合筛选条件的比赛。", "tournament-note"),
     );
+    const nextScroll = $("match-list").querySelector(".match-table-scroll");
+    if (nextScroll) {
+      nextScroll.scrollLeft = scrollLeft;
+      nextScroll.scrollTop = scrollTop;
+    }
     if (focused) {
       for (const node of $("match-list").querySelectorAll<HTMLElement>(
         "[data-match-focus]",
@@ -574,16 +586,21 @@ export class TournamentPanel {
     $<HTMLButtonElement>("matches-next").disabled =
       this.offset + 50 >= data.matched;
   }
-  private result(a: Attempt) {
+  private result(m: Match, a: Attempt) {
+    const won = winner(m, a);
     const parts = [
-      a.outcome ? outcomes[a.outcome] || a.outcome : "",
+      won !== undefined
+        ? `${this.participant(won)} ${a.outcome === "technical_win" ? "技术胜" : "胜"} / ${this.participant(won === m.enl ? m.res : m.enl)} 负`
+        : a.outcome
+          ? outcomes[a.outcome] || a.outcome
+          : "",
       a.stage || "",
       a.reason || a.error || "",
     ];
     if (a.score_enl !== undefined)
-      parts.push(`score2 ${a.score_enl} : ${a.score_res} · ${a.rounds} 轮`);
-    if (a.winner !== undefined)
-      parts.push(`胜者 ${this.participant(a.winner)}`);
+      parts.push(
+        `${this.participant(m.enl)} ${score(a.score_enl)} : ${this.participant(m.res)} ${score(a.score_res!)} · ${a.rounds} 轮`,
+      );
     if (a.elapsed_ms !== undefined) parts.push(`${a.elapsed_ms} ms`);
     if (a.finished_unix_ms)
       parts.push(new Date(a.finished_unix_ms).toLocaleString());

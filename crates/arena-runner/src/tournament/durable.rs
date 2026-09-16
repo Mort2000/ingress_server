@@ -428,6 +428,17 @@ pub(crate) fn read_result(
     plan: &Plan,
     item: &TournamentItem,
 ) -> io::Result<ExternalResult> {
+    read_result_inspect(dir, plan, item, |_, _| {})
+}
+
+/// Share the verified replay with read-only projections, without decoding or
+/// replaying it a second time. A failed verification never publishes a result.
+pub(crate) fn read_result_inspect(
+    dir: &Path,
+    plan: &Plan,
+    item: &TournamentItem,
+    inspect: impl FnOnce(&arena_replay::format::ReplayFile, &arena_replay::replay::ReplayOutcome),
+) -> io::Result<ExternalResult> {
     let meta = archive::parse_json(&fs::read_to_string(dir.join("meta.json"))?).map_err(invalid)?;
     let mut rows =
         archive::parse_index_tsv(&fs::read_to_string(dir.join("result.tsv"))?).map_err(invalid)?;
@@ -522,6 +533,7 @@ pub(crate) fn read_result(
                 return Err(invalid("replay outcome mismatch"));
             }
         }
+        inspect(&log, &verified);
     } else if result.outcome.elo_relevant() {
         return Err(invalid("normal result missing replay"));
     }

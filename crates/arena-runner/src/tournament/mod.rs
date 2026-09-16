@@ -16,6 +16,7 @@ pub mod exec_external;
 mod logs;
 pub mod maps;
 pub mod monitor;
+pub mod monitor_stats;
 pub mod outcome;
 pub mod report;
 pub mod resources;
